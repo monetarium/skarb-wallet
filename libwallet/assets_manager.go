@@ -8,59 +8,40 @@ import (
 	"sort"
 	"strconv"
 	"sync"
-	"sync/atomic"
-	"time"
 
-	"decred.org/dcrdex/dex"
-	"github.com/monetarium/monetarium-wallet/errors"
 	"github.com/asdine/storm"
 	"github.com/asdine/storm/q"
 	"github.com/monetarium/monetarium-cryptopower/appos"
-	"github.com/monetarium/monetarium-cryptopower/dexc"
-	"github.com/monetarium/monetarium-cryptopower/libwallet/ext"
-	"github.com/monetarium/monetarium-cryptopower/libwallet/instantswap"
-	"github.com/monetarium/monetarium-cryptopower/libwallet/internal/politeia"
 	"github.com/monetarium/monetarium-cryptopower/libwallet/utils"
 	libutils "github.com/monetarium/monetarium-cryptopower/libwallet/utils"
 	"github.com/monetarium/monetarium-cryptopower/ui/notification"
-	"github.com/monetarium/monetarium-cryptopower/ui/values"
+	"github.com/monetarium/monetarium-wallet/errors"
 	bolt "go.etcd.io/bbolt"
 
-	"github.com/monetarium/monetarium-cryptopower/libwallet/assets/btc"
 	"github.com/monetarium/monetarium-cryptopower/libwallet/assets/dcr"
-	"github.com/monetarium/monetarium-cryptopower/libwallet/assets/ltc"
 	"github.com/monetarium/monetarium-cryptopower/libwallet/assets/wallet"
 	sharedW "github.com/monetarium/monetarium-cryptopower/libwallet/assets/wallet"
 )
 
-// TODO: This is the main app's log filename, should probably be defined
-// elsewhere.
+// LogFilename is the main app log filename.
 const LogFilename = "cryptopower.log"
 
-// assetIdentifier use for listen balance of all wallet changed
+// assetIdentifier is used to listen for balance changes of all wallets.
 const assetIdentifier = "assets_manager"
 
 const BoltDB = "bdb"        // Bolt db driver
 const BadgerDB = "badgerdb" // Badger db driver
 
-// Assets is a struct that holds all the assets supported by the wallet.
+// Assets holds all the assets supported by the wallet. After the Monetarium
+// fork only DCR (Monetarium) wallets remain.
 type Assets struct {
 	DCR struct {
 		Wallets    map[int]sharedW.Asset
 		BadWallets map[int]*sharedW.Wallet
 	}
-	BTC struct {
-		Wallets    map[int]sharedW.Asset
-		BadWallets map[int]*sharedW.Wallet
-	}
-	LTC struct {
-		Wallets    map[int]sharedW.Asset
-		BadWallets map[int]*sharedW.Wallet
-	}
 }
 
-// AssetsManager is a struct that holds all the necessary parameters
-// to manage the assets supported by the wallet.
+// AssetsManager manages the lifecycle of Monetarium wallets.
 type AssetsManager struct {
 	params *sharedW.InitParams
 	Assets *Assets
@@ -70,50 +51,26 @@ type AssetsManager struct {
 	chainsParams utils.ChainsParams
 
 	ConsensusAgenda *dcr.ConsensusAgenda
-	Politeia        *politeia.Politeia
-	InstantSwap     *instantswap.InstantSwap
-	ExternalService *ext.Service
-	RateSource      ext.RateSource
 	rateMutex       sync.Mutex
 
-	dexcMtx     sync.RWMutex
-	dexcCtx     context.Context
-	dexc        DEXClient
-	startingDEX atomic.Bool
-
-	//TODO: some time need show message for user. Change it if has other solution
 	toast *notification.Toast
 
 	NeedMigrate bool
 }
 
-// initializeAssetsFields validate the network provided is valid for all assets before proceeding
-// to initialize the rest of the other fields.
-func initializeAssetsFields(rootDir, dbDriver, logDir string, netType utils.NetworkType, dexTestAddr string) (*AssetsManager, error) {
+// initializeAssetsFields validates the network and initializes the manager fields.
+func initializeAssetsFields(rootDir, dbDriver, logDir string, netType utils.NetworkType) (*AssetsManager, error) {
 	dcrChainParams, err := initializeDCRWalletParameters(netType)
 	if err != nil {
 		log.Errorf("error initializing DCR parameters: %s", err.Error())
 		return nil, errors.Errorf("error initializing DCR parameters: %s", err.Error())
 	}
 
-	btcChainParams, err := initializeBTCWalletParameters(netType)
-	if err != nil {
-		log.Errorf("error initializing BTC parameters: %s", err.Error())
-		return nil, errors.Errorf("error initializing BTC parameters: %s", err.Error())
-	}
-
-	ltcChainParams, err := initializeLTCWalletParameters(netType)
-	if err != nil {
-		log.Errorf("error initializing LTC parameters: %s", err.Error())
-		return nil, errors.Errorf("error initializing LTC parameters: %s", err.Error())
-	}
-
 	params := &sharedW.InitParams{
-		DbDriver:    dbDriver,
-		RootDir:     rootDir,
-		NetType:     netType,
-		LogDir:      logDir,
-		DEXTestAddr: dexTestAddr,
+		DbDriver: dbDriver,
+		RootDir:  rootDir,
+		NetType:  netType,
+		LogDir:   logDir,
 	}
 
 	mgr := &AssetsManager{
@@ -121,33 +78,22 @@ func initializeAssetsFields(rootDir, dbDriver, logDir string, netType utils.Netw
 		Assets: new(Assets),
 	}
 
-	mgr.Assets.BTC.Wallets = make(map[int]sharedW.Asset)
 	mgr.Assets.DCR.Wallets = make(map[int]sharedW.Asset)
-	mgr.Assets.LTC.Wallets = make(map[int]sharedW.Asset)
-
-	mgr.Assets.BTC.BadWallets = make(map[int]*sharedW.Wallet)
 	mgr.Assets.DCR.BadWallets = make(map[int]*sharedW.Wallet)
-	mgr.Assets.LTC.BadWallets = make(map[int]*sharedW.Wallet)
-
 	mgr.chainsParams.DCR = dcrChainParams
-	mgr.chainsParams.BTC = btcChainParams
-	mgr.chainsParams.LTC = ltcChainParams
 	return mgr, nil
 }
 
 func fileExists(filePath string) bool {
 	_, err := os.Stat(filePath)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return false
-		}
 		return false
 	}
 	return true
 }
 
 // NewAssetsManager creates a new AssetsManager instance.
-func NewAssetsManager(rootDir, logDir string, netType utils.NetworkType, dexTestAddr string) (*AssetsManager, error) {
+func NewAssetsManager(rootDir, logDir string, netType utils.NetworkType) (*AssetsManager, error) {
 	errors.Separator = ":: "
 	needMigrate := false
 	isMobile := appos.Current().IsMobile()
@@ -158,27 +104,20 @@ func NewAssetsManager(rootDir, logDir string, netType utils.NetworkType, dexTest
 	}
 
 	if fileExists(filepath.Join(rootDir, fmt.Sprintf("%s-%s", string(netType), dbDriver))) {
-		// New db
 		rootDir = filepath.Join(rootDir, fmt.Sprintf("%s-%s", string(netType), dbDriver))
 	} else if fileExists(filepath.Join(rootDir, string(netType))) {
-		// old db
 		dbDriver = BoltDB
 		rootDir = filepath.Join(rootDir, string(netType))
 		needMigrate = isMobile
 	} else {
-		// db is not exist, create new
 		rootDir = filepath.Join(rootDir, fmt.Sprintf("%s-%s", string(netType), dbDriver))
-
 	}
 
-	// Create a root dir that has the path up the network folder.
 	if err := os.MkdirAll(rootDir, utils.UserFilePerm); err != nil {
 		return nil, errors.Errorf("failed to create rootDir: %v", err)
 	}
 
-	// validate the network type before proceeding to initialize the othe fields.
-
-	mgr, err := initializeAssetsFields(rootDir, dbDriver, logDir, netType, dexTestAddr)
+	mgr, err := initializeAssetsFields(rootDir, dbDriver, logDir, netType)
 	if err != nil {
 		return nil, err
 	}
@@ -187,61 +126,30 @@ func NewAssetsManager(rootDir, logDir string, netType utils.NetworkType, dexTest
 		return nil, errors.Errorf("failed to init logRotator: %v", err.Error())
 	}
 
-	// Attempt to acquire lock on the wallets.db file.
 	mwDB, err := storm.Open(filepath.Join(rootDir, walletsDbName))
 	if err != nil {
 		log.Errorf("Error opening wallets database: %s", err.Error())
 		if err == bolt.ErrTimeout {
-			// timeout error occurs if storm fails to acquire a lock on the database file
 			return nil, errors.E(utils.ErrWalletDatabaseInUse)
 		}
 		return nil, errors.Errorf("error opening wallets database: %s", err.Error())
 	}
 
-	// init database for persistence of wallet objects
 	if err = mwDB.Init(&sharedW.Wallet{}); err != nil {
 		log.Errorf("Error initializing wallets database: %s", err.Error())
 		return nil, err
 	}
 
-	politeiaHost := PoliteiaMainnetHost
-	if netType == Testnet {
-		politeiaHost = PoliteiaTestnetHost
-	}
-	politeia, err := politeia.New(politeiaHost, mwDB)
-	if err != nil {
-		return nil, err
-	}
-
-	instantSwap, err := instantswap.NewInstantSwap(mwDB)
-	if err != nil {
-		return nil, err
-	}
-
 	mgr.ConsensusAgenda = dcr.NewConsensusAgenda(mgr.chainsParams.DCR, mwDB)
-
 	mgr.params.DB = mwDB
-	mgr.Politeia = politeia
-	mgr.InstantSwap = instantSwap
 
-	// initialize the ExternalService. ExternalService provides assetsManager
-	// with the functionalities to retrieve data from some 3rd party services.
-	mgr.ExternalService = ext.NewService(string(netType))
-
-	// clean all deleted wallet if exist
 	mgr.cleanDeletedWallets()
 
-	// Load existing wallets and init mgr.db.
 	if err := mgr.prepareExistingWallets(); err != nil {
 		return nil, err
 	}
 
 	log.Infof("Loaded %d wallets", mgr.LoadedWalletsCount())
-
-	err = mgr.initRateSource()
-	if err != nil {
-		return nil, err
-	}
 
 	mgr.listenForShutdown()
 	mgr.NeedMigrate = needMigrate
@@ -249,103 +157,34 @@ func NewAssetsManager(rootDir, logDir string, netType utils.NetworkType, dexTest
 }
 
 func (mgr *AssetsManager) RemoveRootDir() error {
-	err := os.RemoveAll(mgr.params.RootDir)
-	if err != nil {
+	if err := os.RemoveAll(mgr.params.RootDir); err != nil {
 		return err
 	}
-	err = os.RemoveAll(mgr.params.LogDir)
-	if err != nil {
-		return err
-	}
-	return nil
+	return os.RemoveAll(mgr.params.LogDir)
 }
 
-func (mgr *AssetsManager) RootDir() string {
-	return mgr.params.RootDir
-}
-func (mgr *AssetsManager) ParamLogDir() string {
-	return mgr.params.LogDir
-}
+func (mgr *AssetsManager) RootDir() string     { return mgr.params.RootDir }
+func (mgr *AssetsManager) ParamLogDir() string { return mgr.params.LogDir }
 
 func (mgr *AssetsManager) SetToast(toast *notification.Toast) {
 	mgr.toast = toast
 }
 
-func (mgr *AssetsManager) disableConversionExchange() {
-	mgr.SetCurrencyConversionExchange(values.DefaultExchangeValue)
-	if mgr.toast != nil {
-		mgr.toast.NotifyError(values.String(values.StrRateUnavailable))
-	}
-}
-
-// initRateSource initializes the user's rate source and starts a loop to
-// refresh the rates.
-func (mgr *AssetsManager) initRateSource() (err error) {
-	ctx, cancel := context.WithCancel(context.Background())
-	mgr.cancelFuncs = append(mgr.cancelFuncs, cancel)
-
-	rateSource := mgr.GetCurrencyConversionExchange()
-	disabled := mgr.IsPrivacyModeOn()
-
-	mgr.RateSource, err = ext.NewCommonRateSource(ctx, rateSource, mgr.disableConversionExchange)
-	if err != nil {
-		return fmt.Errorf("ext.NewCommonRateSource error: %w", err)
-	}
-
-	mgr.RateSource.ToggleStatus(disabled)
-
-	// Start the refresh goroutine even if rate source is disabled.
-	go func() {
-		mgr.RateSource.Refresh(false)
-
-		ticker := time.NewTicker(ext.RateRefreshDuration)
-		defer ticker.Stop()
-
-		for {
-			if ctx.Err() != nil {
-				return
-			}
-
-			select {
-			case <-ticker.C:
-				mgr.RateSource.Refresh(false)
-			case <-ctx.Done():
-				return
-			}
-		}
-	}()
-
-	return nil
-}
-
 // prepareExistingWallets loads all the valid and bad wallets.
 func (mgr *AssetsManager) prepareExistingWallets() error {
-	// read all stored wallets info from the db and initialize wallets interfaces.
 	query := mgr.params.DB.Select(q.True()).OrderBy("ID")
 	var wallets []*sharedW.Wallet
-	err := query.Find(&wallets)
-	if err != nil && err != storm.ErrNotFound {
+	if err := query.Find(&wallets); err != nil && err != storm.ErrNotFound {
 		return err
 	}
 
-	// prepare the wallets loaded from db for use
 	for _, wallet := range wallets {
-		// preset the network type so as to generate correct folder path
 		wallet.SetNetType(mgr.NetType())
 
 		path := filepath.Join(mgr.params.RootDir, wallet.DataDir())
 		log.Infof("loading properties of wallet=%v at location=%v", wallet.Name, path)
 
 		switch wallet.Type {
-		case utils.BTCWalletAsset:
-			w, err := btc.LoadExisting(wallet, mgr.params)
-			if err != nil {
-				mgr.Assets.BTC.BadWallets[wallet.ID] = wallet
-				log.Warnf("Ignored btc wallet load error for wallet %d (%s)", wallet.ID, wallet.Name)
-			} else {
-				mgr.Assets.BTC.Wallets[wallet.ID] = w
-			}
-
 		case utils.DCRWalletAsset:
 			w, err := dcr.LoadExisting(wallet, mgr.params)
 			if err != nil {
@@ -354,18 +193,7 @@ func (mgr *AssetsManager) prepareExistingWallets() error {
 			} else {
 				mgr.Assets.DCR.Wallets[wallet.ID] = w
 			}
-
-		case utils.LTCWalletAsset:
-			w, err := ltc.LoadExisting(wallet, mgr.params)
-			if err != nil {
-				mgr.Assets.LTC.BadWallets[wallet.ID] = wallet
-				log.Warnf("Ignored ltc wallet load error for wallet %d (%s)", wallet.ID, wallet.Name)
-			} else {
-				mgr.Assets.LTC.Wallets[wallet.ID] = w
-			}
-
 		default:
-			// Classify all wallets with missing AssetTypes as DCR badwallets.
 			mgr.Assets.DCR.BadWallets[wallet.ID] = wallet
 		}
 	}
@@ -387,34 +215,14 @@ func (mgr *AssetsManager) listenForShutdown() {
 func (mgr *AssetsManager) Shutdown() {
 	log.Info("Shutting down libwallet")
 
-	// Trigger shuttingDown signal to cancel all contexts created with `shutdownContextWithCancel`.
 	mgr.shuttingDown <- true
 
-	// Shutdown politeia if its syncing
-	if mgr.Politeia.IsSyncing() {
-		mgr.Politeia.StopSync()
-	}
-
-	// Shutdown instant swap if its syncing
-	if mgr.InstantSwap.IsSyncing() {
-		mgr.InstantSwap.StopSync()
-	}
-
-	// Shutdown dexc before closing wallets.
-	if mgr.DEXCInitialized() {
-		mgr.dexcMtx.RLock()
-		mgr.dexc.Shutdown()
-		mgr.dexc.WaitForShutdown()
-		mgr.dexcMtx.RUnlock()
-	}
-
 	for _, wallet := range mgr.AllWallets() {
-		wallet.Shutdown() // Cancels the wallet sync too.
+		wallet.Shutdown()
 		wallet.CancelRescan()
 	}
 	mgr.Assets = new(Assets)
 
-	// Disable all active network connections
 	utils.ShutdownHTTPClients()
 
 	if mgr.params.DB != nil {
@@ -433,24 +241,15 @@ func (mgr *AssetsManager) Shutdown() {
 }
 
 // NetType returns the network type of the assets manager.
-// It is either mainnet or testnet.
-func (mgr *AssetsManager) NetType() utils.NetworkType {
-	return mgr.params.NetType
-}
+func (mgr *AssetsManager) NetType() utils.NetworkType { return mgr.params.NetType }
 
 // LogDir returns the log directory of the assets manager.
 func (mgr *AssetsManager) LogDir() string {
 	return filepath.Join(mgr.params.RootDir, logFileName)
 }
 
-func (mgr *AssetsManager) DEXTestAddr() string {
-	return mgr.params.DEXTestAddr
-}
-
-// DBDriver returns the db driver in use
-func (mgr *AssetsManager) DBDriver() string {
-	return mgr.params.DbDriver
-}
+// DBDriver returns the db driver in use.
+func (mgr *AssetsManager) DBDriver() string { return mgr.params.DbDriver }
 
 // OpenWallets opens all wallets in the assets manager.
 func (mgr *AssetsManager) OpenWallets(startupPassphrase string) error {
@@ -467,32 +266,19 @@ func (mgr *AssetsManager) OpenWallets(startupPassphrase string) error {
 	for _, wallet := range mgr.AllWallets() {
 		select {
 		case <-mgr.shuttingDown:
-			// If shutdown protocol is detected, exit immediately.
 			return nil
 		default:
-			err := wallet.OpenWallet()
-			if err != nil {
+			if err := wallet.OpenWallet(); err != nil {
 				return err
 			}
 		}
 	}
-
 	return nil
 }
 
 // DCRBadWallets returns a map of all bad DCR wallets.
 func (mgr *AssetsManager) DCRBadWallets() map[int]*sharedW.Wallet {
 	return mgr.Assets.DCR.BadWallets
-}
-
-// BTCBadWallets returns a map of all bad BTC wallets.
-func (mgr *AssetsManager) BTCBadWallets() map[int]*sharedW.Wallet {
-	return mgr.Assets.BTC.BadWallets
-}
-
-// LTCBadWallets returns a map of all bad LTC wallets.
-func (mgr *AssetsManager) LTCBadWallets() map[int]*sharedW.Wallet {
-	return mgr.Assets.LTC.BadWallets
 }
 
 // LoadedWalletsCount returns the number of wallets loaded in the assets manager.
@@ -516,8 +302,7 @@ func (mgr *AssetsManager) PiKeys() [][]byte {
 	return mgr.chainsParams.DCR.PiKeys
 }
 
-// AllVoteAgendas returns all agendas of all stake versions for the active
-// network and this version of the software.
+// AllVoteAgendas returns all agendas of all stake versions for the active network.
 func (mgr *AssetsManager) AllVoteAgendas(newestFirst bool) ([]*dcr.Agenda, error) {
 	return mgr.ConsensusAgenda.AllVoteAgendas(mgr.chainsParams.DCR, newestFirst)
 }
@@ -528,13 +313,8 @@ func (mgr *AssetsManager) sortWallets(assetType utils.AssetType) []sharedW.Asset
 	watchOnlyWallets := make([]sharedW.Asset, 0)
 
 	var unsortedWallets map[int]sharedW.Asset
-	switch assetType {
-	case utils.DCRWalletAsset:
+	if assetType == utils.DCRWalletAsset {
 		unsortedWallets = mgr.Assets.DCR.Wallets
-	case utils.BTCWalletAsset:
-		unsortedWallets = mgr.Assets.BTC.Wallets
-	case utils.LTCWalletAsset:
-		unsortedWallets = mgr.Assets.LTC.Wallets
 	}
 
 	for _, wallet := range unsortedWallets {
@@ -545,7 +325,6 @@ func (mgr *AssetsManager) sortWallets(assetType utils.AssetType) []sharedW.Asset
 		}
 	}
 
-	// Sort both lists by wallet ID.
 	sort.Slice(normalWallets, func(i, j int) bool {
 		return normalWallets[i].GetWalletID() < normalWallets[j].GetWalletID()
 	})
@@ -557,32 +336,19 @@ func (mgr *AssetsManager) sortWallets(assetType utils.AssetType) []sharedW.Asset
 }
 
 // AllDCRWallets returns all DCR wallets in the assets manager.
-func (mgr *AssetsManager) AllDCRWallets() (wallets []sharedW.Asset) {
+func (mgr *AssetsManager) AllDCRWallets() []sharedW.Asset {
 	return mgr.sortWallets(utils.DCRWalletAsset)
 }
 
-// AllBTCWallets returns all BTC wallets in the assets manager.
-func (mgr *AssetsManager) AllBTCWallets() (wallets []sharedW.Asset) {
-	return mgr.sortWallets(utils.BTCWalletAsset)
-}
-
-// AllLTCWallets returns all LTC wallets in the assets manager.
-func (mgr *AssetsManager) AllLTCWallets() (wallets []sharedW.Asset) {
-	return mgr.sortWallets(utils.LTCWalletAsset)
-}
-
 // AllWallets returns all wallets in the assets manager.
-func (mgr *AssetsManager) AllWallets() (wallets []sharedW.Asset) {
-	wallets = mgr.AllDCRWallets()
-	wallets = append(wallets, mgr.AllBTCWallets()...)
-	wallets = append(wallets, mgr.AllLTCWallets()...)
-	return wallets
+func (mgr *AssetsManager) AllWallets() []sharedW.Asset {
+	return mgr.AllDCRWallets()
 }
 
 // DeleteWallet deletes a wallet from the assets manager.
 func (mgr *AssetsManager) DeleteWallet(walletID int, privPass string) error {
 	wallet := mgr.WalletWithID(walletID)
-	if wallet == nil { // already deleted?
+	if wallet == nil {
 		return nil
 	}
 
@@ -590,27 +356,15 @@ func (mgr *AssetsManager) DeleteWallet(walletID int, privPass string) error {
 		return err
 	}
 
-	switch wallet.GetAssetType() {
-	case utils.BTCWalletAsset:
-		delete(mgr.Assets.BTC.Wallets, walletID)
-	case utils.DCRWalletAsset:
+	if wallet.GetAssetType() == utils.DCRWalletAsset {
 		delete(mgr.Assets.DCR.Wallets, walletID)
-	case utils.LTCWalletAsset:
-		delete(mgr.Assets.LTC.Wallets, walletID)
 	}
-
 	return nil
 }
 
 // WalletWithID returns a wallet with the given ID.
 func (mgr *AssetsManager) WalletWithID(walletID int) sharedW.Asset {
-	if wallet, ok := mgr.Assets.BTC.Wallets[walletID]; ok {
-		return wallet
-	}
 	if wallet, ok := mgr.Assets.DCR.Wallets[walletID]; ok {
-		return wallet
-	}
-	if wallet, ok := mgr.Assets.LTC.Wallets[walletID]; ok {
 		return wallet
 	}
 	return nil
@@ -620,31 +374,18 @@ func (mgr *AssetsManager) WalletWithID(walletID int) sharedW.Asset {
 func (mgr *AssetsManager) AssetWallets(assetTypes ...utils.AssetType) []sharedW.Asset {
 	var wallets []sharedW.Asset
 	for _, asset := range assetTypes {
-		switch asset {
-		case utils.BTCWalletAsset:
-			wallets = append(wallets, mgr.AllBTCWallets()...)
-		case utils.DCRWalletAsset:
+		if asset == utils.DCRWalletAsset {
 			wallets = append(wallets, mgr.AllDCRWallets()...)
-		case utils.LTCWalletAsset:
-			wallets = append(wallets, mgr.AllLTCWallets()...)
 		}
 	}
-
 	if len(wallets) == 0 && len(assetTypes) == 0 {
 		wallets = mgr.AllWallets()
 	}
-
 	return wallets
 }
 
 func (mgr *AssetsManager) getbadWallet(walletID int) *sharedW.Wallet {
-	if badWallet, ok := mgr.Assets.BTC.BadWallets[walletID]; ok {
-		return badWallet
-	}
 	if badWallet, ok := mgr.Assets.DCR.BadWallets[walletID]; ok {
-		return badWallet
-	}
-	if badWallet, ok := mgr.Assets.LTC.BadWallets[walletID]; ok {
 		return badWallet
 	}
 	return nil
@@ -659,29 +400,22 @@ func (mgr *AssetsManager) DeleteBadWallet(walletID int) error {
 
 	log.Info("Deleting bad wallet")
 
-	err := mgr.params.DB.DeleteStruct(wallet)
-	if err != nil {
+	if err := mgr.params.DB.DeleteStruct(wallet); err != nil {
 		return utils.TranslateError(err)
 	}
 
 	os.RemoveAll(wallet.DataDir())
 
-	switch wallet.GetAssetType() {
-	case utils.BTCWalletAsset:
-		delete(mgr.Assets.BTC.BadWallets, walletID)
-	case utils.DCRWalletAsset:
+	if wallet.GetAssetType() == utils.DCRWalletAsset {
 		delete(mgr.Assets.DCR.BadWallets, walletID)
-	case utils.LTCWalletAsset:
-		delete(mgr.Assets.LTC.BadWallets, walletID)
 	}
-
 	return nil
 }
 
-// Check if wallet name already exists
+// DoesWalletNameExist returns true if a wallet with the same name already exists.
 func (mgr *AssetsManager) DoesWalletNameExist(walletName string) (bool, error) {
-	wallet := wallet.Wallet{}
-	err := mgr.params.DB.One("Name", walletName, &wallet)
+	w := wallet.Wallet{}
+	err := mgr.params.DB.One("Name", walletName, &w)
 	if err == nil {
 		return true, nil
 	} else if err != storm.ErrNotFound {
@@ -706,58 +440,35 @@ func (mgr *AssetsManager) RootDirFileSizeInBytes(dataDir string) (int64, error) 
 	return size, err
 }
 
-// WalletWithSeed returns the ID of the wallet with the given seed. If a wallet
-// with the given seed does not exist, it returns -1.
+// WalletWithSeed returns the ID of the wallet with the given seed.
 func (mgr *AssetsManager) WalletWithSeed(walletType utils.AssetType, seedMnemonic string, wordSeedType sharedW.WordSeedType) (int, error) {
-	switch walletType {
-	case utils.BTCWalletAsset:
-		return mgr.BTCWalletWithSeed(seedMnemonic, wordSeedType)
-	case utils.DCRWalletAsset:
+	if walletType == utils.DCRWalletAsset {
 		return mgr.DCRWalletWithSeed(seedMnemonic, wordSeedType)
-	case utils.LTCWalletAsset:
-		return mgr.LTCWalletWithSeed(seedMnemonic, wordSeedType)
-	default:
-		return -1, utils.ErrAssetUnknown
 	}
+	return -1, utils.ErrAssetUnknown
 }
 
 // RestoreWallet restores a wallet from the given seed.
 func (mgr *AssetsManager) RestoreWallet(walletType utils.AssetType, walletName, seedMnemonic, privatePassphrase string, privatePassphraseType int32, wordSeedType sharedW.WordSeedType) (sharedW.Asset, error) {
-	switch walletType {
-	case utils.BTCWalletAsset:
-		return mgr.RestoreBTCWallet(walletName, seedMnemonic, privatePassphrase, wordSeedType, privatePassphraseType)
-	case utils.DCRWalletAsset:
+	if walletType == utils.DCRWalletAsset {
 		return mgr.RestoreDCRWallet(walletName, seedMnemonic, privatePassphrase, wordSeedType, privatePassphraseType)
-	case utils.LTCWalletAsset:
-		return mgr.RestoreLTCWallet(walletName, seedMnemonic, privatePassphrase, wordSeedType, privatePassphraseType)
-	default:
-		return nil, utils.ErrAssetUnknown
 	}
+	return nil, utils.ErrAssetUnknown
 }
 
-// WalletWithXPub returns the ID of the wallet with the given xpub. If a wallet
-// with the given xpub does not exist, it returns -1.
+// WalletWithXPub returns the ID of the wallet with the given xpub.
 func (mgr *AssetsManager) WalletWithXPub(walletType utils.AssetType, xPub string) (int, error) {
-	switch walletType {
-	case utils.DCRWalletAsset:
+	if walletType == utils.DCRWalletAsset {
 		return mgr.DCRWalletWithXPub(xPub)
-	case utils.BTCWalletAsset:
-		return mgr.BTCWalletWithXPub(xPub)
-	case utils.LTCWalletAsset:
-		return mgr.LTCWalletWithXPub(xPub)
-	default:
-		return -1, utils.ErrAssetUnknown
 	}
+	return -1, utils.ErrAssetUnknown
 }
 
-// on windows os after a wallet is deleted, the dir of deleted wallet still exists,
-// cleanDeletedWallets will check the data dir of all deleted wallets and remove them.
+// cleanDeletedWallets removes leftover dirs of deleted wallets.
 func (mgr *AssetsManager) cleanDeletedWallets() {
-	// read all stored wallets info from the db and initialize wallets interfaces.
 	query := mgr.params.DB.Select(q.True()).OrderBy("ID")
 	var wallets []*sharedW.Wallet
-	err := query.Find(&wallets)
-	if err != nil && err != storm.ErrNotFound {
+	if err := query.Find(&wallets); err != nil && err != storm.ErrNotFound {
 		log.Error("Fail to get all wallet to check deleted wallets")
 		return
 	}
@@ -766,13 +477,11 @@ func (mgr *AssetsManager) cleanDeletedWallets() {
 	validWallets := make(map[string]bool, len(wallets))
 	deletedWalletDirs := make([]string, 0)
 
-	// filter all valid wallets
 	for _, wallet := range wallets {
 		key := wallet.Type.ToStringLower() + strconv.Itoa(wallet.ID)
 		validWallets[key] = true
 	}
 
-	// filter all wallets to be deleted.
 	for _, wType := range mgr.AllAssetTypes() {
 		dirName := ""
 		if mgr.NetType() == utils.Testnet {
@@ -801,8 +510,7 @@ func (mgr *AssetsManager) cleanDeletedWallets() {
 	}
 
 	for _, v := range deletedWalletDirs {
-		err = os.RemoveAll(v)
-		if err != nil {
+		if err := os.RemoveAll(v); err != nil {
 			log.Errorf("Can't remove the wallet with error: %v", err)
 		}
 	}
@@ -812,47 +520,24 @@ func (mgr *AssetsManager) cleanDeletedWallets() {
 
 // AllAssetTypes returns all asset types supported by the assets manager.
 func (mgr *AssetsManager) AllAssetTypes() []utils.AssetType {
-	return []utils.AssetType{
-		utils.DCRWalletAsset,
-		utils.BTCWalletAsset,
-		utils.LTCWalletAsset,
-	}
+	return []utils.AssetType{utils.DCRWalletAsset}
 }
 
-// BlockExplorerURLForTx returns a URL for viewing a transaction on the block
-// explorer of the specified asset.
+// BlockExplorerURLForTx returns a URL for viewing a transaction on the
+// Monetarium block explorer.
 func (mgr *AssetsManager) BlockExplorerURLForTx(assetType utils.AssetType, txHash string) string {
-	var isMainnet bool
+	if assetType != utils.DCRWalletAsset {
+		return ""
+	}
 	switch mgr.NetType() {
 	case utils.Mainnet:
-		isMainnet = true
+		// TODO: replace with the real Monetarium explorer once deployed.
+		return "https://explorer.monetarium.io/tx/" + txHash
 	case utils.Testnet:
-		isMainnet = false
+		return "https://testnet.explorer.monetarium.io/tx/" + txHash
 	default:
-		return "" // block explorer only exists for mainnet and testnet
+		return ""
 	}
-
-	switch assetType {
-	case utils.DCRWalletAsset:
-		if isMainnet {
-			return "https://explorer.dcrdata.org/tx/" + txHash
-		}
-		return "https://testnet.dcrdata.org/tx/" + txHash
-
-	case utils.BTCWalletAsset:
-		if isMainnet {
-			return "https://www.blockchain.com/btc/tx/" + txHash
-		}
-		return "https://live.blockcypher.com/btc-testnet/tx/" + txHash
-
-	case utils.LTCWalletAsset:
-		if isMainnet {
-			return "https://chain.so/tx/LTC/" + txHash
-		}
-		return "https://chain.so/tx/LTCTEST/" + txHash
-	}
-
-	return ""
 }
 
 func (mgr *AssetsManager) LogFile() string {
@@ -870,34 +555,11 @@ func (mgr *AssetsManager) DCRHDPrefix() string {
 	}
 }
 
-func (mgr *AssetsManager) BTCHDPrefix() string {
-	switch mgr.NetType() {
-	case utils.Testnet:
-		return btc.TestnetHDPath
-	case utils.Mainnet:
-		return btc.MainnetHDPath
-	default:
-		return ""
-	}
-}
-
-// LTC HDPrefix returns the HD path prefix for the Litecoin wallet network.
-func (mgr *AssetsManager) LTCHDPrefix() string {
-	switch mgr.NetType() {
-	case utils.Testnet:
-		return ltc.TestnetHDPath
-	case utils.Mainnet:
-		return ltc.MainnetHDPath
-	default:
-		return ""
-	}
-}
-
+// CalculateTotalAssetsBalance returns the total balance per asset type across all wallets.
 func (mgr *AssetsManager) CalculateTotalAssetsBalance(includeWatchWallet bool) (map[utils.AssetType]sharedW.AssetAmount, error) {
 	assetsTotalBalance := make(map[utils.AssetType]sharedW.AssetAmount)
 
-	wallets := mgr.AllWallets()
-	for _, wal := range wallets {
+	for _, wal := range mgr.AllWallets() {
 		if !includeWatchWallet && wal.IsWatchingOnlyWallet() {
 			continue
 		}
@@ -922,147 +584,8 @@ func (mgr *AssetsManager) CalculateTotalAssetsBalance(includeWatchWallet bool) (
 	return assetsTotalBalance, nil
 }
 
-func (mgr *AssetsManager) CalculateAssetsUSDBalance(balances map[utils.AssetType]sharedW.AssetAmount) (map[utils.AssetType]float64, error) {
-	if !mgr.ExchangeRateFetchingEnabled() {
-		return nil, fmt.Errorf("the USD exchange rate is disabled")
-	}
-
-	usdBalance := func(bal sharedW.AssetAmount, market values.Market) (float64, error) {
-		rate := mgr.RateSource.GetTicker(market, true)
-		if rate == nil || rate.LastTradePrice <= 0 {
-			return 0, fmt.Errorf("no rate information available")
-		}
-
-		return bal.MulF64(rate.LastTradePrice).ToCoin(), nil
-	}
-
-	assetsTotalUSDBalance := make(map[utils.AssetType]float64)
-	for assetType, balance := range balances {
-		marketValue, exist := values.AssetExchangeMarketValue[assetType]
-		if !exist {
-			return nil, fmt.Errorf("unsupported asset type: %s", assetType)
-		}
-		usdBal, err := usdBalance(balance, marketValue)
-		if err != nil {
-			return nil, err
-		}
-		assetsTotalUSDBalance[assetType] = usdBal
-	}
-
-	return assetsTotalUSDBalance, nil
-}
-
-// DexClient returns a dexc client that MUST never be modified.
-func (mgr *AssetsManager) DexClient() DEXClient {
-	mgr.dexcMtx.RLock()
-	defer mgr.dexcMtx.RUnlock()
-	return mgr.dexc
-}
-
-// UpdateDEXCtx will overwrite the current mgr.dexcCtx which is used to
-// initialize dex from anywhere. Must not be called in a goroutine.
-func (mgr *AssetsManager) UpdateDEXCtx(ctx context.Context) {
-	mgr.dexcCtx = ctx
-}
-
-func (mgr *AssetsManager) DEXCInitialized() bool {
-	mgr.dexcMtx.RLock()
-	defer mgr.dexcMtx.RUnlock()
-	return mgr.dexc != nil && mgr.dexc.IsInitialized()
-}
-
-// DEXDBExists will return true if a dex database already exists in the root
-// dir. mgr.RootDir() is the same dir used in creating a new dexc instance.
-func (mgr *AssetsManager) DEXDBExists() bool {
-	return dex.FileExists(filepath.Join(mgr.RootDir(), dexc.DBFileName))
-}
-
-// InitializeDEX initializes mgr.dexc. Support for Cryptopower wallets are
-// initialized first so the DEX client can bind previously added wallets when it
-// starts.
-func (mgr *AssetsManager) InitializeDEX() {
-	// Ignore attempts to InitializeDEX on iOS.
-	if appos.Current().IsIOS() {
-		return
-	}
-
-	if mgr.dexcCtx == nil || mgr.dexcCtx.Err() != nil {
-		log.Debug("Attempted to initialize dex client instance without a valid context")
-		return
-	}
-
-	// Prevent multiple initialization.
-	if mgr.DEXCInitialized() || !mgr.startingDEX.CompareAndSwap(false, true) {
-		log.Debug("Attempted to reinitialize a running DEX client instance")
-		return
-	}
-
-	defer func() {
-		mgr.startingDEX.Store(false)
-	}()
-
-	// Initialize support for accessing Cryptopower wallets from DEX before
-	// starting the DEX client so the DEX client can bind previously added
-	// wallets when it starts.
-	setDEXWalletLoader(mgr.WalletWithID)
-
-	logDir := filepath.Dir(mgr.LogFile())
-	dexClient, err := dexc.Start(mgr.dexcCtx, mgr.RootDir(), mgr.GetLanguagePreference(), logDir, mgr.GetLogLevels(), mgr.NetType(), 0 /* TODO: Make configurable */)
-	if err != nil {
-		log.Errorf("Error starting DEX client: %v", err)
-		return
-	}
-
-	mgr.dexcMtx.Lock()
-	mgr.dexc = dexClient
-	mgr.dexcMtx.Unlock()
-
-	go func() {
-		<-dexClient.WaitForShutdown()
-		mgr.dexcMtx.Lock()
-		mgr.dexc = nil
-		mgr.dexcMtx.Unlock()
-	}()
-
-	log.Info("DEX client has been initialized successfully...")
-}
-
-func (mgr *AssetsManager) DeleteDEXData() error {
-	if !mgr.DEXCInitialized() {
-		return nil // nothing to do.
-	}
-
-	mgr.dexcMtx.Lock()
-	defer mgr.dexcMtx.Unlock()
-
-	// Log out the user.
-	err := mgr.dexc.Logout()
-	if err != nil {
-		return err
-	}
-
-	log.Debug("Shutting down DEX client and removing DEX data dir....")
-
-	dexDBFile := mgr.dexc.DBPath()
-	shutdownChan := mgr.dexc.WaitForShutdown()
-
-	// Shutdown the DEX client.
-	mgr.dexc.Shutdown()
-	// TODO: Verify that it is possible to listen to this channel here and in
-	// the goroutine in InitializeDEX; it's possible that only one of the
-	// listeners will receive a value. But if the channel was closed, then maybe
-	// both will get the ntfn?
-	<-shutdownChan // wait for shutdown
-
-	mgr.dexc = nil
-
-	// Delete dex client db.
-	return os.Remove(dexDBFile)
-}
-
-// Listen when new tx is registered
+// Listen when new tx is registered.
 func (mgr *AssetsManager) ListenForTxAndBlockNotification(listen func(int)) {
-	// Reload total balance on new tx.
 	txAndBlockNotificationListener := &sharedW.TxAndBlockNotificationListener{
 		OnTransactionConfirmed: func(walletID int, _ string, _ int32) {
 			listen(walletID)
@@ -1072,7 +595,6 @@ func (mgr *AssetsManager) ListenForTxAndBlockNotification(listen func(int)) {
 		},
 	}
 
-	// add tx listener
 	for _, wallet := range mgr.AllWallets() {
 		if !wallet.IsNotificationListenerExist(assetIdentifier) {
 			if err := wallet.AddTxAndBlockNotificationListener(txAndBlockNotificationListener, assetIdentifier); err != nil {
@@ -1082,37 +604,14 @@ func (mgr *AssetsManager) ListenForTxAndBlockNotification(listen func(int)) {
 	}
 }
 
-// Listen when rate changes
-func (mgr *AssetsManager) ListenForRate(listen func()) {
-	rateListener := &ext.RateListener{
-		OnRateUpdated: func() {
-			listen()
-		},
-	}
-	if !mgr.RateSource.IsRateListenerExist(assetIdentifier) {
-		if err := mgr.RateSource.AddRateListener(rateListener, assetIdentifier); err != nil {
-			log.Error("Can't listen rate notification ")
-		}
-	}
-}
-
 func (mgr *AssetsManager) RemoveAssetChange() {
-	// Remove all listener on tx notification
 	for _, wallet := range mgr.AllWallets() {
 		wallet.RemoveTxAndBlockNotificationListener(assetIdentifier)
 	}
-
-	// Remove listener on rate notification
-	mgr.RateSource.RemoveRateListener(assetIdentifier)
 }
 
-func (mgr *AssetsManager) BadgerDB() string {
-	return BadgerDB
-}
-
-func (mgr *AssetsManager) BoltDB() string {
-	return BoltDB
-}
+func (mgr *AssetsManager) BadgerDB() string { return BadgerDB }
+func (mgr *AssetsManager) BoltDB() string   { return BoltDB }
 
 // AssetToCreate checks if there is any asset type that has not been created
 // and returns the first one.
@@ -1124,18 +623,19 @@ func (mgr *AssetsManager) AssetToCreate() libutils.AssetType {
 
 	for _, asset := range assetToCreate {
 		assetExists := false
-
 		for _, wallet := range wallets {
 			if wallet.GetAssetType() == asset {
 				assetExists = true
 				break
 			}
 		}
-
 		if !assetExists {
 			assetsNotCreated = append(assetsNotCreated, asset)
 		}
 	}
 
+	if len(assetsNotCreated) == 0 {
+		return ""
+	}
 	return assetsNotCreated[0]
 }

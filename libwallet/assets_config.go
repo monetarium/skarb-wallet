@@ -9,9 +9,7 @@ import (
 	"github.com/monetarium/monetarium-cryptopower/libwallet/utils"
 	"github.com/monetarium/monetarium-cryptopower/ui/values"
 
-	"github.com/monetarium/monetarium-cryptopower/libwallet/assets/btc"
 	"github.com/monetarium/monetarium-cryptopower/libwallet/assets/dcr"
-	"github.com/monetarium/monetarium-cryptopower/libwallet/assets/ltc"
 	sharedW "github.com/monetarium/monetarium-cryptopower/libwallet/assets/wallet"
 
 	"golang.org/x/crypto/bcrypt"
@@ -329,30 +327,12 @@ func (mgr *AssetsManager) SetDBDriver(dbDriver string) {
 
 // GetGenesisTimestamp returns the genesis timestamp for the provided asset type and network.
 func (mgr *AssetsManager) GetGenesisTimestamp(assetType utils.AssetType, network utils.NetworkType) int64 {
-	switch assetType {
-	case utils.DCRWalletAsset:
-		return dcr.GetGenesisTimestamp(network)
-	case utils.BTCWalletAsset:
-		return btc.GetGenesisTimestamp(network)
-	case utils.LTCWalletAsset:
-		return ltc.GetGenesisTimestamp(network)
-	default:
-		return dcr.GetGenesisTimestamp(network) // Default to DCR
-	}
+	return dcr.GetGenesisTimestamp(network)
 }
 
 // GetTargetTimePerBlock returns the target time per block for the provided asset type and network.
 func (mgr *AssetsManager) GetTargetTimePerBlock(assetType utils.AssetType, network utils.NetworkType) int64 {
-	switch assetType {
-	case utils.DCRWalletAsset:
-		return dcr.GetTargetTimePerBlock(network)
-	case utils.BTCWalletAsset:
-		return btc.GetTargetTimePerBlock(network)
-	case utils.LTCWalletAsset:
-		return ltc.GetTargetTimePerBlock(network)
-	default:
-		return dcr.GetTargetTimePerBlock(network) // Default to DCR
-	}
+	return dcr.GetTargetTimePerBlock(network)
 }
 
 // IsInternalStorageSufficient checks if the available disk space is sufficient for the

@@ -1,22 +1,15 @@
 package txhelper
 
 import (
-	btccfg "github.com/btcsuite/btcd/chaincfg"
-	btctxauthor "github.com/btcsuite/btcwallet/wallet/txauthor"
 	"github.com/monetarium/monetarium-cryptopower/libwallet/addresshelper"
-	ltctxauthor "github.com/dcrlabs/ltcwallet/wallet/txauthor"
 	"github.com/monetarium/monetarium-node/dcrutil"
-	ltccfg "github.com/ltcsuite/ltcd/chaincfg"
 )
 
 const scriptVersion = 0
 
-// implements Script() and ScriptSize() functions of txauthor.ChangeSource
+// TxChangeSource implements Script() and ScriptSize() functions of txauthor.ChangeSource.
 type TxChangeSource struct {
-	// Shared fields.
-	script []byte
-
-	// DCR fields.
+	script  []byte
 	version uint16
 }
 
@@ -33,39 +26,8 @@ func MakeTxChangeSource(destAddr string, net dcrutil.AddressParams) (*TxChangeSo
 	if err != nil {
 		return nil, err
 	}
-	changeSource := &TxChangeSource{
+	return &TxChangeSource{
 		script:  pkScript,
 		version: scriptVersion,
-	}
-	return changeSource, nil
-}
-
-func MakeBTCTxChangeSource(destAddr string, net *btccfg.Params) (*btctxauthor.ChangeSource, error) {
-	var pkScript []byte
-	changeSource := &btctxauthor.ChangeSource{
-		NewScript: func() ([]byte, error) {
-			pkScript, err := addresshelper.BTCPkScript(destAddr, net)
-			if err != nil {
-				return nil, err
-			}
-			return pkScript, nil
-		},
-		ScriptSize: len(pkScript),
-	}
-	return changeSource, nil
-}
-
-func MakeLTCTxChangeSource(destAddr string, net *ltccfg.Params) (*ltctxauthor.ChangeSource, error) {
-	var pkScript []byte
-	changeSource := &ltctxauthor.ChangeSource{
-		NewScript: func() ([]byte, error) {
-			pkScript, err := addresshelper.LTCPkScript(destAddr, net)
-			if err != nil {
-				return nil, err
-			}
-			return pkScript, nil
-		},
-		ScriptSize: len(pkScript),
-	}
-	return changeSource, nil
+	}, nil
 }

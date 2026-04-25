@@ -5,11 +5,9 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/monetarium/monetarium-cryptopower/libwallet/utils"
 	"github.com/monetarium/monetarium-wallet/errors"
 	dcrW "github.com/monetarium/monetarium-wallet/wallet"
-	btcW "github.com/btcsuite/btcwallet/wallet"
-	"github.com/monetarium/monetarium-cryptopower/libwallet/utils"
-	ltcW "github.com/dcrlabs/ltcwallet/wallet"
 
 	_ "github.com/monetarium/monetarium-cryptopower/libwallet/badgerdb" // initialize badger driver
 )
@@ -29,9 +27,7 @@ type Loader struct {
 
 // LoadedWallets holds all the upstream wallets managed by the loader
 type LoadedWallets struct {
-	BTC *btcW.Wallet
 	DCR *dcrW.Wallet
-	LTC *ltcW.Wallet
 }
 
 type WatchOnlyWalletParams struct {

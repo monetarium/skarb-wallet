@@ -23,8 +23,6 @@ const (
 )
 
 type DB struct {
-	BTC            *BTCDB
-	LTC            *LTCDB
 	walletDataDB   *storm.DB
 	ticketMaturity int32
 	ticketExpiry   int32
@@ -53,12 +51,6 @@ func Initialize(dbPath string, txData interface{}) (*DB, error) {
 	}
 
 	return &DB{
-		BTC: &BTCDB{
-			Bolt: walletDataDB.Bolt,
-		},
-		LTC: &LTCDB{
-			Bolt: walletDataDB.Bolt,
-		},
 		walletDataDB: walletDataDB,
 		Path:         dbPath,
 	}, nil

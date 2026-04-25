@@ -6,7 +6,6 @@ import (
 	"path/filepath"
 	"sync"
 
-	"github.com/monetarium/monetarium-wallet/vsp"
 	dcrW "github.com/monetarium/monetarium-wallet/wallet"
 	"github.com/monetarium/monetarium-wallet/wallet/txrules"
 	sharedW "github.com/monetarium/monetarium-cryptopower/libwallet/assets/wallet"
@@ -32,9 +31,6 @@ type Asset struct {
 	TxAuthoredInfo *TxAuthor
 
 	// VSP data
-	vspClients map[string]*vsp.Client
-	vspMu      sync.RWMutex
-	vsps       []*VSP
 
 	notificationListenersMu           sync.RWMutex
 	syncData                          *SyncData
@@ -126,7 +122,6 @@ func CreateNewWallet(pass *sharedW.AuthInfo, params *sharedW.InitParams) (shared
 		},
 		txAndBlockNotificationListeners:   make(map[string]*sharedW.TxAndBlockNotificationListener),
 		accountMixerNotificationListeners: make(map[string]*AccountMixerNotificationListener),
-		vspClients:                        make(map[string]*vsp.Client),
 		dbMutex:                           &dbMutex,
 	}
 
@@ -199,7 +194,6 @@ func RestoreWallet(seedMnemonic string, pass *sharedW.AuthInfo, params *sharedW.
 		syncData: &SyncData{
 			syncProgressListeners: make(map[string]*sharedW.SyncProgressListener),
 		},
-		vspClients:                        make(map[string]*vsp.Client),
 		txAndBlockNotificationListeners:   make(map[string]*sharedW.TxAndBlockNotificationListener),
 		accountMixerNotificationListeners: make(map[string]*AccountMixerNotificationListener),
 		dbMutex:                           &dbMutex,
@@ -227,7 +221,6 @@ func LoadExisting(w *sharedW.Wallet, params *sharedW.InitParams) (sharedW.Asset,
 	ldr := initWalletLoader(chainParams, params.RootDir, params.DbDriver, &dbMutex)
 	dcrWallet := &Asset{
 		Wallet:      w,
-		vspClients:  make(map[string]*vsp.Client),
 		chainParams: chainParams,
 		syncData: &SyncData{
 			syncProgressListeners: make(map[string]*sharedW.SyncProgressListener),

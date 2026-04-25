@@ -3,7 +3,6 @@ package dcr
 import (
 	"fmt"
 
-	"github.com/monetarium/monetarium-wallet/vsp"
 	"github.com/monetarium/monetarium-wallet/wallet"
 	"github.com/monetarium/monetarium-wallet/wallet/udb"
 	sharedW "github.com/monetarium/monetarium-cryptopower/libwallet/assets/wallet"
@@ -91,7 +90,6 @@ type TicketBuyerConfig struct {
 	PurchaseAccount   int32
 	BalanceToMaintain int64
 
-	VspClient *vsp.Client
 }
 
 // VSPFeeStatus represents the current fee status of a ticket.
@@ -132,7 +130,6 @@ type VSPTicketInfo struct {
 	FeeTxHash   string
 	FeeTxStatus VSPFeeStatus
 	// Client defines the vsp client needed to process more tickets requests.
-	Client *vsp.Client
 	// ConfirmedByVSP is nil if the ticket status could not be obtained
 	// from the VSP, false if the VSP hasn't confirmed the fee and true
 	// if the VSP has fully registered the ticket.
