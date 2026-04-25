@@ -1,0 +1,48 @@
+name: Build
+on: [push, pull_request]
+jobs:
+  build:
+    name: Build
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out code into the Go module directory
+        uses: actions/checkout@v3
+
+      - name: Set up Go 1.21
+        uses: actions/setup-go@v3
+        with:
+          go-version: 1.21
+        id: go
+
+      - name: Libraries for gio
+        run: |
+          sudo apt update
+          sudo apt install libwayland-dev libx11-dev libx11-xcb-dev libxkbcommon-x11-dev libgles2-mesa-dev libegl1-mesa-dev libffi-dev libxcursor-dev libvulkan-dev
+
+      - name: Copy needed files
+        run: |
+          cp "./libwallet/instantswap/instant_example.json" "./libwallet/instantswap/instant.json"
+
+      - name: Cache (dependencies)
+        uses: actions/cache@v4
+        id: cache
+        with:
+          path: ~/go/pkg/mod
+          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}-v2
+          restore-keys: |
+            ${{ runner.os }}-go-
+      
+      - name: Install linter
+        uses: golangci/golangci-lint-action@v4
+        with:
+          version: v1.59.1
+          skip-pkg-cache: true
+          args: --out-format=colored-line-number --timeout=10m
+
+      - name: Install dependencies
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: go mod download
+
+      - name: Test and lint
+        run: |
+          ./run_tests.sh

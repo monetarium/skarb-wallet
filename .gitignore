@@ -1,0 +1,14 @@
+cryptopower*
+_*
+*.dll
+.vscode
+.DS_Store
+*.coverprofile
+**/.cryptopower_test*
+pkged.go
+Dockerfile
+makefile
+
+vendor
+bin
+libwallet/instantswap/instant.json

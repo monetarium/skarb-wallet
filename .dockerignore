@@ -1,0 +1,6 @@
+cryptopower*
+_*
+*.dll
+.vscode
+*.coverprofile
+**/.cryptopower_test*
