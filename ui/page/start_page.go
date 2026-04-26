@@ -170,6 +170,13 @@ func (sp *startPage) initPage() {
 	sp.languageDropdown = sp.Theme.NewCommonDropDown(
 		langItems, nil, values.MarginPadding120, values.StartPageDropdownGroup, false)
 
+	// The dropdown is created with selectedIndex=0 — i.e. it visually shows
+	// the first locale (Ukrainian) — but no Changed event ever fires for the
+	// initial selection, so the active locale stays whatever values.UserLanguages
+	// happens to default to (English). Push the selected option into the
+	// translator now so the very first paint already uses the displayed locale.
+	values.SetUserLanguage(sp.selectedLanguageKey())
+
 	sp.refreshLocalizedStrings()
 }
 
