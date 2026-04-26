@@ -18,9 +18,15 @@ VERSION_LONG="0.1.0"
 echo "→ Cleaning previous bundle"
 rm -rf "${APP_DIR}"
 
-echo "→ Building Go binary"
+echo "→ Building Go binary (stripped, paths trimmed)"
 mkdir -p "${APP_DIR}/Contents/MacOS"
-GOFLAGS="-mod=mod" go build -trimpath -o "${APP_DIR}/Contents/MacOS/${APP_NAME}" .
+# -trimpath        : strip absolute paths from compiled symbols (no /Users/<you>/...)
+# -ldflags '-s -w' : strip symbol + DWARF debug tables
+# -ldflags '-buildid=' : zero out the build-id so two builds of identical source produce identical binaries
+# -buildvcs=false  : don't embed local git commit info into the binary
+GOFLAGS="-mod=mod -trimpath" \
+  go build -trimpath -ldflags "-s -w -buildid=" -buildvcs=false \
+    -o "${APP_DIR}/Contents/MacOS/${APP_NAME}" .
 
 echo "→ Generating .icns icon from appicon.png"
 mkdir -p "${APP_DIR}/Contents/Resources"

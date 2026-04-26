@@ -4,3 +4,6 @@ monetarium-cryptopower
 .phase1-stubs-replaced/
 Monetarium.app/
 dist/
+.DS_Store
+Thumbs.db
+*.swp

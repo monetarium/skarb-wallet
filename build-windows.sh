@@ -35,8 +35,8 @@ if [ "$(uname -s)" = "Linux" ]; then
   export CGO_ENABLED=1
 fi
 
-GOFLAGS="-mod=mod" GOOS=windows GOARCH=amd64 \
-    go build -trimpath -ldflags "-H=windowsgui" \
+GOFLAGS="-mod=mod -trimpath" GOOS=windows GOARCH=amd64 \
+    go build -trimpath -ldflags "-s -w -buildid= -H=windowsgui" -buildvcs=false \
         -o "${OUT_DIR}/${APP_NAME}.exe" .
 
 echo "→ Done: $(pwd)/${OUT_DIR}/${APP_NAME}.exe"

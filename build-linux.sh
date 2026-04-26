@@ -37,9 +37,10 @@ echo "→ Cleaning ${OUT_DIR}"
 rm -rf "${OUT_DIR}"
 mkdir -p "${OUT_DIR}/icons/256x256"
 
-echo "→ Building Go binary"
-GOFLAGS="-mod=mod" GOOS=linux GOARCH=amd64 \
-    go build -trimpath -o "${OUT_DIR}/${APP_NAME}" .
+echo "→ Building Go binary (stripped, paths trimmed)"
+GOFLAGS="-mod=mod -trimpath" GOOS=linux GOARCH=amd64 \
+    go build -trimpath -ldflags "-s -w -buildid=" -buildvcs=false \
+        -o "${OUT_DIR}/${APP_NAME}" .
 
 echo "→ Copying icon"
 if [ -f appicon.png ]; then
