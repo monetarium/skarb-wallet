@@ -3,8 +3,8 @@ package wallet
 import (
 	"context"
 
-	"github.com/monetarium/monetarium-cryptopower/libwallet/internal/loader"
-	"github.com/monetarium/monetarium-cryptopower/libwallet/utils"
+	"github.com/monetarium/skarb-wallet/libwallet/internal/loader"
+	"github.com/monetarium/skarb-wallet/libwallet/utils"
 )
 
 // Asset defines the interface each wallet must satisfy.

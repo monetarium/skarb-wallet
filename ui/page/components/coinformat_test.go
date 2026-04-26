@@ -5,9 +5,9 @@ import (
 	"testing"
 
 	"gioui.org/op"
-	"github.com/monetarium/monetarium-cryptopower/ui/assets"
-	"github.com/monetarium/monetarium-cryptopower/ui/cryptomaterial"
-	"github.com/monetarium/monetarium-cryptopower/ui/load"
+	"github.com/monetarium/skarb-wallet/ui/assets"
+	"github.com/monetarium/skarb-wallet/ui/cryptomaterial"
+	"github.com/monetarium/skarb-wallet/ui/load"
 )
 
 // TestFormatBalance currently only tests for panics.

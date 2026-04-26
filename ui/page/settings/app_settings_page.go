@@ -14,17 +14,17 @@ import (
 	"gioui.org/text"
 	"gioui.org/widget"
 
-	"github.com/monetarium/monetarium-cryptopower/app"
-	sharedW "github.com/monetarium/monetarium-cryptopower/libwallet/assets/wallet"
-	libutils "github.com/monetarium/monetarium-cryptopower/libwallet/utils"
-	"github.com/monetarium/monetarium-cryptopower/logger"
-	"github.com/monetarium/monetarium-cryptopower/ui/cryptomaterial"
-	"github.com/monetarium/monetarium-cryptopower/ui/load"
-	"github.com/monetarium/monetarium-cryptopower/ui/modal"
-	"github.com/monetarium/monetarium-cryptopower/ui/page/components"
-	"github.com/monetarium/monetarium-cryptopower/ui/preference"
-	"github.com/monetarium/monetarium-cryptopower/ui/utils"
-	"github.com/monetarium/monetarium-cryptopower/ui/values"
+	"github.com/monetarium/skarb-wallet/app"
+	sharedW "github.com/monetarium/skarb-wallet/libwallet/assets/wallet"
+	libutils "github.com/monetarium/skarb-wallet/libwallet/utils"
+	"github.com/monetarium/skarb-wallet/logger"
+	"github.com/monetarium/skarb-wallet/ui/cryptomaterial"
+	"github.com/monetarium/skarb-wallet/ui/load"
+	"github.com/monetarium/skarb-wallet/ui/modal"
+	"github.com/monetarium/skarb-wallet/ui/page/components"
+	"github.com/monetarium/skarb-wallet/ui/preference"
+	"github.com/monetarium/skarb-wallet/ui/utils"
+	"github.com/monetarium/skarb-wallet/ui/values"
 )
 
 const AppSettingsPageID = "Settings"
@@ -202,10 +202,12 @@ func (pg *AppSettingsPage) pageHeaderLayout(gtx C) layout.Dimensions {
 }
 
 func (pg *AppSettingsPage) pageContentLayout(gtx C) D {
+	// Skarb v1: only the sections that map to actually-implemented features.
+	// networkSettings() (FX rates / DEX / governance / VSP toggles) and
+	// dexSettings() are DCRDEX-specific and intentionally hidden — bring them
+	// back when those features are reintroduced.
 	pageContent := []func(gtx C) D{
 		pg.general(),
-		pg.networkSettings(),
-		pg.dexSettings(),
 		pg.security(),
 		pg.info(),
 		pg.debug(),

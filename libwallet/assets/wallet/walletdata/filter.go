@@ -3,8 +3,8 @@ package walletdata
 import (
 	"github.com/asdine/storm"
 	"github.com/asdine/storm/q"
-	"github.com/monetarium/monetarium-cryptopower/libwallet/txhelper"
-	"github.com/monetarium/monetarium-cryptopower/libwallet/utils"
+	"github.com/monetarium/skarb-wallet/libwallet/txhelper"
+	"github.com/monetarium/skarb-wallet/libwallet/utils"
 )
 
 func (db *DB) prepareTxQuery(txFilter, _ /*requiredConfirmations*/, bestBlock int32) (query storm.Query) {

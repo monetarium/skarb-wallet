@@ -1,20 +1,20 @@
 #!/usr/bin/env bash
-# Build a macOS .app bundle for Monetarium Wallet (universal: arm64 + amd64)
-# and wrap it into a DMG for distribution.
+# Build a macOS .app bundle for Skarb (Monetarium chain wallet).
+# Universal: arm64 + amd64. Wrapped into a DMG for distribution.
 #
 # Outputs:
-#   ./Monetarium.app    — drop into /Applications and double-click
-#   ./Monetarium.dmg    — disk image to send/host (preserves bundle attrs)
+#   ./Skarb.app    — drop into /Applications and double-click
+#   ./Skarb.dmg    — disk image to send/host (preserves bundle attrs)
 #
-# RECIPIENT INSTRUCTIONS (after they download Monetarium.dmg):
+# RECIPIENT INSTRUCTIONS (after they download Skarb.dmg):
 #   1. Double-click the .dmg → Finder window opens.
-#   2. Drag Monetarium.app into the /Applications shortcut shown.
+#   2. Drag Skarb.app into the /Applications shortcut shown.
 #   3. First launch: macOS may say "cannot be opened because the developer
-#      cannot be verified." Right-click Monetarium.app → Open → click "Open"
+#      cannot be verified." Right-click Skarb.app → Open → click "Open"
 #      in the dialog. From then on it launches normally.
 #
-#   If macOS says "Monetarium.app is damaged and can't be opened" then run:
-#       xattr -cr /Applications/Monetarium.app
+#   If macOS says "Skarb.app is damaged and can't be opened" then run:
+#       xattr -cr /Applications/Skarb.app
 #   That removes the com.apple.quarantine attribute the browser added.
 #
 # (The bundle is unsigned by an Apple Developer ID — that costs $99/year and
@@ -24,8 +24,8 @@ set -euo pipefail
 
 cd "$(dirname "$0")"
 
-APP_NAME="Monetarium"
-BUNDLE_ID="io.monetarium.wallet"
+APP_NAME="Skarb"
+BUNDLE_ID="io.monetarium.skarb"
 APP_DIR="${APP_NAME}.app"
 DMG_FILE="${APP_NAME}.dmg"
 VERSION_LONG="0.1.0"
@@ -141,6 +141,6 @@ echo "✅ Done."
 echo "   .app bundle: $(pwd)/${APP_DIR}"
 echo "   .dmg image:  $(pwd)/${DMG_FILE}  ← send THIS to people"
 echo
-echo "Recipient: open the DMG, drag Monetarium.app to /Applications,"
+echo "Recipient: open the DMG, drag Skarb.app to /Applications,"
 echo "then right-click → Open the first time. If macOS says 'damaged',"
-echo "they run:  xattr -cr /Applications/Monetarium.app"
+echo "they run:  xattr -cr /Applications/Skarb.app"

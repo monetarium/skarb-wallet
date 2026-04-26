@@ -29,9 +29,9 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 OUT_DIR="dist/linux-amd64"
-APP_NAME="monetarium"
-DISPLAY_NAME="Monetarium Wallet"
-BUNDLE_ID="io.monetarium.wallet"
+APP_NAME="skarb"
+DISPLAY_NAME="Skarb Wallet"
+BUNDLE_ID="io.monetarium.skarb"
 
 echo "→ Cleaning ${OUT_DIR}"
 rm -rf "${OUT_DIR}"

@@ -3,7 +3,7 @@ package values
 import (
 	"image/color"
 
-	"github.com/monetarium/monetarium-cryptopower/libwallet/utils"
+	"github.com/monetarium/skarb-wallet/libwallet/utils"
 )
 
 const (

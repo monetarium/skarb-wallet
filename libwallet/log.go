@@ -10,8 +10,8 @@ import (
 
 	"github.com/decred/slog"
 	"github.com/jrick/logrotate/rotator"
-	"github.com/monetarium/monetarium-cryptopower/libwallet/internal/loader"
-	"github.com/monetarium/monetarium-cryptopower/libwallet/utils"
+	"github.com/monetarium/skarb-wallet/libwallet/internal/loader"
+	"github.com/monetarium/skarb-wallet/libwallet/utils"
 	"github.com/monetarium/monetarium-wallet/errors"
 )
 

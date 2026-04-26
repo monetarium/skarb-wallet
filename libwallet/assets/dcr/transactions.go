@@ -6,9 +6,9 @@ import (
 
 	"github.com/asdine/storm"
 	"github.com/asdine/storm/q"
-	sharedW "github.com/monetarium/monetarium-cryptopower/libwallet/assets/wallet"
-	"github.com/monetarium/monetarium-cryptopower/libwallet/txhelper"
-	"github.com/monetarium/monetarium-cryptopower/libwallet/utils"
+	sharedW "github.com/monetarium/skarb-wallet/libwallet/assets/wallet"
+	"github.com/monetarium/skarb-wallet/libwallet/txhelper"
+	"github.com/monetarium/skarb-wallet/libwallet/utils"
 	"github.com/monetarium/monetarium-node/chaincfg/chainhash"
 )
 

@@ -6,7 +6,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/monetarium/monetarium-cryptopower/ui/values/localizable"
+	"github.com/monetarium/skarb-wallet/ui/values/localizable"
 )
 
 const (

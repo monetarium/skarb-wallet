@@ -1,4 +1,4 @@
-module github.com/monetarium/monetarium-cryptopower
+module github.com/monetarium/skarb-wallet
 
 go 1.25.0
 

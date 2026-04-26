@@ -11,20 +11,20 @@ import (
 
 	"github.com/asdine/storm"
 	"github.com/asdine/storm/q"
-	"github.com/monetarium/monetarium-cryptopower/appos"
-	"github.com/monetarium/monetarium-cryptopower/libwallet/utils"
-	libutils "github.com/monetarium/monetarium-cryptopower/libwallet/utils"
-	"github.com/monetarium/monetarium-cryptopower/ui/notification"
+	"github.com/monetarium/skarb-wallet/appos"
+	"github.com/monetarium/skarb-wallet/libwallet/utils"
+	libutils "github.com/monetarium/skarb-wallet/libwallet/utils"
+	"github.com/monetarium/skarb-wallet/ui/notification"
 	"github.com/monetarium/monetarium-wallet/errors"
 	bolt "go.etcd.io/bbolt"
 
-	"github.com/monetarium/monetarium-cryptopower/libwallet/assets/dcr"
-	"github.com/monetarium/monetarium-cryptopower/libwallet/assets/wallet"
-	sharedW "github.com/monetarium/monetarium-cryptopower/libwallet/assets/wallet"
+	"github.com/monetarium/skarb-wallet/libwallet/assets/dcr"
+	"github.com/monetarium/skarb-wallet/libwallet/assets/wallet"
+	sharedW "github.com/monetarium/skarb-wallet/libwallet/assets/wallet"
 )
 
 // LogFilename is the main app log filename.
-const LogFilename = "monetarium.log"
+const LogFilename = "skarb.log"
 
 // assetIdentifier is used to listen for balance changes of all wallets.
 const assetIdentifier = "assets_manager"

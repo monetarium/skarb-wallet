@@ -13,8 +13,8 @@ import (
 	"github.com/monetarium/monetarium-wallet/p2p"
 	"github.com/monetarium/monetarium-wallet/spv"
 	w "github.com/monetarium/monetarium-wallet/wallet"
-	sharedW "github.com/monetarium/monetarium-cryptopower/libwallet/assets/wallet"
-	"github.com/monetarium/monetarium-cryptopower/libwallet/utils"
+	sharedW "github.com/monetarium/skarb-wallet/libwallet/assets/wallet"
+	"github.com/monetarium/skarb-wallet/libwallet/utils"
 	"github.com/monetarium/monetarium-node/addrmgr"
 )
 

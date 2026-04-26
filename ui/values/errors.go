@@ -4,7 +4,7 @@ import (
 	"errors"
 	"strings"
 
-	"github.com/monetarium/monetarium-cryptopower/libwallet/utils"
+	"github.com/monetarium/skarb-wallet/libwallet/utils"
 )
 
 // This files holds implementation to translate errors into user friendly messages.

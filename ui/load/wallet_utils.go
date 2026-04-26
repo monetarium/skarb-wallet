@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"strconv"
 
-	"github.com/monetarium/monetarium-cryptopower/libwallet/assets/dcr"
-	sharedW "github.com/monetarium/monetarium-cryptopower/libwallet/assets/wallet"
+	"github.com/monetarium/skarb-wallet/libwallet/assets/dcr"
+	sharedW "github.com/monetarium/skarb-wallet/libwallet/assets/wallet"
 )
 
 func MixedAccountNumber(w sharedW.Asset) int32 {

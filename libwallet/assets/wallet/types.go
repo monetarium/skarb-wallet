@@ -4,8 +4,8 @@ import (
 	"time"
 
 	"github.com/asdine/storm"
-	"github.com/monetarium/monetarium-cryptopower/libwallet/assets/wallet/wordlist"
-	"github.com/monetarium/monetarium-cryptopower/libwallet/utils"
+	"github.com/monetarium/skarb-wallet/libwallet/assets/wallet/wordlist"
+	"github.com/monetarium/skarb-wallet/libwallet/utils"
 	"github.com/monetarium/monetarium-node/dcrutil"
 	"github.com/monetarium/monetarium-node/hdkeychain"
 )

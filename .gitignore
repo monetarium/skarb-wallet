@@ -2,8 +2,9 @@ monetarium-cryptopower
 
 # Phase-1 stash of files we replaced with stubs
 .phase1-stubs-replaced/
-Monetarium.app/
+Skarb.app/
 dist/
 .DS_Store
 Thumbs.db
 *.swp
+Skarb.dmg

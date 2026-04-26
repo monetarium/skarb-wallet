@@ -7,7 +7,7 @@ import (
 	"gioui.org/layout"
 	"gioui.org/text"
 
-	"github.com/monetarium/monetarium-cryptopower/ui/values"
+	"github.com/monetarium/skarb-wallet/ui/values"
 )
 
 type SegmentType int

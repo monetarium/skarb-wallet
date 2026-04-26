@@ -8,8 +8,8 @@
 package libwallet
 
 import (
-	sharedW "github.com/monetarium/monetarium-cryptopower/libwallet/assets/wallet"
-	"github.com/monetarium/monetarium-cryptopower/libwallet/utils"
+	sharedW "github.com/monetarium/skarb-wallet/libwallet/assets/wallet"
+	"github.com/monetarium/skarb-wallet/libwallet/utils"
 )
 
 // rateSourceStub satisfies the surface area that the UI calls on the original

@@ -13,7 +13,7 @@ import (
 	"github.com/monetarium/monetarium-wallet/errors"
 	"github.com/monetarium/monetarium-wallet/walletseed"
 	"github.com/asdine/storm"
-	"github.com/monetarium/monetarium-cryptopower/libwallet/utils"
+	"github.com/monetarium/skarb-wallet/libwallet/utils"
 	dcrhdkeychain "github.com/monetarium/monetarium-node/hdkeychain"
 	"github.com/kevinburke/nacl"
 	"github.com/kevinburke/nacl/secretbox"

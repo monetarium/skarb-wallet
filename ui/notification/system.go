@@ -3,8 +3,8 @@ package notification
 import (
 	"path/filepath"
 
-	"github.com/monetarium/monetarium-cryptopower/ui/utils"
-	"github.com/monetarium/monetarium-cryptopower/ui/values"
+	"github.com/monetarium/skarb-wallet/ui/utils"
+	"github.com/monetarium/skarb-wallet/ui/values"
 	"github.com/gen2brain/beeep"
 )
 

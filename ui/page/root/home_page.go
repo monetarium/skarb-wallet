@@ -18,12 +18,12 @@ import (
 	"gioui.org/text"
 	"gioui.org/unit"
 
-	"github.com/monetarium/monetarium-cryptopower/app"
-	sharedW "github.com/monetarium/monetarium-cryptopower/libwallet/assets/wallet"
-	"github.com/monetarium/monetarium-cryptopower/ui/cryptomaterial"
-	"github.com/monetarium/monetarium-cryptopower/ui/load"
-	"github.com/monetarium/monetarium-cryptopower/ui/page/settings"
-	walletpage "github.com/monetarium/monetarium-cryptopower/ui/page/wallet"
+	"github.com/monetarium/skarb-wallet/app"
+	sharedW "github.com/monetarium/skarb-wallet/libwallet/assets/wallet"
+	"github.com/monetarium/skarb-wallet/ui/cryptomaterial"
+	"github.com/monetarium/skarb-wallet/ui/load"
+	"github.com/monetarium/skarb-wallet/ui/page/settings"
+	walletpage "github.com/monetarium/skarb-wallet/ui/page/wallet"
 )
 
 // HomePageID is the unique ID of the home page.
@@ -160,7 +160,7 @@ func (hp *HomePage) layoutSidebar(gtx layout.Context) layout.Dimensions {
 		Orientation: layout.Vertical,
 	}.Layout(gtx,
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-			t := hp.Theme.H6("Monetarium")
+			t := hp.Theme.H6("Skarb")
 			t.Font.Weight = font.Bold
 			return t.Layout(gtx)
 		}),

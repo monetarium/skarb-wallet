@@ -8,7 +8,7 @@ import (
 	"gioui.org/unit"
 	"gioui.org/widget"
 
-	"github.com/monetarium/monetarium-cryptopower/ui/cryptomaterial"
+	"github.com/monetarium/skarb-wallet/ui/cryptomaterial"
 )
 
 type cellAlign int

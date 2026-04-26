@@ -5,7 +5,7 @@ import (
 	"time"
 
 	"github.com/monetarium/monetarium-wallet/spv"
-	sharedW "github.com/monetarium/monetarium-cryptopower/libwallet/assets/wallet"
+	sharedW "github.com/monetarium/skarb-wallet/libwallet/assets/wallet"
 	"golang.org/x/sync/errgroup"
 )
 

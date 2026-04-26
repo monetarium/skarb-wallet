@@ -6,7 +6,7 @@
 package dcr
 
 import (
-	"github.com/monetarium/monetarium-cryptopower/libwallet/internal/loader"
+	"github.com/monetarium/skarb-wallet/libwallet/internal/loader"
 	"github.com/decred/slog"
 )
 

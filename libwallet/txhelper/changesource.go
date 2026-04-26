@@ -1,7 +1,7 @@
 package txhelper
 
 import (
-	"github.com/monetarium/monetarium-cryptopower/libwallet/addresshelper"
+	"github.com/monetarium/skarb-wallet/libwallet/addresshelper"
 	"github.com/monetarium/monetarium-node/dcrutil"
 )
 

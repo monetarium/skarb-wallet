@@ -8,10 +8,10 @@ import (
 
 	dcrW "github.com/monetarium/monetarium-wallet/wallet"
 	"github.com/monetarium/monetarium-wallet/wallet/txrules"
-	sharedW "github.com/monetarium/monetarium-cryptopower/libwallet/assets/wallet"
-	"github.com/monetarium/monetarium-cryptopower/libwallet/internal/loader"
-	"github.com/monetarium/monetarium-cryptopower/libwallet/internal/loader/dcr"
-	"github.com/monetarium/monetarium-cryptopower/libwallet/utils"
+	sharedW "github.com/monetarium/skarb-wallet/libwallet/assets/wallet"
+	"github.com/monetarium/skarb-wallet/libwallet/internal/loader"
+	"github.com/monetarium/skarb-wallet/libwallet/internal/loader/dcr"
+	"github.com/monetarium/skarb-wallet/libwallet/utils"
 	"github.com/monetarium/monetarium-node/chaincfg"
 )
 
