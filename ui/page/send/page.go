@@ -2,6 +2,7 @@ package send
 
 import (
 	"fmt"
+	"math/big"
 	"strings"
 
 	"gioui.org/io/event"
@@ -442,6 +443,42 @@ func (pg *Page) constructTx() {
 
 		usdAmount := utils.CryptoToUSD(pg.exchangeRate, wal.ToAmount(totalAmount).ToCoin())
 		pg.sendAmountUSD = utils.FormatAsUSDString(pg.Printer, usdAmount)
+	}
+
+	pg.checkAssetCoverage(sourceAccount, totalAmount, feeAtom)
+}
+
+// checkAssetCoverage validates that the selected CoinType has enough balance to
+// cover (amount + fee) on the source account. Monetarium pays the fee in the
+// SAME asset as the transfer, so a SKA-1 transfer with no SKA-1 in the wallet
+// fails even when the user has plenty of VAR.
+func (pg *Page) checkAssetCoverage(sourceAccount *sharedW.Account, totalAmount, feeAtom int64) {
+	dcrAsset, ok := pg.selectedWallet.(*dcr.Asset)
+	if !ok || pg.coinTypeDropdown == nil {
+		return
+	}
+	ct := pg.coinTypeDropdown.Selected()
+	if ct.IsVAR() {
+		// Existing account.Balance.Spendable already reflects VAR; the form's
+		// per-recipient amount validation handles the over-spend case.
+		return
+	}
+	bal, err := dcrAsset.GetCoinBalance(sourceAccount.Number, ct)
+	if err != nil {
+		log.Errorf("checkAssetCoverage: GetCoinBalance(%s): %v", ct, err)
+		return
+	}
+	// SKA balances live in big.Int; fee + amount fit in int64 atoms space at
+	// the wire level for sane transactions, so the comparison is well-defined.
+	required := totalAmount + feeAtom
+	available := bal.SKASpendable.BigInt()
+	if available == nil {
+		available = new(big.Int)
+	}
+	if available.Cmp(big.NewInt(required)) < 0 {
+		msg := fmt.Sprintf("not enough %s to cover amount + fee (have %s atoms, need %d atoms)",
+			ct, available.String(), required)
+		pg.setRecipientsAmountErr(fmt.Errorf("%s", msg))
 	}
 }
 

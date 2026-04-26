@@ -16,6 +16,7 @@ package main
 
 import (
 	"fmt"
+	"math/big"
 	"os"
 	"path/filepath"
 	"strings"
@@ -24,6 +25,9 @@ import (
 	"github.com/monetarium/monetarium-cryptopower/libwallet/assets/dcr"
 	sharedW "github.com/monetarium/monetarium-cryptopower/libwallet/assets/wallet"
 	"github.com/monetarium/monetarium-cryptopower/libwallet/utils"
+	"github.com/monetarium/monetarium-node/cointype"
+	"github.com/monetarium/monetarium-node/dcrutil"
+	dcrW "github.com/monetarium/monetarium-wallet/wallet"
 )
 
 func main() {
@@ -130,6 +134,25 @@ func main() {
 		bal := walletBalances[ct]
 		fmt.Printf("    %s — %s\n", ct, dcr.FormatCoinAmount(bal))
 	}
+
+	// --- Decimal formatter ------------------------------------------------
+	fmt.Println("→ FormatCoinAmount sanity checks:")
+	checkFormat := func(label, want, got string) {
+		if want != got {
+			die("%s: want %q, got %q", label, want, got)
+		}
+		fmt.Printf("    %s -> %q\n", label, got)
+	}
+	// VAR formatter goes through dcrutil.Amount.String() ("1.5 VAR" for 1.5e8 atoms).
+	varBal := dcrW.CoinBalance{CoinType: cointype.CoinTypeVAR, Total: dcrutil.Amount(150000000)}
+	checkFormat("VAR  1.5e8 atoms", "1.5 VAR", dcr.FormatCoinAmount(varBal))
+	// SKA formatter divides by 1e18 and appends the coin label.
+	oneAndAHalfSKA := new(big.Int).Mul(big.NewInt(15), new(big.Int).Exp(big.NewInt(10), big.NewInt(17), nil))
+	skaBal := dcrW.CoinBalance{CoinType: cointype.CoinType(1), SKATotal: cointype.NewSKAAmount(oneAndAHalfSKA)}
+	checkFormat("SKA-1 1.5e18 atoms", "1.5 SKA-1", dcr.FormatCoinAmount(skaBal))
+	// 1 atom should render as the smallest expressible fraction.
+	dustBal := dcrW.CoinBalance{CoinType: cointype.CoinType(1), SKATotal: cointype.SKAAmountFromInt64(1)}
+	checkFormat("SKA-1 1 atom", "0.000000000000000001 SKA-1", dcr.FormatCoinAmount(dustBal))
 
 	// --- Tx authoring with CoinType ---------------------------------------
 	fmt.Println("→ NewUnsignedTx + SetTxCoinType round-trip:")

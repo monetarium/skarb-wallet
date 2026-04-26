@@ -202,7 +202,16 @@ func (asset *Asset) EstimateFeeAndSize() (*sharedW.TxFeeAndSize, error) {
 		return nil, utils.TranslateError(err)
 	}
 
-	feeToSendTx := txrules.FeeForSerializeSize(txrules.DefaultRelayFeePerKb, unsignedTx.EstimatedSignedSerializeSize)
+	// Fee in Monetarium is paid in the SAME coin type as the transfer (not
+	// always VAR). FeeForSerializeSizeDualCoin returns a dcrutil.Amount-shaped
+	// fee for both VAR and SKA; the caller must format the value with the
+	// right atoms-per-coin scaling for display.
+	txCoinType := asset.TxCoinType()
+	feeToSendTx := txrules.FeeForSerializeSizeDualCoin(
+		txrules.DefaultRelayFeePerKb,
+		unsignedTx.EstimatedSignedSerializeSize,
+		txCoinType,
+	)
 	feeAmount := &sharedW.Amount{
 		UnitValue: int64(feeToSendTx),
 		CoinValue: feeToSendTx.ToCoin(),

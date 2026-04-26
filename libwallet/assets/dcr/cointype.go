@@ -95,19 +95,29 @@ func (asset *Asset) GetWalletCoinBalances() (map[cointype.CoinType]dcrW.CoinBala
 	return totals, nil
 }
 
-// FormatCoinAmount renders a CoinBalance.Total / .Spendable / etc. value as a
-// human-readable decimal string with the right number of decimal places for
-// the given coin type. Uses int64 atoms for VAR (1e8 atoms/coin) and *big.Int
-// SKA atoms (1e18 atoms/coin) for SKA coins.
+// FormatCoinAmount renders a CoinBalance.Total value as a human-readable
+// decimal string with the right number of decimal places for the given coin
+// type. Uses int64 atoms for VAR (1e8 atoms/coin) and *big.Int SKA atoms
+// (1e18 atoms/coin by default) for SKA coins.
 //
 // Use this everywhere balances are shown to users — never divide manually,
 // the VAR (1e8) vs SKA (1e18) magnitude difference is too easy to mix up.
+//
+// Example outputs:
+//
+//	VAR  total=150000000  -> "1.5 VAR"
+//	SKA-1 total=1500000000000000000 -> "1.5 SKA-1"
+//	SKA-1 total=1                   -> "0.000000000000000001 SKA-1"
 func FormatCoinAmount(bal dcrW.CoinBalance) string {
 	if bal.CoinType.IsVAR() {
 		return dcrutil.Amount(bal.Total).String()
 	}
-	// SKA: use the *big.Int SKATotal field. Format with 18 decimals.
-	return bal.SKATotal.String()
+	// SKA: render the *big.Int SKATotal with the SKA-default 1e18 divisor.
+	// Per-coin AtomsPerCoin overrides live in chaincfg.SKACoinConfig but are
+	// 1e18 for every active SKA today; switch to a Params-driven lookup when
+	// that changes.
+	atomsStr := bal.SKATotal.ToDecimalString(cointype.AtomsPerSKACoin)
+	return atomsStr + " " + bal.CoinType.String()
 }
 
 // IsCoinTypeActive reports whether the given coin type is active on the
