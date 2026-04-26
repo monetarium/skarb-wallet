@@ -50,7 +50,9 @@ type AssetsManager struct {
 	cancelFuncs  []context.CancelFunc
 	chainsParams utils.ChainsParams
 
-	rateMutex sync.Mutex
+	rateMutex  sync.Mutex
+	RateSource rateSourceStub // Phase-1 stub; FX rate fetching removed.
+	Politeia   politeiaStub   // Phase-1 stub; governance removed.
 
 	toast *notification.Toast
 

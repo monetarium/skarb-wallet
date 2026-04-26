@@ -455,22 +455,6 @@ func (pg *CreateWallet) handleEditorEvents(gtx C) {
 				} else {
 					err = errors.New(values.String(values.StrXpubWalletExist))
 				}
-			case libutils.BTCWalletAsset.ToStringLower():
-				var walletWithXPub int
-				walletWithXPub, err = pg.AssetsManager.BTCWalletWithXPub(pg.watchOnlyWalletHex.Editor.Text())
-				if walletWithXPub == -1 {
-					newWallet, err = pg.AssetsManager.CreateNewBTCWatchOnlyWallet(pg.walletName.Editor.Text(), pg.watchOnlyWalletHex.Editor.Text())
-				} else {
-					err = errors.New(values.String(values.StrXpubWalletExist))
-				}
-			case libutils.LTCWalletAsset.ToStringLower():
-				var walletWithXPub int
-				walletWithXPub, err = pg.AssetsManager.LTCWalletWithXPub(pg.watchOnlyWalletHex.Editor.Text())
-				if walletWithXPub == -1 {
-					newWallet, err = pg.AssetsManager.CreateNewLTCWatchOnlyWallet(pg.walletName.Editor.Text(), pg.watchOnlyWalletHex.Editor.Text())
-				} else {
-					err = errors.New(values.String(values.StrXpubWalletExist))
-				}
 			}
 
 			if err != nil {
@@ -511,31 +495,6 @@ func (pg *CreateWallet) createWallet() {
 			return
 		}
 
-	case libutils.BTCWalletAsset.ToStringLower():
-		newWallet, err = pg.AssetsManager.CreateNewBTCWallet(walletName, pass, sharedW.PassphraseTypePass, seedType)
-		if err != nil {
-			if err.Error() == libutils.ErrExist {
-				pg.walletName.SetError(values.StringF(values.StrWalletExist, walletName))
-				return
-			}
-
-			errModal := modal.NewErrorModal(pg.Load, err.Error(), modal.DefaultClickFunc())
-			pg.ParentWindow().ShowModal(errModal)
-			return
-		}
-
-	case libutils.LTCWalletAsset.ToStringLower():
-		newWallet, err = pg.AssetsManager.CreateNewLTCWallet(walletName, pass, sharedW.PassphraseTypePass, seedType)
-		if err != nil {
-			if err.Error() == libutils.ErrExist {
-				pg.walletName.SetError(values.StringF(values.StrWalletExist, walletName))
-				return
-			}
-
-			errModal := modal.NewErrorModal(pg.Load, err.Error(), modal.DefaultClickFunc())
-			pg.ParentWindow().ShowModal(errModal)
-			return
-		}
 	}
 
 	pg.walletCreationSuccessCallback(newWallet)

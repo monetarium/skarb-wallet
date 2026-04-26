@@ -69,7 +69,7 @@ func main() {
 			_ = logger.SetLogLevels(cfg.DebugLevel)
 		}
 
-		assetsManager, err := libwallet.NewAssetsManager(cfg.HomeDir, logDir, netType, cfg.DEXTestAddr)
+		assetsManager, err := libwallet.NewAssetsManager(cfg.HomeDir, logDir, netType)
 		if err != nil {
 			return nil, err
 		}

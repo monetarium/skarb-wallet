@@ -470,7 +470,7 @@ func (pg *SettingsPage) changeSpendingPasswordModal() {
 					if err != nil {
 						log.Errorf("AssetsManager.DexClient.WalletIDForAsset error: %w", err)
 					}
-					if walletID != nil && pg.wallet.GetWalletID() == *walletID {
+					if walletID != nil && uint32(pg.wallet.GetWalletID()) == *walletID {
 						// We need to update the password in dex, and we need
 						// the dex password to do so.
 						dexPasswordModal = dexPasswordModal.SetDescription(values.StringF(values.StrUpdateDEXWalletPasswordReason, assetType.ToFull(), pg.wallet.GetWalletName()))

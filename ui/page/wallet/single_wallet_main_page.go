@@ -22,11 +22,9 @@ import (
 	"github.com/monetarium/monetarium-cryptopower/ui/page/accounts"
 	"github.com/monetarium/monetarium-cryptopower/ui/page/components"
 	"github.com/monetarium/monetarium-cryptopower/ui/page/info"
-	"github.com/monetarium/monetarium-cryptopower/ui/page/privacy"
 	"github.com/monetarium/monetarium-cryptopower/ui/page/receive"
 	"github.com/monetarium/monetarium-cryptopower/ui/page/seedbackup"
 	"github.com/monetarium/monetarium-cryptopower/ui/page/send"
-	"github.com/monetarium/monetarium-cryptopower/ui/page/staking"
 	"github.com/monetarium/monetarium-cryptopower/ui/page/transaction"
 	"github.com/monetarium/monetarium-cryptopower/ui/utils"
 	"github.com/monetarium/monetarium-cryptopower/ui/values"
@@ -50,8 +48,6 @@ var PageNavigationMap = map[string]string{
 	values.StrReceive:      receive.ReceivePageID,
 	values.StrTransactions: transaction.TransactionsPageID,
 	values.StrSettings:     WalletSettingsPageID,
-	values.StrPrivacy:      privacy.AccountMixerPageID,
-	values.StrStaking:      staking.OverviewPageID,
 }
 
 // SingleWalletMasterPage is a master page for interacting with a single wallet.
@@ -418,22 +414,6 @@ func (swmp *SingleWalletMasterPage) navigateToSelectedTab() {
 		txPage := transaction.NewTransactionsPage(swmp.Load, swmp.selectedWallet)
 		txPage.DisableUniformTab()
 		pg = txPage
-	case values.StrStakeShuffle:
-		dcrW := swmp.selectedWallet.(*dcr.Asset)
-		if dcrW != nil {
-			if !dcrW.AccountMixerConfigIsSet() {
-				pg = privacy.NewSetupPrivacyPage(swmp.Load, dcrW)
-			} else {
-				pg = privacy.NewAccountMixerPage(swmp.Load, dcrW)
-			}
-		}
-	case values.StrStaking:
-		dcrW := swmp.selectedWallet.(*dcr.Asset)
-		if dcrW == nil {
-			log.Error(values.ErrDCRSupportedOnly)
-		} else {
-			pg = staking.NewStakingPage(swmp.Load, dcrW)
-		}
 	case values.StrAccounts:
 		pg = accounts.NewAccountPage(swmp.Load, swmp.selectedWallet)
 	case values.StrSettings:
@@ -516,9 +496,8 @@ func (swmp *SingleWalletMasterPage) Layout(gtx C) D {
 								return D{}
 							}
 							switch swmp.CurrentPage().ID() {
-							case receive.ReceivePageID, send.SendPageID, staking.OverviewPageID,
-								transaction.TransactionsPageID, privacy.AccountMixerPageID,
-								privacy.SetupPrivacyPageID, accounts.AccountsPageID:
+							case receive.ReceivePageID, send.SendPageID,
+								transaction.TransactionsPageID, accounts.AccountsPageID:
 								// Disable page functionality if a page is not synced or rescanning is in progress.
 								if swmp.selectedWallet.IsSyncing() {
 									syncInfo := components.NewWalletSyncInfo(swmp.Load, swmp.selectedWallet, func() {}, func(_ sharedW.Asset) {})

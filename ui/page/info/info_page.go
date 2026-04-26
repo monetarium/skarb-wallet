@@ -15,8 +15,6 @@ import (
 	"github.com/monetarium/monetarium-cryptopower/ui/cryptomaterial"
 	"github.com/monetarium/monetarium-cryptopower/ui/load"
 	"github.com/monetarium/monetarium-cryptopower/ui/page/components"
-	"github.com/monetarium/monetarium-cryptopower/ui/page/privacy"
-	"github.com/monetarium/monetarium-cryptopower/ui/page/staking"
 	"github.com/monetarium/monetarium-cryptopower/ui/page/transaction"
 	"github.com/monetarium/monetarium-cryptopower/ui/values"
 	"github.com/monetarium/monetarium-node/dcrutil"
@@ -260,17 +258,10 @@ func (pg *WalletInfo) HandleUserInteractions(gtx C) {
 		pg.ParentNavigator().Display(transaction.NewTransactionDetailsPage(pg.Load, pg.wallet, pg.stakes[selectedItem]))
 	}
 
-	// Navigate to mixer page when wallet mixer slider forward button is clicked.
-	if pg.mixerRedirectButton.Button.Clicked(gtx) {
-		pg.ParentNavigator().Display(privacy.NewAccountMixerPage(pg.Load, pg.wallet.(*dcr.Asset)))
-	}
+	// Mixer & staking pages are not part of the v1 Monetarium wallet.
 
 	if pg.viewAllTxButton.Button.Clicked(gtx) {
 		pg.ParentNavigator().Display(transaction.NewTransactionsPage(pg.Load, pg.wallet))
-	}
-
-	if pg.viewAllStakeButton.Button.Clicked(gtx) {
-		pg.ParentNavigator().Display(staking.NewStakingPage(pg.Load, pg.wallet.(*dcr.Asset)))
 	}
 }
 

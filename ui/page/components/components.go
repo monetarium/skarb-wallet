@@ -25,7 +25,6 @@ import (
 	"github.com/monetarium/monetarium-cryptopower/app"
 	"github.com/monetarium/monetarium-cryptopower/libwallet/assets/dcr"
 	sharedW "github.com/monetarium/monetarium-cryptopower/libwallet/assets/wallet"
-	"github.com/monetarium/monetarium-cryptopower/libwallet/instantswap"
 	"github.com/monetarium/monetarium-cryptopower/libwallet/txhelper"
 
 	libutils "github.com/monetarium/monetarium-cryptopower/libwallet/utils"
@@ -657,29 +656,10 @@ func CoinImageBySymbol(l *load.Load, assetType libutils.AssetType, isWatchOnly b
 	return nil
 }
 
-// GetTicketPurchaseAccount returns the validly set ticket purchase account if it exists.
-func GetTicketPurchaseAccount(selectedWallet *dcr.Asset) (acct *sharedW.Account, err error) {
-	tbConfig := selectedWallet.AutoTicketsBuyerConfig()
-
-	isPurchaseAccountSet := tbConfig.PurchaseAccount != -1
-	isMixerAccountSet := tbConfig.PurchaseAccount == selectedWallet.MixedAccountNumber()
-	isSpendUnmixedAllowed := selectedWallet.ReadBoolConfigValueForKey(sharedW.SpendUnmixedFundsKey, false)
-	isAccountMixerConfigSet := selectedWallet.ReadBoolConfigValueForKey(sharedW.AccountMixerConfigSet, false)
-
-	if isPurchaseAccountSet {
-		acct, err = selectedWallet.GetAccount(tbConfig.PurchaseAccount)
-
-		if isAccountMixerConfigSet && !isSpendUnmixedAllowed && isMixerAccountSet && err == nil {
-			// Mixer account is set and spending from unmixed account is blocked.
-			return
-		} else if isSpendUnmixedAllowed && err == nil {
-			// Spending from unmixed account is allowed. Choose the set account whether its mixed or not.
-			return
-		}
-		// invalid account found. Set it to nil
-		acct = nil
-	}
-	return
+// GetTicketPurchaseAccount is a stub. Ticket buying / VSP integration was
+// removed in v1; nothing to look up.
+func GetTicketPurchaseAccount(selectedWallet *dcr.Asset) (*sharedW.Account, error) {
+	return nil, nil
 }
 
 func CalculateMixedAccountBalance(selectedWallet *dcr.Asset) (*CummulativeWalletsBalance, error) {
@@ -890,29 +870,11 @@ func ConditionalFlexedRigidLayout(flexWeight float32, isMobileView bool, content
 	return layout.Flexed(flexWeight, content)
 }
 
-// GetServerIcon returns the icon for the provided server name.
+// GetServerIcon returns a placeholder icon. The instantswap registry was
+// removed in v1; the function is retained for callers that pass server names
+// from persisted state.
 func GetServerIcon(theme *cryptomaterial.Theme, serverName string) *cryptomaterial.Image {
-	switch serverName {
-	case instantswap.Changelly.ToString():
-		return theme.Icons.ChangellyIcon
-	case instantswap.ChangeNow.ToString():
-		return theme.Icons.ChangeNowIcon
-	case instantswap.CoinSwitch.ToString():
-		return theme.Icons.CoinSwitchIcon
-	case instantswap.FlypMe.ToString():
-		return theme.Icons.FlypMeIcon
-	case instantswap.GoDex.ToString():
-		return theme.Icons.GodexIcon
-	case instantswap.SimpleSwap.ToString():
-		return theme.Icons.SimpleSwapIcon
-	case instantswap.SwapZone.ToString():
-		return theme.Icons.SwapzoneIcon
-	case instantswap.Trocador.ToString():
-		return theme.Icons.TrocadorIcon
-
-	default:
-		return theme.Icons.AddExchange
-	}
+	return theme.Icons.AddExchange
 }
 
 // CheckForUpdate checks if a new version of the app is available

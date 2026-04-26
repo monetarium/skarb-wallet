@@ -800,7 +800,7 @@ func (sp *startPage) showRemoveRootDirNotice() {
 			log.Error("unable to remove root dir: %v", err)
 			return false
 		}
-		newmgr, err := libwallet.NewAssetsManager(path.Dir(sp.AssetsManager.RootDir()), sp.AssetsManager.ParamLogDir(), sp.AssetsManager.NetType(), sp.AssetsManager.DEXTestAddr())
+		newmgr, err := libwallet.NewAssetsManager(path.Dir(sp.AssetsManager.RootDir()), sp.AssetsManager.ParamLogDir(), sp.AssetsManager.NetType())
 		if err != nil {
 			log.Errorf("Error create new asset manager: %v", err)
 			return false

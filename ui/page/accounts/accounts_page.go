@@ -285,13 +285,8 @@ func (pg *Page) HandleUserInteractions(gtx C) {
 	}
 
 	if clicked, selectedItem := pg.accountsList.ItemClicked(); clicked {
-		switch pg.wallet.GetAssetType() {
-		case libutils.BTCWalletAsset:
-			pg.ParentNavigator().Display(NewBTCAcctDetailsPage(pg.Load, pg.wallet, pg.accounts[selectedItem]))
-		case libutils.DCRWalletAsset:
+		if pg.wallet.GetAssetType() == libutils.DCRWalletAsset {
 			pg.ParentNavigator().Display(NewDCRAcctDetailsPage(pg.Load, pg.wallet, pg.accounts[selectedItem]))
-		case libutils.LTCWalletAsset:
-			pg.ParentNavigator().Display(NewLTCAcctDetailsPage(pg.Load, pg.wallet, pg.accounts[selectedItem]))
 		}
 	}
 }

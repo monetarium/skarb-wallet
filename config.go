@@ -58,12 +58,8 @@ func validLogLevel(logLevel string) bool {
 // logging purposes.
 func supportedSubsystems() []string {
 	// Convert the subsystemLoggers map keys to a slice.
-	subsystems := make([]string, 0, len(subsystemSLoggers)+len(subsystemBLoggers))
+	subsystems := make([]string, 0, len(subsystemSLoggers))
 	for subsysID := range subsystemSLoggers {
-		subsystems = append(subsystems, subsysID)
-	}
-
-	for subsysID := range subsystemBLoggers {
 		subsystems = append(subsystems, subsysID)
 	}
 

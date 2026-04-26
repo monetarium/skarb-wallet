@@ -7,8 +7,6 @@ import (
 	"gioui.org/io/key"
 	"gioui.org/layout"
 	"gioui.org/widget"
-	"github.com/btcsuite/btcd/btcutil"
-	"github.com/monetarium/monetarium-cryptopower/libwallet/assets/btc"
 	"github.com/monetarium/monetarium-cryptopower/libwallet/assets/dcr"
 	libUtil "github.com/monetarium/monetarium-cryptopower/libwallet/utils"
 	"github.com/monetarium/monetarium-cryptopower/ui/cryptomaterial"
@@ -92,9 +90,6 @@ func (sa *sendAmount) setAmount(amount int64) {
 	// amount input to avoid construct tx cycle.
 	sa.sendMaxChangeEvent = sa.SendMax
 	amountSet := dcrutil.Amount(amount).ToCoin()
-	if sa.assetType == libUtil.BTCWalletAsset {
-		amountSet = btcutil.Amount(amount).ToBTC()
-	}
 	sa.amountEditor.Editor.SetText(fmt.Sprintf("%.8f", amountSet))
 
 	if sa.exchangeRate != -1 {
@@ -125,9 +120,6 @@ func (sa *sendAmount) validAmount() (int64, bool, error) {
 		return -1, sa.SendMax, err
 	}
 
-	if sa.assetType == libUtil.BTCWalletAsset {
-		return btc.AmountSatoshi(amount), sa.SendMax, nil
-	}
 	return dcr.AmountAtom(amount), sa.SendMax, nil
 }
 

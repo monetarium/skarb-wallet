@@ -16,7 +16,6 @@ import (
 
 	"github.com/monetarium/monetarium-cryptopower/app"
 	sharedW "github.com/monetarium/monetarium-cryptopower/libwallet/assets/wallet"
-	"github.com/monetarium/monetarium-cryptopower/libwallet/ext"
 	libutils "github.com/monetarium/monetarium-cryptopower/libwallet/utils"
 	"github.com/monetarium/monetarium-cryptopower/logger"
 	"github.com/monetarium/monetarium-cryptopower/ui/cryptomaterial"
@@ -135,21 +134,9 @@ func (pg *AppSettingsPage) OnNavigatedTo() {
 	pg.ListenForRateWarningMsgChange()
 }
 
-func (pg *AppSettingsPage) ListenForRateWarningMsgChange() {
-	// add rate listener
-	warningMsgListener := &ext.WarningMsgListener{
-		OnWarningMsgUpdated: func(warning string) {
-			if warning != "" {
-				go pg.showAutoChangeRateSourceNotice(warning)
-			}
-		},
-	}
-	if !pg.AssetsManager.RateSource.IsWarningMsgListenerExist(AppSettingsPageID) {
-		if err := pg.AssetsManager.RateSource.AddWarningMsgListener(warningMsgListener, AppSettingsPageID); err != nil {
-			log.Error("Can't listen warning message.")
-		}
-	}
-}
+// ListenForRateWarningMsgChange is a no-op; rate-source warnings were dropped
+// with libwallet/ext in v1. Reinstate when FX rate fetching is rebuilt.
+func (pg *AppSettingsPage) ListenForRateWarningMsgChange() {}
 
 // Show warning about fetch exchange rate setting
 // when exchange is changed due to unable to fetch rate

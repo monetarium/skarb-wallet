@@ -1,14 +1,4 @@
-cryptopower*
-_*
-*.dll
-.vscode
-.DS_Store
-*.coverprofile
-**/.cryptopower_test*
-pkged.go
-Dockerfile
-makefile
+monetarium-cryptopower
 
-vendor
-bin
-libwallet/instantswap/instant.json
+# Phase-1 stash of files we replaced with stubs
+.phase1-stubs-replaced/

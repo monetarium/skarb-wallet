@@ -24,11 +24,9 @@ import (
 	account "github.com/monetarium/monetarium-cryptopower/ui/page/accounts"
 	"github.com/monetarium/monetarium-cryptopower/ui/page/components"
 	"github.com/monetarium/monetarium-cryptopower/ui/page/info"
-	"github.com/monetarium/monetarium-cryptopower/ui/page/privacy"
 	"github.com/monetarium/monetarium-cryptopower/ui/page/receive"
 	"github.com/monetarium/monetarium-cryptopower/ui/page/root"
 	"github.com/monetarium/monetarium-cryptopower/ui/page/send"
-	"github.com/monetarium/monetarium-cryptopower/ui/page/staking"
 	"github.com/monetarium/monetarium-cryptopower/ui/page/transaction"
 	"github.com/monetarium/monetarium-cryptopower/ui/page/wallet"
 
@@ -83,8 +81,6 @@ func init() {
 	components.UseLogger(winLog)
 	transaction.UseLogger(winLog)
 	info.UseLogger(winLog)
-	staking.UseLogger(winLog)
-	privacy.UseLogger(winLog)
 	modal.UseLogger(winLog)
 	addrmgr.UseLogger(dcrLog)
 	connmgr.UseLogger(dcrLog)
