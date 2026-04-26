@@ -24,7 +24,7 @@ import (
 )
 
 // LogFilename is the main app log filename.
-const LogFilename = "cryptopower.log"
+const LogFilename = "monetarium.log"
 
 // assetIdentifier is used to listen for balance changes of all wallets.
 const assetIdentifier = "assets_manager"

@@ -48,6 +48,7 @@ var (
 	// LangOptions stores the configurable language options.
 	LangOptions = []ItemPreference{
 		{Key: localizable.ENGLISH, Value: values.StrEnglish},
+		{Key: localizable.UKRAINIAN, Value: values.StrUkrainian},
 		{Key: localizable.FRENCH, Value: values.StrFrench},
 		{Key: localizable.SPANISH, Value: values.StrSpanish},
 		{Key: localizable.CHINESE, Value: values.StrChinese},

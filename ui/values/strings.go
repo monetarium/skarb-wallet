@@ -16,7 +16,7 @@ const (
 
 var (
 	rex           = regexp.MustCompile(`(?m)("(?:\\.|[^"\\])*")\s*=\s*("(?:\\.|[^"\\])*")`) // "key"="value"
-	Languages     = []string{localizable.ENGLISH, localizable.CHINESE, localizable.FRENCH, localizable.SPANISH}
+	Languages     = []string{localizable.ENGLISH, localizable.UKRAINIAN, localizable.CHINESE, localizable.FRENCH, localizable.SPANISH}
 	UserLanguages = []string{DefaultLanguage} // order of preference
 )
 
@@ -46,6 +46,7 @@ func init() {
 	}
 
 	en := make(map[string]string)
+	uk := make(map[string]string)
 	zh := make(map[string]string)
 	fr := make(map[string]string)
 	es := make(map[string]string)
@@ -53,6 +54,9 @@ func init() {
 
 	readIntoMap(en, localizable.EN)
 	languageStrings[localizable.ENGLISH] = en
+
+	readIntoMap(uk, localizable.UK)
+	languageStrings[localizable.UKRAINIAN] = uk
 
 	readIntoMap(zh, localizable.ZH)
 	languageStrings[localizable.CHINESE] = zh
@@ -1085,6 +1089,7 @@ const (
 	StrInputPassword                         = "inputPassword"
 	StrDatabaseType                          = "databaseType"
 	StrChinese                               = "chinese"
+	StrUkrainian                             = "ukrainian"
 	StrLowStorageSpaceTitle                  = "lowStorageSpaceTitle"
 	StrLowStorageSpaceBody                   = "lowStorageSpaceBody"
 	StrWalletsCreationLimitTitle             = "walletCreationLimitTitle"

@@ -19,8 +19,8 @@ import (
 )
 
 const (
-	defaultConfigFileName = "cryptopower.conf"
-	defaultLogFilename    = "cryptopower.log"
+	defaultConfigFileName = "monetarium.conf"
+	defaultLogFilename    = "monetarium.log"
 	defaultLogDirname     = "logs"
 )
 
@@ -95,7 +95,7 @@ func loadConfig() (*config, error) {
 	}
 
 	// Default config
-	defaultHomeDir := dcrutil.AppDataDir("cryptopower", false)
+	defaultHomeDir := dcrutil.AppDataDir("monetarium", false)
 	if appos.Current().IsMobile() {
 		homeDir, err := app.DataDir()
 		if err != nil {

@@ -23,7 +23,7 @@ const (
 // These constants define the application version and follow the semantic
 // versioning 2.0.0 spec (http://semver.org/).
 const (
-	AppName  string = "cryptopower"
+	AppName  string = "monetarium"
 	AppMajor uint   = 2
 	AppMinor uint   = 1
 	AppPatch uint   = 0
