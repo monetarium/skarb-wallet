@@ -62,9 +62,49 @@ func (hp *HomePage) ID() string { return HomePageID }
 // OnNavigatedTo seeds the sidebar from AssetsManager and pushes Overview.
 func (hp *HomePage) OnNavigatedTo() {
 	hp.refreshWalletList()
+	if hp.Load.ToggleSync == nil {
+		hp.Load.ToggleSync = hp.toggleWalletSync
+	}
 	if hp.CurrentPage() == nil {
 		hp.Display(NewOverviewPage(hp.Load, func() {}))
 	}
+}
+
+// toggleWalletSync is the v1 Monetarium ToggleSync implementation. It runs SPV
+// directly: no internet-connectivity polling, no low-storage modal. The
+// unlock(b) callback flips a UI hint to "syncing"; SPV requires the wallet to
+// either be a watch-only wallet, already discovered, or unlocked beforehand.
+//
+// The full Cryptopower flow (see .phase1-stubs-replaced/home_page.go.orig) had
+// password prompts, low-storage warnings, and connectivity polling — restore
+// those once HomePage owns proper modal scaffolding.
+func (hp *HomePage) toggleWalletSync(wallet sharedW.Asset, unlock load.NeedUnlockRestore) {
+	if wallet == nil {
+		return
+	}
+	if wallet.IsConnectedToNetwork() {
+		wallet.EnableSyncShuttingDown()
+		go wallet.CancelSync()
+		if unlock != nil {
+			unlock(false)
+		}
+		return
+	}
+	if !wallet.ContainsDiscoveredAccounts() && wallet.IsLocked() && !wallet.IsWatchingOnlyWallet() {
+		log.Warn("Wallet is locked — unlock it before starting sync (password modal not yet wired in v1).")
+		if unlock != nil {
+			unlock(false)
+		}
+		return
+	}
+	if unlock != nil {
+		unlock(true)
+	}
+	go func() {
+		if err := wallet.SpvSync(); err != nil {
+			log.Errorf("SpvSync(%s): %v", wallet.GetWalletName(), err)
+		}
+	}()
 }
 
 // OnNavigatedFrom is called when the page is removed from the display.
