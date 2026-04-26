@@ -519,29 +519,36 @@ func (sp *startPage) onBoardingScreensLayout(gtx C) D {
 	return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
 		layout.Rigid(func(gtx C) D {
 			if sp.currentPageIndex < startupSettingsPageIndex {
-				return sp.pageLayout(gtx, func(gtx C) D {
-					sp.nextButton.Inset = layout.UniformInset(values.MarginPadding15)
-					if sp.IsMobileView() {
-						sp.nextButton.Inset = layout.UniformInset(values.MarginPadding12)
-					}
-					return layout.Flex{
-						Alignment: layout.Middle,
-						Axis:      layout.Vertical,
-					}.Layout(gtx,
-						layout.Rigid(func(gtx C) D {
-							return layout.Inset{
-								Bottom: values.MarginPadding30,
-							}.Layout(gtx, sp.introScreenLayout)
-						}),
-						layout.Rigid(func(gtx C) D {
-							gtx.Constraints.Min.X = gtx.Dp(values.MarginPaddingTransform(sp.IsMobileView(), values.MarginPadding420))
-							if !sp.IsMobileView() {
-								return sp.introScreenButtons(gtx)
+				return layout.Stack{}.Layout(gtx,
+					// Body — intro slider with title/illustration/buttons.
+					layout.Expanded(func(gtx C) D {
+						return sp.pageLayout(gtx, func(gtx C) D {
+							sp.nextButton.Inset = layout.UniformInset(values.MarginPadding15)
+							if sp.IsMobileView() {
+								sp.nextButton.Inset = layout.UniformInset(values.MarginPadding12)
 							}
-							return layout.Inset{Top: values.MarginPadding64}.Layout(gtx, sp.introScreenButtons)
-						}),
-					)
-				})
+							return layout.Flex{
+								Alignment: layout.Middle,
+								Axis:      layout.Vertical,
+							}.Layout(gtx,
+								layout.Rigid(func(gtx C) D {
+									return layout.Inset{
+										Bottom: values.MarginPadding30,
+									}.Layout(gtx, sp.introScreenLayout)
+								}),
+								layout.Rigid(func(gtx C) D {
+									gtx.Constraints.Min.X = gtx.Dp(values.MarginPaddingTransform(sp.IsMobileView(), values.MarginPadding420))
+									if !sp.IsMobileView() {
+										return sp.introScreenButtons(gtx)
+									}
+									return layout.Inset{Top: values.MarginPadding64}.Layout(gtx, sp.introScreenButtons)
+								}),
+							)
+						})
+					}),
+					// Top-right language picker, overlaid above the slider.
+					layout.Expanded(sp.languagePickerBar),
+				)
 			}
 			return layout.Stack{}.Layout(gtx,
 				layout.Expanded(func(gtx C) D {
@@ -656,6 +663,28 @@ func (sp *startPage) settingsOptionsLayout(gtx C) D {
 			})
 		}),
 	)
+}
+
+// languagePickerBar renders only the top-right language dropdown — used as an
+// overlay on the intro slider screens which don't render the full header bar.
+func (sp *startPage) languagePickerBar(gtx C) D {
+	return layout.Inset{
+		Top:    values.MarginPadding12,
+		Right:  values.MarginPadding12,
+		Bottom: values.MarginPadding0,
+		Left:   values.MarginPadding12,
+	}.Layout(gtx, func(gtx C) D {
+		return layout.E.Layout(gtx, func(gtx C) D {
+			return layout.Flex{Axis: layout.Horizontal, Alignment: layout.Middle}.Layout(gtx,
+				layout.Rigid(func(gtx C) D {
+					lbl := sp.Theme.Label(values.TextSize16, values.String(values.StrLanguage))
+					lbl.Font.Weight = font.Bold
+					return layout.Inset{Right: values.MarginPadding8}.Layout(gtx, lbl.Layout)
+				}),
+				layout.Rigid(sp.languageDropdown.Layout),
+			)
+		})
+	})
 }
 
 func (sp *startPage) pageHeaderLayout(gtx C, headerText string, hideHeaderText bool) D {
