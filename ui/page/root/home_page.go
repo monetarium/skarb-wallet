@@ -43,7 +43,7 @@ type HomePage struct {
 
 type walletEntry struct {
 	wallet sharedW.Asset
-	click  cryptomaterial.Clickable
+	click  *cryptomaterial.Clickable
 }
 
 // NewHomePage returns a fresh home page.
@@ -79,9 +79,8 @@ func (hp *HomePage) HandleUserInteractions(gtx layout.Context) {
 	if hp.overviewBtn.Clicked(gtx) {
 		hp.Display(NewOverviewPage(hp.Load, func() {}))
 	}
-	for i := range hp.walletEntries {
-		entry := &hp.walletEntries[i]
-		if entry.click.Clicked(gtx) {
+	for _, entry := range hp.walletEntries {
+		if entry.click != nil && entry.click.Clicked(gtx) {
 			hp.Display(walletpage.NewSingleWalletMasterPage(hp.Load, entry.wallet, func() {}))
 		}
 	}
@@ -151,7 +150,7 @@ func (hp *HomePage) layoutWalletEntry(gtx layout.Context, e *walletEntry) layout
 		Height:      cryptomaterial.WrapContent,
 		Padding:     layout.Inset{Top: unit.Dp(6), Bottom: unit.Dp(6), Left: unit.Dp(4), Right: unit.Dp(4)},
 		Margin:      layout.Inset{Bottom: unit.Dp(2)},
-		Clickable:   &e.click,
+		Clickable:   e.click,
 		Orientation: layout.Vertical,
 	}.Layout(gtx,
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
@@ -179,23 +178,23 @@ func (hp *HomePage) layoutBody(gtx layout.Context) layout.Dimensions {
 }
 
 // refreshWalletList rebuilds the sidebar entry list from AssetsManager,
-// preserving click state for wallets that are still present.
+// preserving click state for wallets that are still present. New wallets get
+// a freshly initialised Clickable; gone wallets are dropped.
 func (hp *HomePage) refreshWalletList() {
 	wallets := hp.AssetsManager.AllWallets()
 
-	// Build a lookup of existing entries by wallet ID so we keep their
-	// Clickable state across rebuilds (otherwise the click event is lost
-	// on the same frame the click happened).
 	existing := make(map[int]*cryptomaterial.Clickable, len(hp.walletEntries))
-	for i := range hp.walletEntries {
-		existing[hp.walletEntries[i].wallet.GetWalletID()] = &hp.walletEntries[i].click
+	for _, entry := range hp.walletEntries {
+		existing[entry.wallet.GetWalletID()] = entry.click
 	}
 
 	out := make([]walletEntry, 0, len(wallets))
 	for _, w := range wallets {
 		entry := walletEntry{wallet: w}
-		if prev, ok := existing[w.GetWalletID()]; ok {
-			entry.click = *prev
+		if prev, ok := existing[w.GetWalletID()]; ok && prev != nil {
+			entry.click = prev
+		} else {
+			entry.click = hp.Theme.NewClickable(true)
 		}
 		out = append(out, entry)
 	}
