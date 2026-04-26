@@ -158,12 +158,17 @@ func (sp *startPage) OnNavigatedTo() {
 }
 
 func (sp *startPage) initPage() {
-	sp.languageDropdown = sp.Theme.NewCommonDropDown([]cryptomaterial.DropDownItem{
-		{Text: titler.String(values.StrEnglish)},
-		{Text: titler.String(values.StrFrench)},
-		{Text: titler.String(values.StrSpanish)},
-		{Text: titler.String(values.StrChinese)},
-	}, nil, values.MarginPadding120, values.StartPageDropdownGroup, false)
+	// Build the onboarding language dropdown straight from preference.LangOptions
+	// so adding a new locale (e.g. Ukrainian) only needs to be done in one
+	// place — the LangOptions slice in ui/preference/list_preference.go.
+	langItems := make([]cryptomaterial.DropDownItem, 0, len(preference.LangOptions))
+	for _, opt := range preference.LangOptions {
+		langItems = append(langItems, cryptomaterial.DropDownItem{
+			Text: titler.String(values.String(opt.Value)),
+		})
+	}
+	sp.languageDropdown = sp.Theme.NewCommonDropDown(
+		langItems, nil, values.MarginPadding120, values.StartPageDropdownGroup, false)
 
 	sp.onBoardingScreens = []onBoardingScreen{
 		{
@@ -570,18 +575,9 @@ func (sp *startPage) onBoardingScreensLayout(gtx C) D {
 						)
 					})
 				}),
-				layout.Expanded(func(gtx C) D {
-					return layout.Flex{Axis: layout.Horizontal, Spacing: layout.SpaceStart, Alignment: layout.Middle}.Layout(gtx,
-						layout.Rigid(func(gtx C) D {
-							langTitle := sp.Theme.Label(values.TextSize16, values.String(values.StrLanguage))
-							langTitle.Font.Weight = font.Bold
-							return layout.Inset{Top: values.MarginPadding20}.Layout(gtx, langTitle.Layout)
-						}),
-						layout.Rigid(func(gtx C) D {
-							return layout.UniformInset(values.MarginPadding10).Layout(gtx, sp.languageDropdown.Layout)
-						}),
-					)
-				}),
+				// Language picker is now rendered globally inside pageHeaderLayout
+				// for every onboarding screen, so we no longer duplicate it here
+				// on the Choose-setup-type page.
 			)
 		}),
 	)
@@ -686,6 +682,21 @@ func (sp *startPage) pageHeaderLayout(gtx C, headerText string, hideHeaderText b
 					return lbl.Layout(gtx)
 				}),
 			)
+		}),
+		// Right-aligned language picker: appears on every onboarding screen
+		// (welcome / introduction sliders / Choose-setup-type) so the user can
+		// switch to Ukrainian before they even start.
+		layout.Flexed(1, func(gtx C) D {
+			return layout.E.Layout(gtx, func(gtx C) D {
+				return layout.Flex{Axis: layout.Horizontal, Alignment: layout.Middle}.Layout(gtx,
+					layout.Rigid(func(gtx C) D {
+						lbl := sp.Theme.Label(values.TextSize16, values.String(values.StrLanguage))
+						lbl.Font.Weight = font.Bold
+						return layout.Inset{Right: values.MarginPadding8}.Layout(gtx, lbl.Layout)
+					}),
+					layout.Rigid(sp.languageDropdown.Layout),
+				)
+			})
 		}),
 	)
 }
