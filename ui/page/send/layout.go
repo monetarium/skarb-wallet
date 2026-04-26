@@ -143,6 +143,14 @@ func (pg *Page) sendLayout(gtx C) D {
 					return pg.accountDropdown.Layout(gtx, values.String(values.StrSourceAccount))
 				})
 			}),
+			layout.Rigid(func(gtx C) D {
+				if pg.coinTypeDropdown == nil {
+					return D{}
+				}
+				return layout.Inset{Top: values.MarginPadding8}.Layout(gtx, func(gtx C) D {
+					return pg.coinTypeDropdown.Layout(gtx, "Asset")
+				})
+			}),
 		)
 	})
 }

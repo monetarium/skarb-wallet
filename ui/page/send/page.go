@@ -9,6 +9,7 @@ import (
 	"gioui.org/widget"
 
 	"github.com/monetarium/monetarium-cryptopower/app"
+	"github.com/monetarium/monetarium-cryptopower/libwallet/assets/dcr"
 	sharedW "github.com/monetarium/monetarium-cryptopower/libwallet/assets/wallet"
 	libUtil "github.com/monetarium/monetarium-cryptopower/libwallet/utils"
 	"github.com/monetarium/monetarium-cryptopower/ui/cryptomaterial"
@@ -18,6 +19,7 @@ import (
 	txpage "github.com/monetarium/monetarium-cryptopower/ui/page/transaction"
 	"github.com/monetarium/monetarium-cryptopower/ui/utils"
 	"github.com/monetarium/monetarium-cryptopower/ui/values"
+	"github.com/monetarium/monetarium-node/cointype"
 )
 
 const (
@@ -46,8 +48,9 @@ type Page struct {
 
 	pageContainer *widget.List
 
-	walletDropdown  *components.WalletDropdown
-	accountDropdown *components.AccountDropdown
+	walletDropdown   *components.WalletDropdown
+	accountDropdown  *components.AccountDropdown
+	coinTypeDropdown *components.CoinTypeDropdown
 
 	hideWalletDropdown, hideAdvancedOptions bool
 
@@ -138,10 +141,33 @@ func NewSendPage(l *load.Load, wallet sharedW.Asset) *Page {
 		return pg.selectedWallet.GetAssetType()
 	}
 	pg.feeRateSelector = components.NewFeeRateSelector(l, callbackFunc).ShowSizeAndCost()
+	pg.coinTypeDropdown = components.NewCoinTypeDropdown(l).
+		SetChangedCallback(func(ct cointype.CoinType) {
+			pg.applyCoinType(ct)
+		})
+	if dcrAsset, ok := pg.selectedWallet.(*dcr.Asset); ok {
+		pg.coinTypeDropdown.Setup(dcrAsset)
+	}
 	pg.addRecipient()
 	pg.initLayoutWidgets()
 	pg.setAssetTypeForRecipients()
 	return pg
+}
+
+// applyCoinType is fired when the user picks a different asset (VAR / SKA-n)
+// in the CoinType dropdown. It tells the wallet authoring layer about the new
+// coin type and re-validates the form so fee/balance estimates refresh.
+func (pg *Page) applyCoinType(ct cointype.CoinType) {
+	dcrAsset, ok := pg.selectedWallet.(*dcr.Asset)
+	if !ok {
+		return
+	}
+	if dcrAsset.IsUnsignedTxExist() {
+		if err := dcrAsset.SetTxCoinType(ct); err != nil {
+			log.Errorf("SetTxCoinType(%s): %v", ct, err)
+		}
+	}
+	pg.validateAndConstructTx()
 }
 
 func (pg *Page) addRecipient() {
@@ -198,7 +224,11 @@ func (pg *Page) initModalWalletSelector(wallet sharedW.Asset) {
 				go pg.feeRateSelector.UpdatedFeeRate(pg.selectedWallet)
 				pg.setAssetTypeForRecipients()
 			}
-
+			if pg.coinTypeDropdown != nil {
+				if dcrAsset, ok := w.(*dcr.Asset); ok {
+					pg.coinTypeDropdown.Setup(dcrAsset)
+				}
+			}
 		}).
 		Setup(wallet)
 	if pg.selectedWallet == nil {
@@ -363,6 +393,16 @@ func (pg *Page) constructTx() {
 		pg.setRecipientsAmountErr(err)
 		pg.clearEstimates()
 		return
+	}
+
+	// Tag the in-progress transaction with the selected coin type. SetTxCoinType
+	// is a no-op when the choice hasn't changed.
+	if dcrAsset, ok := pg.selectedWallet.(*dcr.Asset); ok && pg.coinTypeDropdown != nil {
+		if err := dcrAsset.SetTxCoinType(pg.coinTypeDropdown.Selected()); err != nil {
+			pg.setRecipientsAmountErr(err)
+			pg.clearEstimates()
+			return
+		}
 	}
 
 	totalCost, balanceAfterSend, totalAmount, err := pg.addSendDestination()
@@ -582,6 +622,9 @@ func (pg *Page) clearEstimates() {
 func (pg *Page) HandleUserInteractions(gtx C) {
 	pg.walletDropdown.Handle(gtx)
 	pg.accountDropdown.Handle(gtx)
+	if pg.coinTypeDropdown != nil {
+		pg.coinTypeDropdown.Handle(gtx)
+	}
 	if pg.feeRateSelector.SaveRate.Clicked(gtx) {
 		pg.feeRateSelector.OnEditRateClicked(pg.selectedWallet)
 	}

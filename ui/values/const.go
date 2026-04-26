@@ -13,4 +13,5 @@ const (
 	StartPageDropdownGroup
 	AssetTypeDropdownGroup
 	AccountsDropdownGroup
+	CoinTypeDropdownGroup
 )

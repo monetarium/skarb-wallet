@@ -131,11 +131,35 @@ func main() {
 		fmt.Printf("    %s — %s\n", ct, dcr.FormatCoinAmount(bal))
 	}
 
+	// --- Tx authoring with CoinType ---------------------------------------
+	fmt.Println("→ NewUnsignedTx + SetTxCoinType round-trip:")
+	if err := dcrAsset.NewUnsignedTx(0, nil); err != nil {
+		die("NewUnsignedTx: %v", err)
+	}
+	if got := dcrAsset.TxCoinType(); got != cts[0] {
+		die("default CoinType after NewUnsignedTx is %s, expected %s", got, cts[0])
+	}
+	for _, ct := range cts {
+		if err := dcrAsset.SetTxCoinType(ct); err != nil {
+			die("SetTxCoinType(%s): %v", ct, err)
+		}
+		if dcrAsset.TxCoinType() != ct {
+			die("TxCoinType() returned %s after SetTxCoinType(%s)", dcrAsset.TxCoinType(), ct)
+		}
+		fmt.Printf("    SetTxCoinType(%s) OK\n", ct)
+	}
+	if err := dcrAsset.SetTxCoinType(99); err == nil {
+		die("SetTxCoinType(SKA-99) should have failed (not active)")
+	} else {
+		fmt.Printf("    SetTxCoinType(SKA-99) correctly rejected: %v\n", err)
+	}
+
 	fmt.Println()
 	fmt.Println("✅ Backend smoke test PASSED")
 	fmt.Println("   • monetarium-wallet API works through the Cryptopower libwallet shim")
 	fmt.Println("   • HD derivation produces a Monetarium-testnet address")
 	fmt.Println("   • Multi-coin API: ActiveCoinTypes / GetAccountCoinBalances / GetWalletCoinBalances all return non-error data")
+	fmt.Println("   • Tx authoring: SetTxCoinType accepts active coin types and rejects inactive ones")
 }
 
 func die(format string, args ...interface{}) {

@@ -16,6 +16,7 @@ import (
 	"github.com/monetarium/monetarium-cryptopower/libwallet/txhelper"
 	"github.com/monetarium/monetarium-cryptopower/libwallet/utils"
 	"github.com/monetarium/monetarium-node/chaincfg/chainhash"
+	"github.com/monetarium/monetarium-node/cointype"
 	"github.com/monetarium/monetarium-node/dcrutil"
 	"github.com/monetarium/monetarium-node/txscript"
 	"github.com/monetarium/monetarium-node/txscript/stdaddr"
@@ -27,6 +28,10 @@ type TxAuthor struct {
 	destinations        map[int]*sharedW.TransactionDestination
 	changeAddress       string
 	changeDestination   *sharedW.TransactionDestination
+
+	// coinType is the asset being sent. Defaults to VAR (CoinType=0). Set via
+	// SetTxCoinType. All outputs in a single tx must share the same CoinType.
+	coinType cointype.CoinType
 
 	utxos          []*sharedW.UnspentOutput
 	unsignedTx     *txauthor.AuthoredTx
@@ -44,8 +49,38 @@ func (asset *Asset) NewUnsignedTx(sourceAccountNumber int32, utxos []*sharedW.Un
 		destinations:        make(map[int]*sharedW.TransactionDestination, 0),
 		needsConstruct:      true,
 		utxos:               utxos,
+		coinType:            cointype.CoinTypeVAR,
 	}
 	return nil
+}
+
+// SetTxCoinType sets the CoinType for the transaction currently being authored.
+// Must be called before AddSendDestination if you want to send anything other
+// than VAR. Idempotent — calling with the current value is a no-op.
+func (asset *Asset) SetTxCoinType(ct cointype.CoinType) error {
+	if asset.TxAuthoredInfo == nil {
+		return errors.New("no transaction in progress; call NewUnsignedTx first")
+	}
+	if !ct.IsValid() {
+		return fmt.Errorf("invalid coin type %d", ct)
+	}
+	if !asset.IsCoinTypeActive(ct) {
+		return fmt.Errorf("coin type %s is not active on this network", ct)
+	}
+	if asset.TxAuthoredInfo.coinType != ct {
+		asset.TxAuthoredInfo.coinType = ct
+		asset.TxAuthoredInfo.needsConstruct = true
+	}
+	return nil
+}
+
+// TxCoinType returns the CoinType for the transaction currently being authored.
+// Returns CoinTypeVAR if no transaction is in progress.
+func (asset *Asset) TxCoinType() cointype.CoinType {
+	if asset.TxAuthoredInfo == nil {
+		return cointype.CoinTypeVAR
+	}
+	return asset.TxAuthoredInfo.coinType
 }
 
 // ComputeTxSizeEstimation computes the estimated size of the final raw transaction.
@@ -345,7 +380,7 @@ func (asset *Asset) constructTransaction() (*txauthor.AuthoredTx, error) {
 			}
 			sendMax = true
 		} else {
-			output, err := txhelper.MakeTxOutput(destination.Address, destination.UnitAmount, asset.chainParams)
+			output, err := txhelper.MakeCoinTypeTxOutput(destination.Address, destination.UnitAmount, asset.TxAuthoredInfo.coinType, asset.chainParams)
 			if err != nil {
 				log.Errorf("constructTransaction: error preparing tx output: %v", err)
 				return nil, fmt.Errorf("make tx output error: %v", err)
