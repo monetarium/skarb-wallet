@@ -13,7 +13,6 @@ import (
 	"github.com/monetarium/monetarium-wallet/errors"
 	"github.com/monetarium/monetarium-wallet/walletseed"
 	"github.com/asdine/storm"
-	btchdkeychain "github.com/btcsuite/btcd/btcutil/hdkeychain"
 	"github.com/monetarium/monetarium-cryptopower/libwallet/utils"
 	dcrhdkeychain "github.com/monetarium/monetarium-node/hdkeychain"
 	"github.com/kevinburke/nacl"
@@ -197,7 +196,7 @@ func generateMnemonic(wordSeedType WordSeedType) (v string, err error) {
 	// The same HD key generation function is used for all assets,
 	// because the HD key chain for each asset has the same
 	// underlying structure (BTC, LTC & DCR).
-	entropy, err = btchdkeychain.GenerateSeed(length)
+	entropy, err = dcrhdkeychain.GenerateSeed(length)
 	if err != nil {
 		return "", err
 	}

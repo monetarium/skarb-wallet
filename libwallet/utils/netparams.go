@@ -4,9 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	btccfg "github.com/btcsuite/btcd/chaincfg"
 	dcrcfg "github.com/monetarium/monetarium-node/chaincfg"
-	ltccfg "github.com/ltcsuite/ltcd/chaincfg"
 	"golang.org/x/text/cases"
 	"golang.org/x/text/language"
 )
@@ -47,60 +45,37 @@ func ToNetworkType(str string) NetworkType {
 	}
 }
 
-// ChainsParams collectively defines the chain parameters of all assets supported.
+// ChainsParams collectively defines the chain parameters of all assets
+// supported by the Monetarium wallet. v1 only ships DCR (i.e. the Monetarium
+// chain itself) — BTC/LTC fields were removed when those assets dropped out
+// of the Cryptopower fork.
 type ChainsParams struct {
 	DCR *dcrcfg.Params
-	BTC *btccfg.Params
-	LTC *ltccfg.Params
 }
 
 var (
-	DCRmainnetParams      = dcrcfg.MainNetParams()
-	DCRtestnetParams      = dcrcfg.TestNet3Params()
-	DCRSimnetParams       = dcrcfg.SimNetParams()
-	DCRRegnetParams       = dcrcfg.RegNetParams()
-	BTCmainnetParams      = &btccfg.MainNetParams
-	BTCtestnetParams      = &btccfg.TestNet3Params
-	BTCSimnetParams       = &btccfg.SimNetParams
-	BTCRegnetParamsVal    = btccfg.RegressionNetParams
-	LTCmainnetParams      = &ltccfg.MainNetParams
-	LTCtestnetParams      = &ltccfg.TestNet4Params
-	LTCSimnetParams       = &ltccfg.SimNetParams
-	LTCRegnetParamsVal    = ltccfg.RegressionNetParams
-	DCRDEXSimnetParams    = dcrcfg.SimNetParams()
-	BTCDEXRegnetParamsVal = btccfg.RegressionNetParams
-	LTCDEXRegnetParamsVal = ltccfg.RegressionNetParams
+	DCRmainnetParams = dcrcfg.MainNetParams()
+	DCRtestnetParams = dcrcfg.TestNet3Params()
+	DCRSimnetParams  = dcrcfg.SimNetParams()
+	DCRRegnetParams  = dcrcfg.RegNetParams()
 )
 
-func init() {
-	DCRDEXSimnetParams.DefaultPort = "19560"
-	BTCDEXRegnetParamsVal.DefaultPort = "20575"
-	LTCDEXRegnetParamsVal.DefaultPort = "20585"
-}
-
-// NetDir returns data directory name for a given asset's type and network connected.
-// If "unknown" is returned, unsupported asset type or network was detected.
+// NetDir returns the data directory name for a given asset's type and network.
+// Returns "unknown" for any unsupported asset type or network.
 func NetDir(assetType AssetType, netType NetworkType) string {
-	dirName := "unknown"
-	params, err := GetChainParams(assetType, netType)
+	if assetType != DCRWalletAsset {
+		return "unknown"
+	}
+	params, err := DCRChainParams(netType)
 	if err != nil {
-		return dirName
+		return "unknown"
 	}
-
-	switch assetType {
-	case BTCWalletAsset:
-		dirName = params.BTC.Name
-	case DCRWalletAsset:
-		dirName = params.DCR.Name
-	case LTCWalletAsset:
-		dirName = params.LTC.Name
-	}
-
-	return strings.ToLower(dirName)
+	return strings.ToLower(params.Name)
 }
 
-// DCRChainParams returns the network parameters from the DCR chain provided
-// a given network.
+// DCRChainParams returns the network parameters for the Monetarium chain
+// (kept under the DCR-shaped name to limit refactor blast radius from the
+// Cryptopower base — the names are historic, the chain is Monetarium).
 func DCRChainParams(netType NetworkType) (*dcrcfg.Params, error) {
 	switch netType {
 	case Mainnet:
@@ -111,74 +86,20 @@ func DCRChainParams(netType NetworkType) (*dcrcfg.Params, error) {
 		return DCRSimnetParams, nil
 	case Regression:
 		return DCRRegnetParams, nil
-	case DEXTest:
-		return DCRDEXSimnetParams, nil
 	default:
 		return nil, fmt.Errorf("%v: (%v)", ErrInvalidNet, netType)
 	}
 }
 
-// BTCChainParams returns the network parameters from the BTC chain provided
-// a given network.
-func BTCChainParams(netType NetworkType) (*btccfg.Params, error) {
-	switch netType {
-	case Mainnet:
-		return BTCmainnetParams, nil
-	case Testnet:
-		return BTCtestnetParams, nil
-	case Simulation:
-		return BTCSimnetParams, nil
-	case Regression:
-		return &BTCRegnetParamsVal, nil
-	case DEXTest:
-		return &BTCDEXRegnetParamsVal, nil
-	default:
-		return nil, fmt.Errorf("%v: (%v)", ErrInvalidNet, netType)
-	}
-}
-
-// LTCChainParams returns the network parameters from the LTC chain provided
-// a network type is given.
-func LTCChainParams(netType NetworkType) (*ltccfg.Params, error) {
-	switch netType {
-	case Mainnet:
-		return LTCmainnetParams, nil
-	case Testnet:
-		return LTCtestnetParams, nil
-	case Simulation:
-		return LTCSimnetParams, nil
-	case Regression:
-		return &LTCRegnetParamsVal, nil
-	case DEXTest:
-		return &LTCDEXRegnetParamsVal, nil
-	default:
-		return nil, fmt.Errorf("%v: (%v)", ErrInvalidNet, netType)
-	}
-}
-
-// GetChainParams returns the network parameters of a chain provided its
-// asset type and network type.
+// GetChainParams returns the network parameters wrapped in a ChainsParams
+// struct. Only DCR (Monetarium) is supported in v1.
 func GetChainParams(assetType AssetType, netType NetworkType) (*ChainsParams, error) {
-	switch assetType {
-	case BTCWalletAsset:
-		params, err := BTCChainParams(netType)
-		if err != nil {
-			return nil, err
-		}
-		return &ChainsParams{BTC: params}, nil
-	case DCRWalletAsset:
-		params, err := DCRChainParams(netType)
-		if err != nil {
-			return nil, err
-		}
-		return &ChainsParams{DCR: params}, nil
-	case LTCWalletAsset:
-		params, err := LTCChainParams(netType)
-		if err != nil {
-			return nil, err
-		}
-		return &ChainsParams{LTC: params}, nil
-	default:
+	if assetType != DCRWalletAsset {
 		return nil, fmt.Errorf("%v: (%v)", ErrAssetUnknown, assetType)
 	}
+	params, err := DCRChainParams(netType)
+	if err != nil {
+		return nil, err
+	}
+	return &ChainsParams{DCR: params}, nil
 }

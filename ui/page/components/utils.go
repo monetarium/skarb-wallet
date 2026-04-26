@@ -13,14 +13,12 @@ import (
 	"gioui.org/layout"
 	"gioui.org/unit"
 
-	"github.com/btcsuite/btcd/btcutil"
 	sharedW "github.com/monetarium/monetarium-cryptopower/libwallet/assets/wallet"
 	libutils "github.com/monetarium/monetarium-cryptopower/libwallet/utils"
 	"github.com/monetarium/monetarium-cryptopower/ui/cryptomaterial"
 	"github.com/monetarium/monetarium-cryptopower/ui/load"
 	"github.com/monetarium/monetarium-cryptopower/ui/values"
 	"github.com/monetarium/monetarium-node/dcrutil"
-	"github.com/ltcsuite/ltcd/ltcutil"
 	"github.com/tyler-smith/go-bip39"
 )
 
@@ -131,17 +129,10 @@ func SetWalletLogo(l *load.Load, gtx C, assetType libutils.AssetType, size unit.
 func LayoutOrderAmount(l *load.Load, gtx C, assetType string, amount float64) D {
 	var convertedAmountStr string
 
-	switch strings.ToLower(assetType) {
-	case libutils.DCRWalletAsset.ToStringLower():
+	if strings.ToLower(assetType) == libutils.DCRWalletAsset.ToStringLower() {
 		convertedAmount, _ := dcrutil.NewAmount(amount)
 		convertedAmountStr = convertedAmount.String()
-	case libutils.BTCWalletAsset.ToStringLower():
-		convertedAmount, _ := btcutil.NewAmount(amount)
-		convertedAmountStr = convertedAmount.String()
-	case libutils.LTCWalletAsset.ToStringLower():
-		convertedAmount, _ := ltcutil.NewAmount(amount)
-		convertedAmountStr = convertedAmount.String()
-	default:
+	} else {
 		convertedAmountStr = "Unsupported asset type"
 	}
 
