@@ -170,6 +170,14 @@ func (sp *startPage) initPage() {
 	sp.languageDropdown = sp.Theme.NewCommonDropDown(
 		langItems, nil, values.MarginPadding120, values.StartPageDropdownGroup, false)
 
+	sp.refreshLocalizedStrings()
+}
+
+// refreshLocalizedStrings re-reads every cached localised string on the
+// start page so a language switch is reflected immediately. Called from
+// initPage at construction time and from OnLanguageChanged when the user
+// picks a different locale in the language dropdown.
+func (sp *startPage) refreshLocalizedStrings() {
 	sp.onBoardingScreens = []onBoardingScreen{
 		{
 			title:    values.String(values.StrMultiWalletSupport),
@@ -188,21 +196,39 @@ func (sp *startPage) initPage() {
 		},
 	}
 
-	sp.settingsOptions = []*settingsOption{
-		{
-			title:      values.String(values.StrRecommended),
-			message:    values.String(values.StrRecommendedSettingsMsg),
-			infoButton: sp.Theme.IconButton(sp.Theme.Icons.ActionInfo),
-			clickable:  sp.Theme.NewClickable(false),
-		},
-		{
-			title:      values.String(values.StrAdvanced),
-			message:    values.String(values.StrAdvancedSettingsMsg),
-			infoButton: sp.Theme.IconButton(sp.Theme.Icons.ActionInfo),
-			clickable:  sp.Theme.NewClickable(false),
-		},
+	if sp.settingsOptions == nil {
+		sp.settingsOptions = []*settingsOption{
+			{
+				infoButton: sp.Theme.IconButton(sp.Theme.Icons.ActionInfo),
+				clickable:  sp.Theme.NewClickable(false),
+			},
+			{
+				infoButton: sp.Theme.IconButton(sp.Theme.Icons.ActionInfo),
+				clickable:  sp.Theme.NewClickable(false),
+			},
+		}
+	}
+	sp.settingsOptions[0].title = values.String(values.StrRecommended)
+	sp.settingsOptions[0].message = values.String(values.StrRecommendedSettingsMsg)
+	sp.settingsOptions[1].title = values.String(values.StrAdvanced)
+	sp.settingsOptions[1].message = values.String(values.StrAdvancedSettingsMsg)
+
+	if sp.skipButton.Text != "" {
+		sp.skipButton.Text = values.String(values.StrSkip)
+	}
+	if sp.addWalletButton.Text != "" {
+		sp.addWalletButton.Text = values.String(values.StrAddWallet)
 	}
 }
+
+// AppSettingsChangeHandler hooks ────────────────────────────────────────────
+// startPage caches several localised strings (intro slider titles, settings
+// option labels, skip button) when the page is constructed. RefreshTheme
+// fires these callbacks when the user changes locale / dark mode / currency
+// from anywhere in the app, so we re-read the cached strings on demand.
+func (sp *startPage) OnLanguageChanged() { sp.refreshLocalizedStrings() }
+func (sp *startPage) OnDarkModeChanged(_ bool) {}
+func (sp *startPage) OnCurrencyChanged() {}
 
 func (sp *startPage) unlock() {
 	startupPasswordModal := modal.NewCreatePasswordModal(sp.Load).

@@ -270,15 +270,33 @@ const UK = `
 "reset" = "Скинути"
 "apply" = "Застосувати"
 
+// Onboarding intro slider titles + subtitles (these were missing — page
+// stayed in English even after locale switch because the page builds
+// onBoardingScreens by calling values.String at construction time.)
+"multiWalletSupport" = "Багатовалютний гаманець"
+"multiWalletSubtext" = "Надсилайте та отримуйте VAR і SKA у мережі Monetarium."
+"crossPlatform" = "Кросплатформенність"
+"crossPlatformSubtext" = "Працює на macOS, Windows і Linux з єдиного коду."
+"integratedExchangeFunctionality" = "Інтегрована екосистема"
+"integratedExchangeSubtext" = "Безпечне зберігання VAR (Варта) і SKA (Скарб) у єдиному додатку."
+
 // Onboarding extras
 "introductionPage1" = "Skarb — багатовалютний гаманець для мережі Monetarium."
 "introductionPage2" = "Зберігайте і переказуйте VAR (Варта) і SKA (Скарб) активи."
 "introductionPage3" = "Резервна копія сід-фрази дозволяє відновити гаманець на будь-якому пристрої."
 "skip" = "Пропустити"
+"chooseSetupType" = "Оберіть тип налаштування"
+"recommended" = "Рекомендоване"
+"advanced" = "Розширене"
 "recommendedSettings" = "Рекомендовані налаштування"
 "advancedSettings" = "Розширені налаштування"
+"recommendedSettingsMsg" = "Використовувати найбільш поширені налаштування. Підходить для більшості користувачів."
+"advancedSettingsMsg" = "Дозволяє налаштувати все самостійно. Підходить досвідченим користувачам."
 "advancedModalBody" = "Розширені налаштування підвищують приватність, вимикаючи зовнішні API."
 "recommendedModalBody" = "Звичайні налаштування — стандартний режим роботи."
+"language" = "Мова"
+"getStarted" = "Розпочати"
+"addWallet" = "Додати гаманець"
 
 // Asset & balance display
 "VAR" = "VAR"
