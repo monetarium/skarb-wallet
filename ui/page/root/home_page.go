@@ -22,6 +22,7 @@ import (
 	sharedW "github.com/monetarium/monetarium-cryptopower/libwallet/assets/wallet"
 	"github.com/monetarium/monetarium-cryptopower/ui/cryptomaterial"
 	"github.com/monetarium/monetarium-cryptopower/ui/load"
+	"github.com/monetarium/monetarium-cryptopower/ui/page/settings"
 	walletpage "github.com/monetarium/monetarium-cryptopower/ui/page/wallet"
 )
 
@@ -39,6 +40,7 @@ type HomePage struct {
 	walletsList   layout.List
 
 	overviewBtn cryptomaterial.Button
+	settingsBtn cryptomaterial.Button
 }
 
 type walletEntry struct {
@@ -53,6 +55,7 @@ func NewHomePage(l *load.Load) *HomePage {
 		Load:        l,
 		walletsList: layout.List{Axis: layout.Vertical},
 		overviewBtn: l.Theme.Button("Overview"),
+		settingsBtn: l.Theme.Button("Settings"),
 	}
 }
 
@@ -119,6 +122,12 @@ func (hp *HomePage) HandleUserInteractions(gtx layout.Context) {
 	if hp.overviewBtn.Clicked(gtx) {
 		hp.Display(NewOverviewPage(hp.Load, func() {}))
 	}
+	if hp.settingsBtn.Clicked(gtx) {
+		// AppSettingsPage hosts the network (mainnet ↔ testnet) switcher,
+		// language, theme, and other process-wide knobs. It's a top-level
+		// modal-style page rather than a wallet-scoped one.
+		hp.ParentWindow().Display(settings.NewAppSettingsPage(hp.Load))
+	}
 	for _, entry := range hp.walletEntries {
 		if entry.click != nil && entry.click.Clicked(gtx) {
 			hp.Display(walletpage.NewSingleWalletMasterPage(hp.Load, entry.wallet, func() {}))
@@ -163,6 +172,14 @@ func (hp *HomePage) layoutSidebar(gtx layout.Context) layout.Dimensions {
 		}),
 		layout.Rigid(layout.Spacer{Height: unit.Dp(12)}.Layout),
 		layout.Rigid(hp.overviewBtn.Layout),
+		layout.Rigid(layout.Spacer{Height: unit.Dp(6)}.Layout),
+		layout.Rigid(hp.settingsBtn.Layout),
+		layout.Rigid(layout.Spacer{Height: unit.Dp(4)}.Layout),
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			net := hp.Theme.Caption(fmt.Sprintf("Network: %s", hp.AssetsManager.NetType()))
+			net.Color = hp.Theme.Color.GrayText3
+			return net.Layout(gtx)
+		}),
 		layout.Rigid(layout.Spacer{Height: unit.Dp(12)}.Layout),
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 			label := hp.Theme.Caption("WALLETS")

@@ -108,13 +108,16 @@ cat > "${APP_DIR}/Contents/Info.plist" <<PLIST
 </plist>
 PLIST
 
-echo "→ Ad-hoc signing the whole bundle (deep, force; --options runtime for hardened)"
-# Ad-hoc sign means no Apple Developer ID; Gatekeeper still complains on first
-# launch but the bundle is internally consistent (no "damaged" error). The
-# --deep flag re-signs every framework / nested binary. The --options runtime
-# enables the hardened-runtime checks recommended by Apple.
+echo "→ Ad-hoc signing the whole bundle (deep, force)"
+# Ad-hoc sign means no Apple Developer ID. We deliberately DO NOT pass
+# --options runtime: hardened runtime is meant for notarised apps; on an
+# ad-hoc signed app it makes Gatekeeper more aggressive and can produce a
+# bare 'cannot be opened' error after a quarantined download.
+# The --deep flag re-signs every framework / nested binary so the bundle is
+# internally consistent (no 'damaged' error).
 codesign --remove-signature "${APP_DIR}" 2>/dev/null || true
-codesign --force --deep --sign - --options runtime --timestamp=none \
+chmod +x "${APP_DIR}/Contents/MacOS/${APP_NAME}"
+codesign --force --deep --sign - --timestamp=none \
     --identifier "${BUNDLE_ID}" \
     "${APP_DIR}"
 codesign --verify --deep --strict --verbose=2 "${APP_DIR}" 2>&1 | head -5
