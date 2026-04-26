@@ -144,9 +144,8 @@ func (pg *WalletSelectorPage) OnNavigatedTo() {
 			}
 
 			rate := pg.AssetsManager.RateSource.GetTicker(marketValue, true)
-			if err != nil {
-				log.Error(err)
-				break
+			if rate == nil || rate.LastTradePrice <= 0 {
+				continue
 			}
 			pg.assetRate[assetType] = rate.LastTradePrice
 		}
