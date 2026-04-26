@@ -65,21 +65,8 @@ func (wm *WalletMigrator) Migrate(mgr *AssetsManager) error {
 		return wm.migrateWatchingOnlyWallet(mgr)
 	}
 	var err error
-	switch wm.wallet.GetAssetType() {
-	case libutils.DCRWalletAsset:
+	if wm.wallet.GetAssetType() == libutils.DCRWalletAsset {
 		_, err = mgr.RestoreDCRWallet(wm.wallet.GetWalletName(), wm.seed, wm.privatePassphrase, sharedW.WordSeedType(wm.wallet.GetPrivatePassphraseType()), wm.wallet.GetPrivatePassphraseType())
-		if err != nil {
-			return err
-		}
-
-	case libutils.BTCWalletAsset:
-		_, err = mgr.RestoreBTCWallet(wm.wallet.GetWalletName(), wm.seed, wm.privatePassphrase, sharedW.WordSeedType(wm.wallet.GetPrivatePassphraseType()), wm.wallet.GetPrivatePassphraseType())
-		if err != nil {
-			return err
-		}
-
-	case libutils.LTCWalletAsset:
-		_, err = mgr.RestoreLTCWallet(wm.wallet.GetWalletName(), wm.seed, wm.privatePassphrase, sharedW.WordSeedType(wm.wallet.GetPrivatePassphraseType()), wm.wallet.GetPrivatePassphraseType())
 		if err != nil {
 			return err
 		}
@@ -91,25 +78,11 @@ func (wm *WalletMigrator) migrateWatchingOnlyWallet(mgr *AssetsManager) error {
 	if !wm.isMigrate {
 		return nil
 	}
-	switch wm.wallet.GetAssetType() {
-	case libutils.DCRWalletAsset:
+	if wm.wallet.GetAssetType() == libutils.DCRWalletAsset {
 		_, err := mgr.CreateNewDCRWatchOnlyWallet(wm.wallet.GetWalletName(), wm.seed)
 		if err != nil {
 			return err
 		}
-
-	case libutils.BTCWalletAsset:
-		_, err := mgr.CreateNewBTCWatchOnlyWallet(wm.wallet.GetWalletName(), wm.seed)
-		if err != nil {
-			return err
-		}
-
-	case libutils.LTCWalletAsset:
-		_, err := mgr.CreateNewLTCWatchOnlyWallet(wm.wallet.GetWalletName(), wm.seed)
-		if err != nil {
-			return err
-		}
-
 	}
 	return nil
 }

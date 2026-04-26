@@ -510,14 +510,14 @@ func (asset *Asset) changeSource(ctx context.Context) (txauthor.ChangeSource, er
 
 // validateSendAmount validate the amount to send to a destination address
 func (asset *Asset) validateSendAmount(sendMax bool, atomAmount int64) error {
-	if !sendMax && (atomAmount <= 0 || atomAmount > dcrutil.MaxAmount) {
+	if !sendMax && (atomAmount <= 0 || atomAmount > maxVARAtoms) {
 		return errors.E(errors.Invalid, "invalid amount")
 	}
 	return nil
 }
 
 func saneOutputValue(amount Amount) bool {
-	return amount >= 0 && amount <= dcrutil.MaxAmount
+	return amount >= 0 && int64(amount) <= maxVARAtoms
 }
 
 func parseOutPoint(input *sharedW.UnspentOutput) (wire.OutPoint, error) {

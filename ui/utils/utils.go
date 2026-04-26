@@ -11,8 +11,6 @@ import (
 	"strconv"
 	"strings"
 
-	"decred.org/dcrdex/dex/encode"
-	"github.com/monetarium/monetarium-cryptopower/libwallet/assets/btc"
 	"github.com/monetarium/monetarium-cryptopower/libwallet/assets/dcr"
 	sharedW "github.com/monetarium/monetarium-cryptopower/libwallet/assets/wallet"
 	"github.com/monetarium/monetarium-cryptopower/libwallet/utils"
@@ -28,8 +26,12 @@ import (
 	"golang.org/x/text/message"
 )
 
-// ZeroBytes use for clearing a password or seed byte slice.
-var ZeroBytes = encode.ClearBytes
+// ZeroBytes clears a password or seed byte slice in place.
+func ZeroBytes(b []byte) {
+	for i := range b {
+		b[i] = 0
+	}
+}
 
 // the length of name should be 20 characters
 func ValidateLengthName(name string) bool {
@@ -171,16 +173,10 @@ func USDMarketFromAsset(asset utils.AssetType) (values.Market, error) {
 }
 
 func IsImportedAccount(assetType libutils.AssetType, acc *sharedW.Account) bool {
-	switch assetType {
-	case libutils.BTCWalletAsset:
-		return acc.AccountNumber == btc.ImportedAccountNumber
-
-	case libutils.DCRWalletAsset:
+	if assetType == libutils.DCRWalletAsset {
 		return acc.Number == dcr.ImportedAccountNumber
-
-	default:
-		return false
 	}
+	return false
 }
 
 // GetNumberOfRAM returns the total number of RAM available in gigabytes.

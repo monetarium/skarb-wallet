@@ -151,29 +151,23 @@ func (mgr *AssetsManager) SetDarkMode(data bool) {
 }
 
 // GetCurrencyConversionExchange returns the currency conversion exchange.
+// FX rate sourcing was dropped in v1; this returns the persisted preference
+// only and the default placeholder when none is set.
 func (mgr *AssetsManager) GetCurrencyConversionExchange() string {
-	if mgr.RateSource != nil {
-		return mgr.RateSource.Name()
-	}
 	var key string
 	mgr.ReadAppConfigValue(sharedW.CurrencyConversionConfigKey, &key)
 	if key == "" {
-		return values.DefaultExchangeValue // default exchange value
+		return values.DefaultExchangeValue
 	}
 	return key
 }
 
-// SetCurrencyConversionExchange sets the currency conversion exchange.
+// SetCurrencyConversionExchange persists the currency conversion exchange
+// preference. Live rate fetching is disabled in v1 — see PHASE1_STATUS.
 func (mgr *AssetsManager) SetCurrencyConversionExchange(xc string) {
 	mgr.rateMutex.Lock()
 	defer mgr.rateMutex.Unlock()
 	mgr.SaveAppConfigValue(sharedW.CurrencyConversionConfigKey, xc)
-	go func() {
-		err := mgr.RateSource.ToggleSource(xc)
-		if err != nil {
-			log.Errorf("Failed to toggle rate source: %v", err)
-		}
-	}()
 }
 
 // ExchangeRateFetchingEnabled returns true if privacy mode isn't turned on and
@@ -225,10 +219,6 @@ func (mgr *AssetsManager) SetTransactionsNotifications(data bool) {
 // SetPrivacyMode sets the privacy mode for the app.
 func (mgr *AssetsManager) SetPrivacyMode(isActive bool) {
 	mgr.SaveAppConfigValue(sharedW.PrivacyModeConfigKey, isActive)
-	mgr.RateSource.ToggleStatus(isActive)
-	if !isActive && mgr.GetCurrencyConversionExchange() != values.DefaultExchangeValue {
-		go mgr.RateSource.Refresh(true)
-	}
 }
 
 // IsPrivacyModeOn checks if the privacy mode is set.

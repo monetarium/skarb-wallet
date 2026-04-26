@@ -50,8 +50,7 @@ type AssetsManager struct {
 	cancelFuncs  []context.CancelFunc
 	chainsParams utils.ChainsParams
 
-	ConsensusAgenda *dcr.ConsensusAgenda
-	rateMutex       sync.Mutex
+	rateMutex sync.Mutex
 
 	toast *notification.Toast
 
@@ -140,7 +139,6 @@ func NewAssetsManager(rootDir, logDir string, netType utils.NetworkType) (*Asset
 		return nil, err
 	}
 
-	mgr.ConsensusAgenda = dcr.NewConsensusAgenda(mgr.chainsParams.DCR, mwDB)
 	mgr.params.DB = mwDB
 
 	mgr.cleanDeletedWallets()
@@ -300,11 +298,6 @@ func (mgr *AssetsManager) OpenedWalletsCount() int32 {
 // PiKeys returns the sanctioned Politeia keys for the current network.
 func (mgr *AssetsManager) PiKeys() [][]byte {
 	return mgr.chainsParams.DCR.PiKeys
-}
-
-// AllVoteAgendas returns all agendas of all stake versions for the active network.
-func (mgr *AssetsManager) AllVoteAgendas(newestFirst bool) ([]*dcr.Agenda, error) {
-	return mgr.ConsensusAgenda.AllVoteAgendas(mgr.chainsParams.DCR, newestFirst)
 }
 
 // sortWallets returns the watchonly wallets ordered last.

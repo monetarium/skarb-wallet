@@ -25,11 +25,13 @@ require (
 	github.com/kevinburke/nacl v0.0.0-20190829012316-f3ed23dbd7f8
 	github.com/lightninglabs/neutrino v0.16.1-0.20240814152458-81d6cd2d2da5
 	github.com/ltcsuite/ltcd v0.23.6
+	github.com/ltcsuite/ltcd/ltcutil v1.1.4-0.20250505084124-c37ac1524e04
 	github.com/monetarium/monetarium-explorer v0.0.0-20260420121235-777c59db0ae4
 	github.com/monetarium/monetarium-node/addrmgr v1.1.0
 	github.com/monetarium/monetarium-node/blockchain/stake v1.1.0
 	github.com/monetarium/monetarium-node/chaincfg v1.1.0
 	github.com/monetarium/monetarium-node/chaincfg/chainhash v1.1.0
+	github.com/monetarium/monetarium-node/connmgr v1.1.0
 	github.com/monetarium/monetarium-node/dcrec/secp256k1 v1.1.0
 	github.com/monetarium/monetarium-node/dcrutil v1.1.0
 	github.com/monetarium/monetarium-node/hdkeychain v1.1.0
@@ -53,6 +55,7 @@ require (
 
 require (
 	decred.org/cspp/v2 v2.4.0 // indirect
+	decred.org/dcrwallet/v5 v5.0.3 // indirect
 	gioui.org/cpu v0.0.0-20210817075930-8d6a761490d2 // indirect
 	gioui.org/shader v1.0.8 // indirect
 	github.com/AndreasBriese/bbloom v0.0.0-20190825152654-46b345b51c96 // indirect
@@ -92,6 +95,8 @@ require (
 	github.com/decred/dcrd/dcrec v1.0.1 // indirect
 	github.com/decred/dcrd/dcrec/edwards/v2 v2.0.4 // indirect
 	github.com/decred/dcrd/dcrec/secp256k1/v4 v4.4.0 // indirect
+	github.com/decred/dcrd/dcrjson/v4 v4.2.0 // indirect
+	github.com/decred/dcrd/rpc/jsonrpc/types/v4 v4.4.0 // indirect
 	github.com/decred/dcrd/txscript/v4 v4.1.2 // indirect
 	github.com/decred/dcrd/wire v1.7.2 // indirect
 	github.com/decred/dcrtime v0.0.0-20191018193024-8d8b4ef0458e // indirect
@@ -118,7 +123,7 @@ require (
 	github.com/gofrs/flock v0.8.1 // indirect
 	github.com/gogo/protobuf v1.3.2 // indirect
 	github.com/golang/freetype v0.0.0-20170609003504-e2365dfdc4a0 // indirect
-	github.com/golang/glog v1.2.4 // indirect
+	github.com/golang/glog v1.2.5 // indirect
 	github.com/golang/protobuf v1.5.4 // indirect
 	github.com/golang/snappy v0.0.5-0.20220116011046-fa5810519dcb // indirect
 	github.com/google/go-cmp v0.7.0 // indirect
@@ -146,8 +151,8 @@ require (
 	github.com/lightningnetwork/lnd/queue v1.0.1 // indirect
 	github.com/lightningnetwork/lnd/ticker v1.0.0 // indirect
 	github.com/lightningnetwork/lnd/tlv v1.0.2 // indirect
+	github.com/ltcsuite/ltcd/btcec/v2 v2.3.2 // indirect
 	github.com/ltcsuite/ltcd/chaincfg/chainhash v1.0.2 // indirect
-	github.com/ltcsuite/ltcd/ltcutil v1.1.4-0.20250505084124-c37ac1524e04 // indirect
 	github.com/ltcsuite/secp256k1 v0.1.1 // indirect
 	github.com/marcopeereboom/sbox v1.1.0 // indirect
 	github.com/mattn/go-runewidth v0.0.13 // indirect
@@ -156,7 +161,6 @@ require (
 	github.com/monetarium/monetarium-node/blockchain/standalone v1.1.0 // indirect
 	github.com/monetarium/monetarium-node/certgen v1.1.0 // indirect
 	github.com/monetarium/monetarium-node/cointype v1.1.0 // indirect
-	github.com/monetarium/monetarium-node/connmgr v1.1.0 // indirect
 	github.com/monetarium/monetarium-node/container/lru v1.1.0 // indirect
 	github.com/monetarium/monetarium-node/crypto/blake256 v1.1.0 // indirect
 	github.com/monetarium/monetarium-node/crypto/rand v1.1.0 // indirect
@@ -192,7 +196,7 @@ require (
 	golang.org/x/term v0.37.0 // indirect
 	golang.org/x/time v0.9.0 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260420184626-e10c466a9529 // indirect
-	google.golang.org/grpc v1.71.0 // indirect
+	google.golang.org/grpc v1.76.0 // indirect
 	google.golang.org/protobuf v1.36.11 // indirect
 	gopkg.in/ini.v1 v1.67.0 // indirect
 	gopkg.in/tomb.v1 v1.0.0-20141024135613-dd632973f1e7 // indirect

@@ -104,13 +104,8 @@ func (wallet *Wallet) prepare() (err error) {
 
 	// open database for indexing transactions for faster loading
 	var dbName string
-	switch wallet.Type {
-	case utils.DCRWalletAsset:
+	if wallet.Type == utils.DCRWalletAsset {
 		dbName = walletdata.DCRDbName
-	case utils.BTCWalletAsset:
-		dbName = walletdata.BTCDBName
-	case utils.LTCWalletAsset:
-		dbName = walletdata.LTCDBName
 	}
 
 	walletDataDBPath := filepath.Join(wallet.dataDir(), dbName)
@@ -184,9 +179,6 @@ func (wallet *Wallet) Shutdown() {
 }
 
 func (wallet *Wallet) TargetTimePerBlockMinutes() float64 {
-	if wallet.Type == utils.BTCWalletAsset {
-		return wallet.chainsParams.BTC.TargetTimePerBlock.Minutes()
-	}
 	return wallet.chainsParams.DCR.TargetTimePerBlock.Minutes()
 }
 
@@ -647,16 +639,10 @@ func (wallet *Wallet) saveNewWallet(setupWallet func() error) error {
 
 func (wallet *Wallet) IsWatchingOnlyWallet() bool {
 	if w, ok := wallet.loader.GetLoadedWallet(); ok {
-		switch wallet.Type {
-		case utils.DCRWalletAsset:
+		if wallet.Type == utils.DCRWalletAsset {
 			return w.DCR.WatchingOnly()
-		case utils.BTCWalletAsset:
-			return w.BTC.Manager.WatchOnly()
-		case utils.LTCWalletAsset:
-			return w.LTC.Manager.WatchOnly()
 		}
 	}
-
 	return false
 }
 
@@ -675,16 +661,10 @@ func (wallet *Wallet) OpenWallet() error {
 // WalletOpened checks if the upstream loader instance of the asset wallet
 // is loaded (i.e. open).
 func (wallet *Wallet) WalletOpened() bool {
-	switch wallet.Type {
-	case utils.BTCWalletAsset:
-		return wallet.Internal().BTC != nil
-	case utils.DCRWalletAsset:
+	if wallet.Type == utils.DCRWalletAsset {
 		return wallet.Internal().DCR != nil
-	case utils.LTCWalletAsset:
-		return wallet.Internal().LTC != nil
-	default:
-		return false
 	}
+	return false
 }
 
 func (wallet *Wallet) UnlockWallet(privPass string) (err error) {
@@ -693,14 +673,9 @@ func (wallet *Wallet) UnlockWallet(privPass string) (err error) {
 		return errors.New(utils.ErrWalletNotLoaded)
 	}
 
-	switch wallet.Type {
-	case utils.BTCWalletAsset:
-		err = loadedWallet.BTC.Unlock([]byte(privPass), nil)
-	case utils.DCRWalletAsset:
+	if wallet.Type == utils.DCRWalletAsset {
 		ctx, _ := wallet.ShutdownContextWithCancel()
 		err = loadedWallet.DCR.Unlock(ctx, []byte(privPass), nil)
-	case utils.LTCWalletAsset:
-		err = loadedWallet.LTC.Unlock([]byte(privPass), nil)
 	}
 
 	if err != nil {
@@ -716,15 +691,8 @@ func (wallet *Wallet) LockWallet() {
 		return
 	}
 
-	if !wallet.IsLocked() {
-		switch wallet.Type {
-		case utils.BTCWalletAsset:
-			loadedWallet.BTC.Lock()
-		case utils.DCRWalletAsset:
-			loadedWallet.DCR.Lock()
-		case utils.LTCWalletAsset:
-			loadedWallet.LTC.Lock()
-		}
+	if !wallet.IsLocked() && wallet.Type == utils.DCRWalletAsset {
+		loadedWallet.DCR.Lock()
 	}
 }
 
@@ -733,17 +701,10 @@ func (wallet *Wallet) IsLocked() bool {
 	if !ok {
 		return false
 	}
-
-	switch wallet.Type {
-	case utils.BTCWalletAsset:
-		return loadedWallet.BTC.Locked()
-	case utils.DCRWalletAsset:
+	if wallet.Type == utils.DCRWalletAsset {
 		return loadedWallet.DCR.Locked()
-	case utils.LTCWalletAsset:
-		return loadedWallet.LTC.Locked()
-	default:
-		return false
 	}
+	return false
 }
 
 // ChangePrivatePassphraseForWallet attempts to change the wallet's passphrase and re-encrypts the seed with the new passphrase.
@@ -803,14 +764,9 @@ func (wallet *Wallet) changePrivatePassphrase(oldPass []byte, newPass []byte) (e
 		}
 	}()
 
-	switch wallet.Type {
-	case utils.BTCWalletAsset:
-		err = wallet.Internal().BTC.ChangePrivatePassphrase(oldPass, newPass)
-	case utils.DCRWalletAsset:
+	if wallet.Type == utils.DCRWalletAsset {
 		ctx, _ := wallet.ShutdownContextWithCancel()
 		err = wallet.Internal().DCR.ChangePrivatePassphrase(ctx, oldPass, newPass)
-	case utils.LTCWalletAsset:
-		err = wallet.Internal().LTC.ChangePrivatePassphrase(oldPass, newPass)
 	}
 	if err != nil {
 		return utils.TranslateError(err)
@@ -851,13 +807,8 @@ func (wallet *Wallet) deleteWallet(privatePassphrase string) error {
 func (wallet *Wallet) LogFile() string {
 	wallet.mu.RLock()
 	defer wallet.mu.RUnlock()
-	switch wallet.Type {
-	case utils.BTCWalletAsset:
-		return filepath.Join(wallet.logDir, btcLogFilename)
-	case utils.DCRWalletAsset:
+	if wallet.Type == utils.DCRWalletAsset {
 		return filepath.Join(wallet.logDir, dcrLogFilename)
-	case utils.LTCWalletAsset:
-		return filepath.Join(wallet.logDir, ltcLogFilename)
 	}
 	return ""
 }

@@ -214,7 +214,7 @@ func (asset *Asset) SpvSync() error {
 	asset.syncing = true
 
 	addr := &net.TCPAddr{IP: net.ParseIP("::1"), Port: 0}
-	addrManager := addrmgr.New(asset.DataDir(), net.LookupIP) // TODO: be mindful of tor
+	addrManager := addrmgr.New(asset.DataDir()) // TODO: be mindful of tor
 	lp := p2p.NewLocalPeer(asset.chainParams, addr, addrManager)
 
 	// Set the node to only connect to remote peers whose advertised best block
