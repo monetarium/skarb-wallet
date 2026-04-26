@@ -18,6 +18,7 @@ import (
 	"gioui.org/widget/material"
 
 	"github.com/monetarium/monetarium-cryptopower/app"
+	"github.com/monetarium/monetarium-cryptopower/libwallet/assets/dcr"
 	sharedW "github.com/monetarium/monetarium-cryptopower/libwallet/assets/wallet"
 	"github.com/monetarium/monetarium-cryptopower/libwallet/txhelper"
 	"github.com/monetarium/monetarium-cryptopower/libwallet/utils"
@@ -26,6 +27,7 @@ import (
 	"github.com/monetarium/monetarium-cryptopower/ui/modal"
 	"github.com/monetarium/monetarium-cryptopower/ui/page/components"
 	"github.com/monetarium/monetarium-cryptopower/ui/values"
+	"github.com/monetarium/monetarium-node/cointype"
 )
 
 const (
@@ -64,9 +66,10 @@ type TransactionsPage struct {
 
 	selectedTxCategoryTab int
 
-	statusDropDown *cryptomaterial.DropDown
-	orderDropDown  *cryptomaterial.DropDown
-	walletDropDown *cryptomaterial.DropDown
+	statusDropDown   *cryptomaterial.DropDown
+	orderDropDown    *cryptomaterial.DropDown
+	walletDropDown   *cryptomaterial.DropDown
+	coinTypeDropDown *cryptomaterial.DropDown
 	filterBtn      *cryptomaterial.Clickable
 	exportBtn      *cryptomaterial.Clickable
 	isFilterOpen   bool
@@ -128,7 +131,35 @@ func NewTransactionsPage(l *load.Load, wallet sharedW.Asset) *TransactionsPage {
 	settingCommonDropdown(pg.Theme, pg.orderDropDown)
 	pg.orderDropDown.SetConvertTextSize(pg.ConvertTextSize)
 
+	pg.initCoinTypeDropdown()
+
 	return pg
+}
+
+// initCoinTypeDropdown rebuilds the asset filter dropdown from the selected
+// wallet's active coin types. The first item is always "All assets"; the
+// remaining items are pulled from chaincfg.Params.GetActiveSKATypes() (plus
+// VAR), so the dropdown reflects whatever is currently active on chain.
+func (pg *TransactionsPage) initCoinTypeDropdown() {
+	items := []cryptomaterial.DropDownItem{{Text: "All assets"}}
+	if dcrAsset, ok := pg.selectedWallet.(*dcr.Asset); ok {
+		for _, ct := range dcrAsset.ActiveCoinTypes() {
+			items = append(items, cryptomaterial.DropDownItem{Text: ct.String()})
+		}
+	} else {
+		// Multi-wallet view (no specific wallet selected) — fall back to a
+		// minimal list with VAR + SKA-1 which is what is active on testnet
+		// and mainnet at the moment. Refresh once a wallet is picked.
+		items = append(items,
+			cryptomaterial.DropDownItem{Text: cointype.CoinTypeVAR.String()},
+			cryptomaterial.DropDownItem{Text: cointype.CoinType(1).String()},
+		)
+	}
+	pg.coinTypeDropDown = pg.Theme.DropdownWithCustomPos(items, values.CoinTypeDropdownGroup, 2, 0, false)
+	pg.coinTypeDropDown.Width = values.MarginPadding100
+	pg.coinTypeDropDown.CollapsedLayoutTextDirection = layout.E
+	pg.coinTypeDropDown.SetConvertTextSize(pg.ConvertTextSize)
+	settingCommonDropdown(pg.Theme, pg.coinTypeDropDown)
 }
 
 func NewTransactionsPageWithType(l *load.Load, selectedTab int, wallet sharedW.Asset) *TransactionsPage {
@@ -292,7 +323,31 @@ func (pg *TransactionsPage) fetchTransactions(offset, pageSize int32) (txs []*mu
 		txs, totalTxs, err = pg.loadTransactions(wal, offset, pageSize, orderNewest)
 	}
 
-	return txs, totalTxs, isReset, err
+	txs = pg.filterByCoinType(txs)
+	return txs, len(txs), isReset, err
+}
+
+// filterByCoinType drops any transactions whose CoinType differs from the one
+// selected in the coin-type filter dropdown. The "All assets" sentinel skips
+// the filter entirely.
+func (pg *TransactionsPage) filterByCoinType(in []*multiWalletTx) []*multiWalletTx {
+	if pg.coinTypeDropDown == nil {
+		return in
+	}
+	picked := pg.coinTypeDropDown.Selected()
+	if picked == "" || picked == "All assets" {
+		return in
+	}
+	out := in[:0]
+	for _, mw := range in {
+		if mw.Transaction == nil {
+			continue
+		}
+		if cointype.CoinType(mw.CoinType).String() == picked {
+			out = append(out, mw)
+		}
+	}
+	return out
 }
 
 func (pg *TransactionsPage) multiWalletTxns(offset, pageSize int32, newestFirst bool) ([]*multiWalletTx, int, error) {
@@ -488,6 +543,12 @@ func (pg *TransactionsPage) rightDropdown(gtx C) D {
 	return layout.E.Layout(gtx, func(gtx C) D {
 		return layout.Flex{}.Layout(gtx,
 			layout.Rigid(pg.statusDropDown.Layout),
+			layout.Rigid(func(gtx C) D {
+				if pg.coinTypeDropDown == nil {
+					return D{}
+				}
+				return pg.coinTypeDropDown.Layout(gtx)
+			}),
 			layout.Rigid(pg.orderDropDown.Layout),
 		)
 	})
@@ -618,6 +679,11 @@ func (pg *TransactionsPage) HandleUserInteractions(gtx C) {
 			pg.selectedWallet = pg.assetWallets[assetIndex]
 		}
 		pg.refreshAvailableTxType()
+		pg.initCoinTypeDropdown() // refresh asset filter for the newly selected wallet
+		go pg.scroll.FetchScrollData(false, pg.ParentWindow(), true)
+	}
+
+	if pg.coinTypeDropDown != nil && pg.coinTypeDropDown.Changed(gtx) {
 		go pg.scroll.FetchScrollData(false, pg.ParentWindow(), true)
 	}
 
@@ -630,6 +696,9 @@ func (pg *TransactionsPage) HandleUserInteractions(gtx C) {
 	dropDownList := []*cryptomaterial.DropDown{pg.statusDropDown}
 	if pg.walletDropDown != nil {
 		dropDownList = append(dropDownList, pg.walletDropDown)
+	}
+	if pg.coinTypeDropDown != nil {
+		dropDownList = append(dropDownList, pg.coinTypeDropDown)
 	}
 	cryptomaterial.DisplayOneDropdown(gtx, dropDownList...)
 

@@ -50,6 +50,12 @@ func (asset *Asset) DecodeTransaction(walletTx *sharedW.TxInfoFromWallet, netPar
 		txFee = dcrutil.Amount(totalWalletUnmixedInputs - (totalWalletMixedOutputs + mixChange))
 	}
 
+	// All outputs in a Monetarium tx share the same CoinType.
+	var txCoinType uint8
+	if len(msgTx.TxOut) > 0 {
+		txCoinType = uint8(msgTx.TxOut[0].CoinType)
+	}
+
 	return &sharedW.Transaction{
 		Hash:        msgTx.TxHash().String(),
 		Type:        txType,
@@ -71,6 +77,7 @@ func (asset *Asset) DecodeTransaction(walletTx *sharedW.TxInfoFromWallet, netPar
 		Amount:    amount,
 		Inputs:    inputs,
 		Outputs:   outputs,
+		CoinType:  txCoinType,
 
 		VoteVersion:     int32(ssGenVersion),
 		LastBlockValid:  lastBlockValid,
@@ -147,6 +154,7 @@ func (asset *Asset) decodeTxOutputs(mtx *wire.MsgTx, netParams *chaincfg.Params,
 			ScriptType:    scriptType,
 			Address:       address, // correct address, account name and number set below if this is a wallet output
 			AccountNumber: -1,
+			CoinType:      uint8(txOut.CoinType),
 		}
 
 		// override address and account details if this is wallet output

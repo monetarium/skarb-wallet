@@ -318,6 +318,13 @@ type Transaction struct {
 	Inputs    []*TxInput  `json:"inputs"`
 	Outputs   []*TxOutput `json:"outputs"`
 
+	// CoinType identifies which Monetarium asset moved in this transaction.
+	// 0 = VAR; 1..255 = SKAn. All outputs share the same CoinType so this is
+	// the asset of the transaction as a whole. Older databases that pre-date
+	// the multi-coin patch will read back as 0 (VAR), which matches the
+	// pre-fork behaviour for migrated rows.
+	CoinType uint8 `storm:"index" json:"coin_type,omitempty"`
+
 	// Vote Info (DCR fields)
 	VoteVersion        int32  `json:"vote_version,omitempty"`
 	LastBlockValid     bool   `json:"last_block_valid,omitempty"`
@@ -343,6 +350,10 @@ type TxOutput struct {
 	Address       string `json:"address"`
 	Internal      bool   `json:"internal"`
 	AccountNumber int32  `json:"account_number"`
+	// CoinType identifies which Monetarium asset this output carries.
+	// 0 = VAR; 1..255 = SKAn. All outputs in a single tx share the same
+	// CoinType, so the tx-level CoinType is also derivable from outputs[0].
+	CoinType uint8 `json:"coin_type,omitempty"`
 }
 
 // TxInfoFromWallet contains tx data that relates to the querying wallet.

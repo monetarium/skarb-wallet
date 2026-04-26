@@ -15,6 +15,7 @@ import (
 	"gioui.org/widget"
 
 	"github.com/monetarium/monetarium-cryptopower/app"
+	"github.com/monetarium/monetarium-cryptopower/libwallet/assets/dcr"
 	sharedW "github.com/monetarium/monetarium-cryptopower/libwallet/assets/wallet"
 	"github.com/monetarium/monetarium-cryptopower/libwallet/utils"
 	"github.com/monetarium/monetarium-cryptopower/ui/cryptomaterial"
@@ -22,6 +23,7 @@ import (
 	"github.com/monetarium/monetarium-cryptopower/ui/modal"
 	"github.com/monetarium/monetarium-cryptopower/ui/page/components"
 	"github.com/monetarium/monetarium-cryptopower/ui/values"
+	"github.com/monetarium/monetarium-node/cointype"
 	qrcode "github.com/yeqown/go-qrcode"
 	"golang.org/x/exp/shiny/materialdesign/icons"
 )
@@ -52,7 +54,13 @@ type Page struct {
 
 	walletDropdown     *components.WalletDropdown
 	accountDropdown    *components.AccountDropdown
+	coinTypeDropdown   *components.CoinTypeDropdown
 	hideWalletDropdown bool
+
+	// expectedCoinType is the asset the user wants the sender to deposit. It's
+	// purely an instruction shown alongside the address — the address itself
+	// is derived from the same HD path regardless of which CoinType arrives.
+	expectedCoinType cointype.CoinType
 
 	isCopying         bool
 	backdrop          *widget.Clickable
@@ -101,6 +109,14 @@ func NewReceivePage(l *load.Load, wallet sharedW.Asset) *Page {
 	pg.closeButton.TextSize = values.TextSize16
 	pg.closeButton.Inset = layout.Inset{Top: values.MarginPadding12, Bottom: values.MarginPadding12}
 	pg.initWalletSelectors(wallet)
+	pg.coinTypeDropdown = components.NewCoinTypeDropdown(l).
+		SetChangedCallback(func(ct cointype.CoinType) {
+			pg.expectedCoinType = ct
+		})
+	if dcrAsset, ok := pg.selectedWallet.(*dcr.Asset); ok {
+		pg.coinTypeDropdown.Setup(dcrAsset)
+		pg.expectedCoinType = pg.coinTypeDropdown.Selected()
+	}
 
 	return pg
 }
@@ -111,6 +127,12 @@ func (pg *Page) initWalletSelectors(wallet sharedW.Asset) {
 			pg.selectedWallet = wallet
 			if pg.accountDropdown != nil {
 				pg.accountDropdown.Setup(wallet)
+			}
+			if pg.coinTypeDropdown != nil {
+				if dcrAsset, ok := wallet.(*dcr.Asset); ok {
+					pg.coinTypeDropdown.Setup(dcrAsset)
+					pg.expectedCoinType = pg.coinTypeDropdown.Selected()
+				}
 			}
 		}).
 		EnableWatchOnlyWallets(true).
@@ -258,6 +280,22 @@ func (pg *Page) contentLayout(gtx C) D {
 							return layout.Inset{Top: values.MarginPadding16}.Layout(gtx, func(gtx C) D {
 								return pg.accountDropdown.Layout(gtx, values.String(values.StrAccount))
 							})
+						}),
+						layout.Rigid(func(gtx C) D {
+							if pg.coinTypeDropdown == nil {
+								return D{}
+							}
+							return layout.Inset{Top: values.MarginPadding12}.Layout(gtx, func(gtx C) D {
+								return pg.coinTypeDropdown.Layout(gtx, "Expected asset")
+							})
+						}),
+						layout.Rigid(func(gtx C) D {
+							hint := pg.Theme.Caption(fmt.Sprintf(
+								"Same address receives any active asset. Tell the sender to deposit %s.",
+								pg.expectedCoinType,
+							))
+							hint.Color = pg.Theme.Color.GrayText2
+							return layout.Inset{Top: values.MarginPadding6}.Layout(gtx, hint.Layout)
 						}),
 						layout.Rigid(func(gtx C) D {
 							return components.VerticalInset(values.MarginPadding24).Layout(gtx, pg.Theme.Separator().Layout)
@@ -449,6 +487,9 @@ func (pg *Page) addressLayout(gtx C) D {
 func (pg *Page) HandleUserInteractions(gtx C) {
 	pg.walletDropdown.Handle(gtx)
 	pg.accountDropdown.Handle(gtx)
+	if pg.coinTypeDropdown != nil {
+		pg.coinTypeDropdown.Handle(gtx)
+	}
 	if pg.backdrop.Clicked(gtx) {
 		pg.isNewAddr = false
 	}

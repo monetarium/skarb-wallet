@@ -32,6 +32,7 @@ import (
 	"github.com/monetarium/monetarium-cryptopower/ui/load"
 	pageutils "github.com/monetarium/monetarium-cryptopower/ui/utils"
 	"github.com/monetarium/monetarium-cryptopower/ui/values"
+	"github.com/monetarium/monetarium-node/cointype"
 )
 
 const (
@@ -388,6 +389,17 @@ func LayoutTransactionRow(gtx C, l *load.Load, wal sharedW.Asset, tx *sharedW.Tr
 
 			return layout.E.Layout(gtx, func(gtx C) D {
 				return layout.Flex{Alignment: layout.Baseline}.Layout(gtx,
+					layout.Rigid(func(gtx C) D {
+						// Show the coin-type chip ("VAR" / "SKA-n") alongside
+						// the row's status. Decoded transactions populated by
+						// libwallet/assets/dcr/decodetx.go set tx.CoinType from
+						// the wire-level value; older rows that pre-date the
+						// patch read back as 0 (VAR).
+						chip := l.Theme.Label(l.ConvertTextSize(values.TextSize14), cointype.CoinType(tx.CoinType).String())
+						chip.Color = l.Theme.Color.GrayText2
+						chip.Font.Weight = font.SemiBold
+						return layout.Inset{Right: values.MarginPadding8}.Layout(gtx, chip.Layout)
+					}),
 					layout.Rigid(func(gtx C) D {
 						statusIcon := l.Theme.Icons.ConfirmIcon
 						if TxConfirmations(wal, tx) < wal.RequiredConfirmations() {
