@@ -667,19 +667,28 @@ func (sp *startPage) settingsOptionsLayout(gtx C) D {
 
 // languagePickerBar renders only the top-right language dropdown — used as an
 // overlay on the intro slider screens which don't render the full header bar.
+// Uses a cryptomaterial.LinearLayout with Alignment: layout.Middle so the
+// label and the dropdown share the same vertical centre line (a plain
+// layout.Flex with the label as a Rigid leaves them visually offset because
+// the dropdown's chip is taller than the bare text).
 func (sp *startPage) languagePickerBar(gtx C) D {
 	return layout.Inset{
 		Top:    values.MarginPadding12,
-		Right:  values.MarginPadding12,
+		Right:  values.MarginPadding16,
 		Bottom: values.MarginPadding0,
 		Left:   values.MarginPadding12,
 	}.Layout(gtx, func(gtx C) D {
 		return layout.E.Layout(gtx, func(gtx C) D {
-			return layout.Flex{Axis: layout.Horizontal, Alignment: layout.Middle}.Layout(gtx,
+			return cryptomaterial.LinearLayout{
+				Width:       cryptomaterial.WrapContent,
+				Height:      cryptomaterial.WrapContent,
+				Orientation: layout.Horizontal,
+				Alignment:   layout.Middle,
+			}.Layout(gtx,
 				layout.Rigid(func(gtx C) D {
 					lbl := sp.Theme.Label(values.TextSize16, values.String(values.StrLanguage))
 					lbl.Font.Weight = font.Bold
-					return layout.Inset{Right: values.MarginPadding8}.Layout(gtx, lbl.Layout)
+					return layout.Inset{Right: values.MarginPadding10}.Layout(gtx, lbl.Layout)
 				}),
 				layout.Rigid(sp.languageDropdown.Layout),
 			)
@@ -714,14 +723,21 @@ func (sp *startPage) pageHeaderLayout(gtx C, headerText string, hideHeaderText b
 		}),
 		// Right-aligned language picker: appears on every onboarding screen
 		// (welcome / introduction sliders / Choose-setup-type) so the user can
-		// switch to Ukrainian before they even start.
+		// switch language before they even start. Wrapped in a
+		// cryptomaterial.LinearLayout with Alignment: layout.Middle so the
+		// label and the dropdown chip share the same vertical centre.
 		layout.Flexed(1, func(gtx C) D {
 			return layout.E.Layout(gtx, func(gtx C) D {
-				return layout.Flex{Axis: layout.Horizontal, Alignment: layout.Middle}.Layout(gtx,
+				return cryptomaterial.LinearLayout{
+					Width:       cryptomaterial.WrapContent,
+					Height:      cryptomaterial.WrapContent,
+					Orientation: layout.Horizontal,
+					Alignment:   layout.Middle,
+				}.Layout(gtx,
 					layout.Rigid(func(gtx C) D {
 						lbl := sp.Theme.Label(values.TextSize16, values.String(values.StrLanguage))
 						lbl.Font.Weight = font.Bold
-						return layout.Inset{Right: values.MarginPadding8}.Layout(gtx, lbl.Layout)
+						return layout.Inset{Right: values.MarginPadding10}.Layout(gtx, lbl.Layout)
 					}),
 					layout.Rigid(sp.languageDropdown.Layout),
 				)

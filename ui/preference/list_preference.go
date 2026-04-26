@@ -46,9 +46,11 @@ var (
 	}
 
 	// LangOptions stores the configurable language options.
+	// Ukrainian is listed first because it's the project's primary target
+	// market; English follows as the canonical fallback.
 	LangOptions = []ItemPreference{
-		{Key: localizable.ENGLISH, Value: values.StrEnglish},
 		{Key: localizable.UKRAINIAN, Value: values.StrUkrainian},
+		{Key: localizable.ENGLISH, Value: values.StrEnglish},
 		{Key: localizable.FRENCH, Value: values.StrFrench},
 		{Key: localizable.SPANISH, Value: values.StrSpanish},
 		{Key: localizable.CHINESE, Value: values.StrChinese},
