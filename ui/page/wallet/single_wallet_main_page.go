@@ -229,30 +229,10 @@ func (swmp *SingleWalletMasterPage) initTabOptions() {
 		commonTabs = append(commonTabs[:1], append(sendTab, commonTabs[1:]...)...)
 	}
 
-	// Insert DCR-specific tabs if the wallet's asset type is DCR,
-	// and adjust the logic to exclude 'StrStakeShuffle' for watching-only wallets.
-	if swmp.selectedWallet.GetAssetType() == libutils.DCRWalletAsset {
-		dcrSpecificTabs := []string{}
-
-		// Conditionally add 'StrStakeShuffle' if the wallet is not a watch-only wallet.
-		if !swmp.selectedWallet.IsWatchingOnlyWallet() {
-			dcrSpecificTabs = append(dcrSpecificTabs, values.StrStakeShuffle)
-		}
-
-		// Always add 'StrStaking' for DCR asset type wallets.
-		dcrSpecificTabs = append(dcrSpecificTabs, values.StrStaking)
-
-		// Find the correct insertion index for DCR-specific tabs before 'StrAccounts'.
-		insertIndex := 3 // Default position before 'StrAccounts' in the commonTabs.
-
-		// If 'Send' has been added, adjust the insertIndex accordingly.
-		if !swmp.selectedWallet.IsWatchingOnlyWallet() {
-			insertIndex++
-		}
-
-		// Update the commonTabs with DCR-specific items at the determined index.
-		commonTabs = append(commonTabs[:insertIndex], append(dcrSpecificTabs, commonTabs[insertIndex:]...)...)
-	}
+	// Decred-only StakeShuffle / Staking tabs are intentionally NOT added in
+	// the Monetarium fork — the v1 wallet does not surface PoS staking or
+	// CoinShuffle++ mixing UI. Re-introduce these blocks when those features
+	// are added back.
 
 	swmp.PageNavigationTab = swmp.Theme.SegmentedControl(commonTabs, cryptomaterial.SegmentTypeSplit)
 	swmp.PageNavigationTab.SetEnableSwipe(false)
@@ -420,6 +400,14 @@ func (swmp *SingleWalletMasterPage) navigateToSelectedTab() {
 		pg = NewSettingsPage(swmp.Load, swmp.selectedWallet, swmp.showNavigationFunc, swmp.changeTab)
 	}
 
+	if pg == nil {
+		// No subpage available for this tab (e.g. removed-in-v1 staking or
+		// privacy entries triggered through stale state). Bail rather than
+		// dereferencing nil — the user stays on the current page.
+		log.Warnf("navigateToSelectedTab: no page registered for tab %q",
+			swmp.PageNavigationTab.SelectedSegment())
+		return
+	}
 	swmp.activeTab[swmp.PageNavigationTab.SelectedSegment()] = pg.ID()
 	swmp.PageNavigationTab.ScrollTo(swmp.PageNavigationTab.SelectedIndex())
 
