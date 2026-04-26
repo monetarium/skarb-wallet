@@ -31,6 +31,7 @@ require (
 	github.com/monetarium/monetarium-node/blockchain/stake v1.1.0
 	github.com/monetarium/monetarium-node/chaincfg v1.1.0
 	github.com/monetarium/monetarium-node/chaincfg/chainhash v1.1.0
+	github.com/monetarium/monetarium-node/cointype v1.1.0
 	github.com/monetarium/monetarium-node/connmgr v1.1.0
 	github.com/monetarium/monetarium-node/dcrec/secp256k1 v1.1.0
 	github.com/monetarium/monetarium-node/dcrutil v1.1.0
@@ -160,7 +161,6 @@ require (
 	github.com/mmcloughlin/addchain v0.4.0 // indirect
 	github.com/monetarium/monetarium-node/blockchain/standalone v1.1.0 // indirect
 	github.com/monetarium/monetarium-node/certgen v1.1.0 // indirect
-	github.com/monetarium/monetarium-node/cointype v1.1.0 // indirect
 	github.com/monetarium/monetarium-node/container/lru v1.1.0 // indirect
 	github.com/monetarium/monetarium-node/crypto/blake256 v1.1.0 // indirect
 	github.com/monetarium/monetarium-node/crypto/rand v1.1.0 // indirect
