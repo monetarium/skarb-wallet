@@ -6,7 +6,7 @@
 ## Статус: ✅ Build GREEN
 
 ```bash
-$ cd /Users/eldar/Documents/GitHub/wallet/monetarium-cryptopower
+$ cd path/to/monetarium-cryptopower
 $ GOFLAGS="-mod=mod" go build ./...    # exit 0
 $ GOFLAGS="-mod=mod" go build .         # produces 44MB darwin/arm64 binary
 ```
@@ -100,7 +100,7 @@ $ GOFLAGS="-mod=mod" go build .         # produces 44MB darwin/arm64 binary
 
 ### C. Multi-coin модель в libwallet (основний кусок Phase 2 з плану)
 
-Див. `/Users/eldar/.claude/plans/steady-kindling-naur.md` Phase 2:
+Див. план Phase 2 (зберігається локально, поза репозиторієм):
 - Розширити `Balance` до `map[CoinType]CoinBalance`.
 - `Asset.GetActiveCoinTypes()` через `chaincfg.Params.GetActiveSKATypes()`.
 - `ConstructTxForCoinType(coinType, ...)` обгортка.
@@ -119,7 +119,7 @@ $ GOFLAGS="-mod=mod" go build .         # produces 44MB darwin/arm64 binary
 ## Команди для роботи з форком
 
 ```bash
-cd /Users/eldar/Documents/GitHub/wallet/monetarium-cryptopower
+cd path/to/monetarium-cryptopower
 
 # Build
 GOFLAGS="-mod=mod" go build ./...
