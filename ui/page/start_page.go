@@ -788,9 +788,18 @@ func (sp *startPage) setLanguagePref(useExistingUserPreference bool) {
 }
 
 func (sp *startPage) selectedLanguageKey() string {
+	// The dropdown shows the localised, title-cased name of each language
+	// ('English', 'Українська', 'Français', …). Match against the same
+	// transformation we used when populating the items so 'Українська' maps
+	// back to localizable.UKRAINIAN. The previous comparison
+	// (lowercased selection == opt.Value) only worked when the displayed
+	// label was identical to the lookup key — which is true for English
+	// ('English' → 'english') but not for Ukrainian ('Українська' ≠ 'ukrainian')
+	// or any other locale where the localised label differs from the key.
 	selectedLang := sp.languageDropdown.Selected()
 	for _, opt := range preference.LangOptions {
-		if strings.ToLower(selectedLang) == opt.Value {
+		displayed := titler.String(values.String(opt.Value))
+		if selectedLang == displayed {
 			return opt.Key
 		}
 	}
