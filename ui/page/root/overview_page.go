@@ -18,6 +18,7 @@ import (
 	sharedW "github.com/monetarium/skarb-wallet/libwallet/assets/wallet"
 	"github.com/monetarium/skarb-wallet/ui/cryptomaterial"
 	"github.com/monetarium/skarb-wallet/ui/load"
+	"github.com/monetarium/skarb-wallet/ui/values"
 )
 
 // OverviewPageID is the unique ID of the overview page.
@@ -82,9 +83,9 @@ func (op *OverviewPage) Layout(gtx layout.Context) layout.Dimensions {
 }
 
 func (op *OverviewPage) layoutEmpty(gtx layout.Context) layout.Dimensions {
-	title := op.Theme.H4("No wallets yet")
+	title := op.Theme.H4(values.String(values.StrnoValidWalletFound))
 	title.Alignment = text.Middle
-	subtitle := op.Theme.Body1("Create or restore a Monetarium wallet to see VAR and SKA balances here.")
+	subtitle := op.Theme.Body1(values.String(values.StrCreateOrRestoreToSeeBalances))
 	subtitle.Alignment = text.Middle
 
 	return cryptomaterial.LinearLayout{
@@ -101,12 +102,14 @@ func (op *OverviewPage) layoutEmpty(gtx layout.Context) layout.Dimensions {
 }
 
 func (op *OverviewPage) layoutHeader(gtx layout.Context) layout.Dimensions {
-	title := op.Theme.H5("Overview")
+	title := op.Theme.H5(values.String(values.StrOverview))
 	title.Font.Weight = font.Bold
 	subtitle := op.Theme.Caption(fmt.Sprintf(
-		"Network: %s · %d wallet(s)",
+		"%s: %s · %d %s",
+		values.String(values.StrNetwork),
 		op.AssetsManager.NetType(),
 		op.AssetsManager.LoadedWalletsCount(),
+		values.String(values.StrWallets),
 	))
 	return cryptomaterial.LinearLayout{
 		Width:       cryptomaterial.MatchParent,

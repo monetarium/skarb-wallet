@@ -1094,4 +1094,5 @@ const (
 	StrLowStorageSpaceBody                   = "lowStorageSpaceBody"
 	StrWalletsCreationLimitTitle             = "walletCreationLimitTitle"
 	StrWalletsCreationLimitBody              = "walletCreationLimitBody"
+	StrCreateOrRestoreToSeeBalances          = "createOrRestoreToSeeBalances"
 )
