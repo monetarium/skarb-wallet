@@ -69,12 +69,15 @@ type WriteClipboard struct {
 // app.NewWindow() which does not support being called more
 // than once.
 func CreateWindow(appInfo *load.AppInfo) (*Window, error) {
-	appTitle := giouiApp.Title(values.String(values.StrAppName))
+	// Always use the full "Skarb Wallet" branding in the window title; only
+	// non-mainnet builds get a "(testnet)"-style suffix to make the network
+	// obvious. Previously mainnet showed just "Skarb" while testnet showed
+	// "Skarb Wallet (testnet)" — that asymmetry confused users.
+	appTitle := giouiApp.Title(values.String(values.StrAppWallet))
 	// appSize overwrites gioui's default app size of 'Size(800, 600)'
 	appSize := giouiApp.Size(values.AppWidth, values.AppHeight)
 	// appMinSize is the minimum size the app.
 	appMinSize := giouiApp.MinSize(values.MobileAppWidth, values.MobileAppHeight)
-	// Display network on the app title if its not on mainnet.
 	if net := appInfo.AssetsManager.NetType(); net != libutils.Mainnet {
 		appTitle = giouiApp.Title(values.StringF(values.StrAppTitle, net.Display()))
 	}

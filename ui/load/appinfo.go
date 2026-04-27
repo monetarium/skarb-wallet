@@ -198,8 +198,8 @@ func (app *AppInfo) ChangeAssetsManager(newAssetsManager *libwallet.AssetsManage
 	currentNetType, newNetType := app.AssetsManager.NetType(), newAssetsManager.NetType()
 	pageNav.ClearStackAndDisplay(networkSwitchTempPage(currentNetType, newNetType))
 
-	// Display the newNetType on the app title if its not on mainnet.
-	appTitle := giouiApp.Title(values.String(values.StrAppName))
+	// Mainnet → "Skarb Wallet"; non-mainnet → "Skarb Wallet (<netname>)".
+	appTitle := giouiApp.Title(values.String(values.StrAppWallet))
 	if newNetType != utils.Mainnet {
 		appTitle = giouiApp.Title(values.StringF(values.StrAppTitle, newNetType.Display()))
 	}

@@ -9,7 +9,7 @@ const UK = `
 "appName" = "Skarb"
 "appTitle" = "Skarb Wallet (%s)"
 "appWallet" = "Skarb Wallet"
-"welcomeNote" = "Ласкаво просимо до Skarb — гаманця мережі Monetarium."
+"welcomeNote" = "Ласкаво просимо до Skarb Wallet — гаманця мережі Monetarium."
 
 // Navigation
 "home" = "Головна"
