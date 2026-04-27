@@ -23,13 +23,13 @@ const (
 // These constants define the application version and follow the semantic
 // versioning 2.0.0 spec (http://semver.org/).
 const (
-	AppName  string = "monetarium"
+	AppName  string = "skarb"
 	AppMajor uint   = 2
 	AppMinor uint   = 1
 	AppPatch uint   = 0
 )
 
-// go build -v -ldflags "-X github.com/monetarium/monetarium-cryptopower/version.appPreRelease= -X github.com/monetarium/monetarium-cryptopower/version.appBuild=`git rev-parse --short HEAD`"
+// go build -v -ldflags "-X github.com/monetarium/skarb-wallet/version.appPreRelease= -X github.com/monetarium/skarb-wallet/version.appBuild=`git rev-parse --short HEAD`"
 var (
 	// appPreRelease is defined as a variable so it can be overridden during the
 	// build process. It MUST only contain characters from semanticAlphabet per

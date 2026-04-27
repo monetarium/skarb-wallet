@@ -13,8 +13,8 @@ import (
 	"gioui.org/op/paint"
 	"gioui.org/unit"
 	"gioui.org/widget"
-	"github.com/monetarium/monetarium-cryptopower/app"
-	"github.com/monetarium/monetarium-cryptopower/ui/values"
+	"github.com/monetarium/skarb-wallet/app"
+	"github.com/monetarium/skarb-wallet/ui/values"
 )
 
 func drawInk(gtx layout.Context, c widget.Press, highlightColor color.NRGBA) {

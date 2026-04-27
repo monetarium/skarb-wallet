@@ -1,32 +1,59 @@
 #!/usr/bin/env bash
-# Build a macOS .app bundle for Monetarium Wallet.
+# Build a macOS .app bundle for Skarb (Monetarium chain wallet).
+# Universal: arm64 + amd64. Wrapped into a DMG for distribution.
 #
-# Output: ./Monetarium.app — drag into /Applications and double-click to run.
-# The bundle is unsigned (no Gatekeeper "Open" prompt: you'll have to right-click
-# → Open the first time, or run `xattr -cr Monetarium.app`).
+# Outputs:
+#   ./Skarb.app    — drop into /Applications and double-click
+#   ./Skarb.dmg    — disk image to send/host (preserves bundle attrs)
 #
-# Usage:   ./build-macos-app.sh
+# RECIPIENT INSTRUCTIONS (after they download Skarb.dmg):
+#   1. Double-click the .dmg → Finder window opens.
+#   2. Drag Skarb.app into the /Applications shortcut shown.
+#   3. First launch: macOS may say "cannot be opened because the developer
+#      cannot be verified." Right-click Skarb.app → Open → click "Open"
+#      in the dialog. From then on it launches normally.
+#
+#   If macOS says "Skarb.app is damaged and can't be opened" then run:
+#       xattr -cr /Applications/Skarb.app
+#   That removes the com.apple.quarantine attribute the browser added.
+#
+# (The bundle is unsigned by an Apple Developer ID — that costs $99/year and
+#  needs a real legal entity. Right-click → Open and the xattr fix are the
+#  unsigned-distribution workarounds.)
 set -euo pipefail
 
 cd "$(dirname "$0")"
 
-APP_NAME="Monetarium"
-BUNDLE_ID="io.monetarium.wallet"
+APP_NAME="Skarb"
+BUNDLE_ID="io.monetarium.skarb"
 APP_DIR="${APP_NAME}.app"
+DMG_FILE="${APP_NAME}.dmg"
 VERSION_LONG="0.1.0"
 
 echo "→ Cleaning previous bundle"
-rm -rf "${APP_DIR}"
+rm -rf "${APP_DIR}" "${DMG_FILE}"
 
-echo "→ Building Go binary (stripped, paths trimmed)"
+echo "→ Building universal Go binary (arm64 + amd64 → lipo)"
 mkdir -p "${APP_DIR}/Contents/MacOS"
-# -trimpath        : strip absolute paths from compiled symbols (no /Users/<you>/...)
-# -ldflags '-s -w' : strip symbol + DWARF debug tables
-# -ldflags '-buildid=' : zero out the build-id so two builds of identical source produce identical binaries
-# -buildvcs=false  : don't embed local git commit info into the binary
-GOFLAGS="-mod=mod -trimpath" \
-  go build -trimpath -ldflags "-s -w -buildid=" -buildvcs=false \
-    -o "${APP_DIR}/Contents/MacOS/${APP_NAME}" .
+TMP_BIN_ARM=$(mktemp)
+TMP_BIN_AMD=$(mktemp)
+trap "rm -f $TMP_BIN_ARM $TMP_BIN_AMD" EXIT
+
+# arm64 (Apple Silicon native — uses host CGO toolchain).
+GOFLAGS="-mod=mod -trimpath" GOOS=darwin GOARCH=arm64 \
+    go build -trimpath -ldflags "-s -w -buildid=" -buildvcs=false -o "$TMP_BIN_ARM" .
+
+# amd64 cross from Apple Silicon: Gio needs CGO (OpenGL, AppKit) so we point
+# clang at the x86_64 macOS SDK target. Requires Xcode command line tools.
+SDKROOT=$(xcrun --sdk macosx --show-sdk-path) \
+CGO_ENABLED=1 \
+CGO_CFLAGS="-target x86_64-apple-macos11" \
+CGO_LDFLAGS="-target x86_64-apple-macos11" \
+GOFLAGS="-mod=mod -trimpath" GOOS=darwin GOARCH=amd64 \
+    go build -trimpath -ldflags "-s -w -buildid=" -buildvcs=false -o "$TMP_BIN_AMD" .
+
+lipo -create "$TMP_BIN_ARM" "$TMP_BIN_AMD" -output "${APP_DIR}/Contents/MacOS/${APP_NAME}"
+echo "  binary archs: $(lipo -archs ${APP_DIR}/Contents/MacOS/${APP_NAME})"
 
 echo "→ Generating .icns icon from appicon.png"
 mkdir -p "${APP_DIR}/Contents/Resources"
@@ -81,11 +108,39 @@ cat > "${APP_DIR}/Contents/Info.plist" <<PLIST
 </plist>
 PLIST
 
-# Strip any quarantine bit from the freshly built bundle (locally built apps
-# don't have it but it's a cheap insurance vs. user copy-paste workflows).
+echo "→ Ad-hoc signing the whole bundle (deep, force)"
+# Ad-hoc sign means no Apple Developer ID. We deliberately DO NOT pass
+# --options runtime: hardened runtime is meant for notarised apps; on an
+# ad-hoc signed app it makes Gatekeeper more aggressive and can produce a
+# bare 'cannot be opened' error after a quarantined download.
+# The --deep flag re-signs every framework / nested binary so the bundle is
+# internally consistent (no 'damaged' error).
+codesign --remove-signature "${APP_DIR}" 2>/dev/null || true
+chmod +x "${APP_DIR}/Contents/MacOS/${APP_NAME}"
+codesign --force --deep --sign - --timestamp=none \
+    --identifier "${BUNDLE_ID}" \
+    "${APP_DIR}"
+codesign --verify --deep --strict --verbose=2 "${APP_DIR}" 2>&1 | head -5
+
+echo "→ Stripping any local quarantine bit"
 xattr -cr "${APP_DIR}" 2>/dev/null || true
 
-echo "→ Done: $(pwd)/${APP_DIR}"
-echo "   Drag into /Applications and double-click."
-echo "   First run on a different machine: Gatekeeper may block — right-click → Open,"
-echo "   or 'xattr -cr /Applications/${APP_DIR}'."
+echo "→ Building ${DMG_FILE} (DMGs preserve bundle attrs through download)"
+# create-dmg is nicer if installed, but plain hdiutil works everywhere.
+TMP_DMG_DIR=$(mktemp -d)
+cp -R "${APP_DIR}" "${TMP_DMG_DIR}/"
+ln -s /Applications "${TMP_DMG_DIR}/Applications"
+hdiutil create -volname "${APP_NAME}" \
+    -srcfolder "${TMP_DMG_DIR}" \
+    -ov -format UDZO \
+    "${DMG_FILE}" > /dev/null
+rm -rf "${TMP_DMG_DIR}"
+
+echo
+echo "✅ Done."
+echo "   .app bundle: $(pwd)/${APP_DIR}"
+echo "   .dmg image:  $(pwd)/${DMG_FILE}  ← send THIS to people"
+echo
+echo "Recipient: open the DMG, drag Skarb.app to /Applications,"
+echo "then right-click → Open the first time. If macOS says 'damaged',"
+echo "they run:  xattr -cr /Applications/Skarb.app"

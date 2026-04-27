@@ -5,7 +5,7 @@ import (
 
 	"golang.org/x/exp/shiny/materialdesign/icons"
 
-	"github.com/monetarium/monetarium-cryptopower/ui/assets"
+	"github.com/monetarium/skarb-wallet/ui/assets"
 )
 
 type Icons struct {

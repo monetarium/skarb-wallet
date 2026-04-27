@@ -6,10 +6,10 @@ import (
 
 	"gioui.org/layout"
 	"gioui.org/widget"
-	"github.com/monetarium/monetarium-cryptopower/app"
-	"github.com/monetarium/monetarium-cryptopower/ui/cryptomaterial"
-	"github.com/monetarium/monetarium-cryptopower/ui/load"
-	"github.com/monetarium/monetarium-cryptopower/ui/modal"
+	"github.com/monetarium/skarb-wallet/app"
+	"github.com/monetarium/skarb-wallet/ui/cryptomaterial"
+	"github.com/monetarium/skarb-wallet/ui/load"
+	"github.com/monetarium/skarb-wallet/ui/modal"
 )
 
 // ScrollFunc is a query function that accepts offset and pagesize parameters and

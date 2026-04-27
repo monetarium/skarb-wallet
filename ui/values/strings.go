@@ -6,7 +6,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/monetarium/monetarium-cryptopower/ui/values/localizable"
+	"github.com/monetarium/skarb-wallet/ui/values/localizable"
 )
 
 const (
@@ -1094,4 +1094,6 @@ const (
 	StrLowStorageSpaceBody                   = "lowStorageSpaceBody"
 	StrWalletsCreationLimitTitle             = "walletCreationLimitTitle"
 	StrWalletsCreationLimitBody              = "walletCreationLimitBody"
+	StrCreateOrRestoreToSeeBalances          = "createOrRestoreToSeeBalances"
+	StrAmountReceived                        = "amountReceived"
 )

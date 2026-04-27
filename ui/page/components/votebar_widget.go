@@ -11,9 +11,9 @@ import (
 	"gioui.org/op/clip"
 	"gioui.org/op/paint"
 
-	"github.com/monetarium/monetarium-cryptopower/ui/cryptomaterial"
-	"github.com/monetarium/monetarium-cryptopower/ui/load"
-	"github.com/monetarium/monetarium-cryptopower/ui/values"
+	"github.com/monetarium/skarb-wallet/ui/cryptomaterial"
+	"github.com/monetarium/skarb-wallet/ui/load"
+	"github.com/monetarium/skarb-wallet/ui/values"
 )
 
 // VoteBar widget implements voting stat for proposals.

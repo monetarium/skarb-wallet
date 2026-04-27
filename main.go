@@ -11,12 +11,12 @@ import (
 
 	"gioui.org/app"
 
-	"github.com/monetarium/monetarium-cryptopower/libwallet"
-	"github.com/monetarium/monetarium-cryptopower/libwallet/utils"
-	"github.com/monetarium/monetarium-cryptopower/logger"
-	"github.com/monetarium/monetarium-cryptopower/ui"
-	_ "github.com/monetarium/monetarium-cryptopower/ui/assets"
-	"github.com/monetarium/monetarium-cryptopower/ui/load"
+	"github.com/monetarium/skarb-wallet/libwallet"
+	"github.com/monetarium/skarb-wallet/libwallet/utils"
+	"github.com/monetarium/skarb-wallet/logger"
+	"github.com/monetarium/skarb-wallet/ui"
+	_ "github.com/monetarium/skarb-wallet/ui/assets"
+	"github.com/monetarium/skarb-wallet/ui/load"
 )
 
 const (

@@ -22,16 +22,16 @@ import (
 	"gioui.org/unit"
 	"gioui.org/widget"
 
-	"github.com/monetarium/monetarium-cryptopower/app"
-	"github.com/monetarium/monetarium-cryptopower/libwallet/assets/dcr"
-	sharedW "github.com/monetarium/monetarium-cryptopower/libwallet/assets/wallet"
-	"github.com/monetarium/monetarium-cryptopower/libwallet/txhelper"
+	"github.com/monetarium/skarb-wallet/app"
+	"github.com/monetarium/skarb-wallet/libwallet/assets/dcr"
+	sharedW "github.com/monetarium/skarb-wallet/libwallet/assets/wallet"
+	"github.com/monetarium/skarb-wallet/libwallet/txhelper"
 
-	libutils "github.com/monetarium/monetarium-cryptopower/libwallet/utils"
-	"github.com/monetarium/monetarium-cryptopower/ui/cryptomaterial"
-	"github.com/monetarium/monetarium-cryptopower/ui/load"
-	pageutils "github.com/monetarium/monetarium-cryptopower/ui/utils"
-	"github.com/monetarium/monetarium-cryptopower/ui/values"
+	libutils "github.com/monetarium/skarb-wallet/libwallet/utils"
+	"github.com/monetarium/skarb-wallet/ui/cryptomaterial"
+	"github.com/monetarium/skarb-wallet/ui/load"
+	pageutils "github.com/monetarium/skarb-wallet/ui/utils"
+	"github.com/monetarium/skarb-wallet/ui/values"
 	"github.com/monetarium/monetarium-node/cointype"
 )
 

@@ -9,12 +9,12 @@ import (
 	giouiApp "gioui.org/app"
 	"golang.org/x/text/message"
 
-	"github.com/monetarium/monetarium-cryptopower/app"
-	"github.com/monetarium/monetarium-cryptopower/device"
-	sharedW "github.com/monetarium/monetarium-cryptopower/libwallet/assets/wallet"
-	"github.com/monetarium/monetarium-cryptopower/ui/assets"
-	"github.com/monetarium/monetarium-cryptopower/ui/cryptomaterial"
-	"github.com/monetarium/monetarium-cryptopower/ui/notification"
+	"github.com/monetarium/skarb-wallet/app"
+	"github.com/monetarium/skarb-wallet/device"
+	sharedW "github.com/monetarium/skarb-wallet/libwallet/assets/wallet"
+	"github.com/monetarium/skarb-wallet/ui/assets"
+	"github.com/monetarium/skarb-wallet/ui/cryptomaterial"
+	"github.com/monetarium/skarb-wallet/ui/notification"
 )
 
 type NeedUnlockRestore func(bool)

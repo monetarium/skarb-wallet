@@ -12,7 +12,7 @@ import (
 
 	md "github.com/JohannesKaufmann/html-to-markdown"
 	"github.com/PuerkitoBio/goquery"
-	"github.com/monetarium/monetarium-cryptopower/ui/cryptomaterial"
+	"github.com/monetarium/skarb-wallet/ui/cryptomaterial"
 	"github.com/gomarkdown/markdown/ast"
 )
 

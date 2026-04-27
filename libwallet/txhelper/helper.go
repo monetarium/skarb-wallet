@@ -5,7 +5,7 @@ import (
 	"math"
 
 	"github.com/monetarium/monetarium-wallet/wallet"
-	"github.com/monetarium/monetarium-cryptopower/ui/values"
+	"github.com/monetarium/skarb-wallet/ui/values"
 	"github.com/monetarium/monetarium-node/dcrutil"
 	"github.com/monetarium/monetarium-node/wire"
 	"github.com/monetarium/monetarium-explorer/txhelpers"

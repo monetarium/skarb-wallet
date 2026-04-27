@@ -12,17 +12,20 @@ package root
 
 import (
 	"fmt"
+	"strings"
 
 	"gioui.org/font"
 	"gioui.org/layout"
 	"gioui.org/text"
 	"gioui.org/unit"
 
-	"github.com/monetarium/monetarium-cryptopower/app"
-	sharedW "github.com/monetarium/monetarium-cryptopower/libwallet/assets/wallet"
-	"github.com/monetarium/monetarium-cryptopower/ui/cryptomaterial"
-	"github.com/monetarium/monetarium-cryptopower/ui/load"
-	walletpage "github.com/monetarium/monetarium-cryptopower/ui/page/wallet"
+	"github.com/monetarium/skarb-wallet/app"
+	sharedW "github.com/monetarium/skarb-wallet/libwallet/assets/wallet"
+	"github.com/monetarium/skarb-wallet/ui/cryptomaterial"
+	"github.com/monetarium/skarb-wallet/ui/load"
+	"github.com/monetarium/skarb-wallet/ui/page/settings"
+	walletpage "github.com/monetarium/skarb-wallet/ui/page/wallet"
+	"github.com/monetarium/skarb-wallet/ui/values"
 )
 
 // HomePageID is the unique ID of the home page.
@@ -39,6 +42,7 @@ type HomePage struct {
 	walletsList   layout.List
 
 	overviewBtn cryptomaterial.Button
+	settingsBtn cryptomaterial.Button
 }
 
 type walletEntry struct {
@@ -52,7 +56,8 @@ func NewHomePage(l *load.Load) *HomePage {
 		MasterPage:  app.NewMasterPage(HomePageID),
 		Load:        l,
 		walletsList: layout.List{Axis: layout.Vertical},
-		overviewBtn: l.Theme.Button("Overview"),
+		overviewBtn: l.Theme.Button(values.String(values.StrOverview)),
+		settingsBtn: l.Theme.Button(values.String(values.StrSettings)),
 	}
 }
 
@@ -66,8 +71,15 @@ func (hp *HomePage) OnNavigatedTo() {
 		hp.Load.ToggleSync = hp.toggleWalletSync
 	}
 	if hp.CurrentPage() == nil {
-		hp.Display(NewOverviewPage(hp.Load, func() {}))
+		hp.showOverview()
 	}
+}
+
+// showOverview pushes the per-asset Overview page onto the body. Wired into
+// the wallet-detail subpage as its "back" callback so the top-left arrow on
+// each wallet sub-screen returns the user to the dashboard.
+func (hp *HomePage) showOverview() {
+	hp.Display(NewOverviewPage(hp.Load, func() {}))
 }
 
 // toggleWalletSync is the v1 Monetarium ToggleSync implementation. It runs SPV
@@ -117,11 +129,17 @@ func (hp *HomePage) OnNavigatedFrom() {
 // HandleUserInteractions wires sidebar clicks to subpage transitions.
 func (hp *HomePage) HandleUserInteractions(gtx layout.Context) {
 	if hp.overviewBtn.Clicked(gtx) {
-		hp.Display(NewOverviewPage(hp.Load, func() {}))
+		hp.showOverview()
+	}
+	if hp.settingsBtn.Clicked(gtx) {
+		// AppSettingsPage hosts the network (mainnet ↔ testnet) switcher,
+		// language, theme, and other process-wide knobs. It's a top-level
+		// modal-style page rather than a wallet-scoped one.
+		hp.ParentWindow().Display(settings.NewAppSettingsPage(hp.Load))
 	}
 	for _, entry := range hp.walletEntries {
 		if entry.click != nil && entry.click.Clicked(gtx) {
-			hp.Display(walletpage.NewSingleWalletMasterPage(hp.Load, entry.wallet, func() {}))
+			hp.Display(walletpage.NewSingleWalletMasterPage(hp.Load, entry.wallet, hp.showOverview))
 		}
 	}
 	if cur := hp.CurrentPage(); cur != nil {
@@ -151,28 +169,39 @@ func (hp *HomePage) layoutSidebar(gtx layout.Context) layout.Dimensions {
 		Orientation: layout.Vertical,
 	}.Layout(gtx,
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-			t := hp.Theme.H6("Monetarium")
+			t := hp.Theme.H6("Skarb")
 			t.Font.Weight = font.Bold
 			return t.Layout(gtx)
 		}),
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-			c := hp.Theme.Caption(fmt.Sprintf("%s · %d wallet(s)",
+			c := hp.Theme.Caption(fmt.Sprintf("%s · %d %s",
 				hp.AssetsManager.NetType(),
-				hp.AssetsManager.LoadedWalletsCount()))
+				hp.AssetsManager.LoadedWalletsCount(),
+				values.String(values.StrWallets)))
 			return c.Layout(gtx)
 		}),
 		layout.Rigid(layout.Spacer{Height: unit.Dp(12)}.Layout),
 		layout.Rigid(hp.overviewBtn.Layout),
+		layout.Rigid(layout.Spacer{Height: unit.Dp(6)}.Layout),
+		layout.Rigid(hp.settingsBtn.Layout),
+		layout.Rigid(layout.Spacer{Height: unit.Dp(4)}.Layout),
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			net := hp.Theme.Caption(fmt.Sprintf("%s: %s",
+				values.String(values.StrNetwork),
+				hp.AssetsManager.NetType()))
+			net.Color = hp.Theme.Color.GrayText3
+			return net.Layout(gtx)
+		}),
 		layout.Rigid(layout.Spacer{Height: unit.Dp(12)}.Layout),
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-			label := hp.Theme.Caption("WALLETS")
+			label := hp.Theme.Caption(strings.ToUpper(values.String(values.StrWallets)))
 			label.Color = hp.Theme.Color.GrayText2
 			return label.Layout(gtx)
 		}),
 		layout.Rigid(layout.Spacer{Height: unit.Dp(4)}.Layout),
 		layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
 			if len(hp.walletEntries) == 0 {
-				empty := hp.Theme.Body2("No wallets yet")
+				empty := hp.Theme.Body2(values.String(values.StrnoValidWalletFound))
 				empty.Alignment = text.Start
 				empty.Color = hp.Theme.Color.GrayText3
 				return empty.Layout(gtx)
@@ -212,7 +241,7 @@ func (hp *HomePage) layoutBody(gtx layout.Context) layout.Dimensions {
 			Width:     cryptomaterial.MatchParent,
 			Height:    cryptomaterial.MatchParent,
 			Direction: layout.Center,
-		}.Layout(gtx, layout.Rigid(hp.Theme.Body1("Loading…").Layout))
+		}.Layout(gtx, layout.Rigid(hp.Theme.Body1(values.String(values.StrLoading)).Layout))
 	}
 	return current.Layout(gtx)
 }

@@ -9,7 +9,7 @@ import (
 	"gioui.org/op/paint"
 	"gioui.org/unit"
 	"gioui.org/widget"
-	"github.com/monetarium/monetarium-cryptopower/ui/values"
+	"github.com/monetarium/skarb-wallet/ui/values"
 	"golang.org/x/image/draw"
 )
 

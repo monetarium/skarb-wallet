@@ -6,11 +6,11 @@ import (
 
 	"github.com/monetarium/monetarium-wallet/errors"
 	"github.com/asdine/storm"
-	"github.com/monetarium/monetarium-cryptopower/libwallet/utils"
-	"github.com/monetarium/monetarium-cryptopower/ui/values"
+	"github.com/monetarium/skarb-wallet/libwallet/utils"
+	"github.com/monetarium/skarb-wallet/ui/values"
 
-	"github.com/monetarium/monetarium-cryptopower/libwallet/assets/dcr"
-	sharedW "github.com/monetarium/monetarium-cryptopower/libwallet/assets/wallet"
+	"github.com/monetarium/skarb-wallet/libwallet/assets/dcr"
+	sharedW "github.com/monetarium/skarb-wallet/libwallet/assets/wallet"
 
 	"golang.org/x/crypto/bcrypt"
 )

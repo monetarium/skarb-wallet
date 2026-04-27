@@ -1,8 +1,8 @@
 package libwallet
 
 import (
-	sharedW "github.com/monetarium/monetarium-cryptopower/libwallet/assets/wallet"
-	libutils "github.com/monetarium/monetarium-cryptopower/libwallet/utils"
+	sharedW "github.com/monetarium/skarb-wallet/libwallet/assets/wallet"
+	libutils "github.com/monetarium/skarb-wallet/libwallet/utils"
 )
 
 type WalletMigrator struct {

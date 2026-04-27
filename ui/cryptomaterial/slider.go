@@ -11,7 +11,7 @@ import (
 	"gioui.org/op"
 	"gioui.org/op/clip"
 
-	"github.com/monetarium/monetarium-cryptopower/ui/values"
+	"github.com/monetarium/skarb-wallet/ui/values"
 )
 
 type sliderItem struct {

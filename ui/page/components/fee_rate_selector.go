@@ -8,11 +8,11 @@ import (
 	"gioui.org/layout"
 	"gioui.org/widget"
 
-	sharedW "github.com/monetarium/monetarium-cryptopower/libwallet/assets/wallet"
-	libutils "github.com/monetarium/monetarium-cryptopower/libwallet/utils"
-	"github.com/monetarium/monetarium-cryptopower/ui/cryptomaterial"
-	"github.com/monetarium/monetarium-cryptopower/ui/load"
-	"github.com/monetarium/monetarium-cryptopower/ui/values"
+	sharedW "github.com/monetarium/skarb-wallet/libwallet/assets/wallet"
+	libutils "github.com/monetarium/skarb-wallet/libwallet/utils"
+	"github.com/monetarium/skarb-wallet/ui/cryptomaterial"
+	"github.com/monetarium/skarb-wallet/ui/load"
+	"github.com/monetarium/skarb-wallet/ui/values"
 )
 
 type walletTypeCallbackFunc func() libutils.AssetType

@@ -22,7 +22,7 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 OUT_DIR="dist/windows-amd64"
-APP_NAME="monetarium"
+APP_NAME="skarb"
 
 echo "→ Cleaning ${OUT_DIR}"
 rm -rf "${OUT_DIR}"

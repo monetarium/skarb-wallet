@@ -5,11 +5,11 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/monetarium/monetarium-cryptopower/libwallet/utils"
+	"github.com/monetarium/skarb-wallet/libwallet/utils"
 	"github.com/monetarium/monetarium-wallet/errors"
 	dcrW "github.com/monetarium/monetarium-wallet/wallet"
 
-	_ "github.com/monetarium/monetarium-cryptopower/libwallet/badgerdb" // initialize badger driver
+	_ "github.com/monetarium/skarb-wallet/libwallet/badgerdb" // initialize badger driver
 )
 
 const defaultDbDriver = "bdb"

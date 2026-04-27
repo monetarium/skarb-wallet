@@ -10,14 +10,14 @@ import (
 	"gioui.org/layout"
 	"gioui.org/widget"
 
-	"github.com/monetarium/monetarium-cryptopower/app"
-	sharedW "github.com/monetarium/monetarium-cryptopower/libwallet/assets/wallet"
-	"github.com/monetarium/monetarium-cryptopower/ui/cryptomaterial"
-	"github.com/monetarium/monetarium-cryptopower/ui/load"
-	"github.com/monetarium/monetarium-cryptopower/ui/modal"
-	"github.com/monetarium/monetarium-cryptopower/ui/page/components"
-	"github.com/monetarium/monetarium-cryptopower/ui/utils"
-	"github.com/monetarium/monetarium-cryptopower/ui/values"
+	"github.com/monetarium/skarb-wallet/app"
+	sharedW "github.com/monetarium/skarb-wallet/libwallet/assets/wallet"
+	"github.com/monetarium/skarb-wallet/ui/cryptomaterial"
+	"github.com/monetarium/skarb-wallet/ui/load"
+	"github.com/monetarium/skarb-wallet/ui/modal"
+	"github.com/monetarium/skarb-wallet/ui/page/components"
+	"github.com/monetarium/skarb-wallet/ui/utils"
+	"github.com/monetarium/skarb-wallet/ui/values"
 )
 
 const AccountDetailsPageID = "AccountDetails"

@@ -7,8 +7,8 @@ import (
 
 	"github.com/monetarium/monetarium-wallet/errors"
 	w "github.com/monetarium/monetarium-wallet/wallet"
-	sharedW "github.com/monetarium/monetarium-cryptopower/libwallet/assets/wallet"
-	"github.com/monetarium/monetarium-cryptopower/ui/values"
+	sharedW "github.com/monetarium/skarb-wallet/libwallet/assets/wallet"
+	"github.com/monetarium/skarb-wallet/ui/values"
 )
 
 func (asset *Asset) RescanBlocks() error {

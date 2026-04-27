@@ -13,9 +13,9 @@ import (
 	"github.com/monetarium/monetarium-wallet/errors"
 	w "github.com/monetarium/monetarium-wallet/wallet"
 	"github.com/asdine/storm"
-	"github.com/monetarium/monetarium-cryptopower/libwallet/assets/wallet/walletdata"
-	"github.com/monetarium/monetarium-cryptopower/libwallet/internal/loader"
-	"github.com/monetarium/monetarium-cryptopower/libwallet/utils"
+	"github.com/monetarium/skarb-wallet/libwallet/assets/wallet/walletdata"
+	"github.com/monetarium/skarb-wallet/libwallet/internal/loader"
+	"github.com/monetarium/skarb-wallet/libwallet/utils"
 )
 
 type Wallet struct {

@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/ararog/timeago"
-	"github.com/monetarium/monetarium-cryptopower/ui/values"
+	"github.com/monetarium/skarb-wallet/ui/values"
 )
 
 const (

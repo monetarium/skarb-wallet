@@ -12,22 +12,22 @@ import (
 	"gioui.org/widget"
 	"gioui.org/widget/material"
 
-	"github.com/monetarium/monetarium-cryptopower/app"
-	"github.com/monetarium/monetarium-cryptopower/libwallet/assets/dcr"
-	sharedW "github.com/monetarium/monetarium-cryptopower/libwallet/assets/wallet"
-	libutils "github.com/monetarium/monetarium-cryptopower/libwallet/utils"
-	"github.com/monetarium/monetarium-cryptopower/ui/cryptomaterial"
-	"github.com/monetarium/monetarium-cryptopower/ui/load"
-	"github.com/monetarium/monetarium-cryptopower/ui/modal"
-	"github.com/monetarium/monetarium-cryptopower/ui/page/accounts"
-	"github.com/monetarium/monetarium-cryptopower/ui/page/components"
-	"github.com/monetarium/monetarium-cryptopower/ui/page/info"
-	"github.com/monetarium/monetarium-cryptopower/ui/page/receive"
-	"github.com/monetarium/monetarium-cryptopower/ui/page/seedbackup"
-	"github.com/monetarium/monetarium-cryptopower/ui/page/send"
-	"github.com/monetarium/monetarium-cryptopower/ui/page/transaction"
-	"github.com/monetarium/monetarium-cryptopower/ui/utils"
-	"github.com/monetarium/monetarium-cryptopower/ui/values"
+	"github.com/monetarium/skarb-wallet/app"
+	"github.com/monetarium/skarb-wallet/libwallet/assets/dcr"
+	sharedW "github.com/monetarium/skarb-wallet/libwallet/assets/wallet"
+	libutils "github.com/monetarium/skarb-wallet/libwallet/utils"
+	"github.com/monetarium/skarb-wallet/ui/cryptomaterial"
+	"github.com/monetarium/skarb-wallet/ui/load"
+	"github.com/monetarium/skarb-wallet/ui/modal"
+	"github.com/monetarium/skarb-wallet/ui/page/accounts"
+	"github.com/monetarium/skarb-wallet/ui/page/components"
+	"github.com/monetarium/skarb-wallet/ui/page/info"
+	"github.com/monetarium/skarb-wallet/ui/page/receive"
+	"github.com/monetarium/skarb-wallet/ui/page/seedbackup"
+	"github.com/monetarium/skarb-wallet/ui/page/send"
+	"github.com/monetarium/skarb-wallet/ui/page/transaction"
+	"github.com/monetarium/skarb-wallet/ui/utils"
+	"github.com/monetarium/skarb-wallet/ui/values"
 	"github.com/gen2brain/beeep"
 )
 
@@ -693,7 +693,12 @@ func (swmp *SingleWalletMasterPage) postTransactionNotification(t *sharedW.Trans
 		}
 		// remove trailing zeros from amount and convert to string
 		amount := strconv.FormatFloat(wal.ToAmount(t.Amount).ToCoin(), 'f', -1, 64)
-		notification = values.StringF(values.StrDcrReceived, amount)
+		// Monetarium tx notifications need to name the actual asset (VAR or
+		// SKAn) the user just received, not a fixed "DCR" suffix as upstream
+		// hardcoded. The coin symbol comes from the wallet's primary asset
+		// type — refine to per-tx CoinType once the notification path threads
+		// it through.
+		notification = values.StringF(values.StrAmountReceived, amount, wal.GetAssetType())
 	case dcr.TxTypeVote:
 		reward := strconv.FormatFloat(wal.ToAmount(t.VoteReward).ToCoin(), 'f', -1, 64)
 		notification = values.StringF(values.StrTicketVoted, reward)

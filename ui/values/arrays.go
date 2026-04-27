@@ -1,6 +1,6 @@
 package values
 
-import "github.com/monetarium/monetarium-cryptopower/libwallet/utils"
+import "github.com/monetarium/skarb-wallet/libwallet/utils"
 
 // These are a list of supported rate sources.
 const (

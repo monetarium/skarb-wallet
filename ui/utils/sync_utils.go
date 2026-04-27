@@ -4,7 +4,7 @@ import (
 	"sync"
 	"time"
 
-	sharedW "github.com/monetarium/monetarium-cryptopower/libwallet/assets/wallet"
+	sharedW "github.com/monetarium/skarb-wallet/libwallet/assets/wallet"
 )
 
 // File holds implementation needed to manage the UI sync progess.

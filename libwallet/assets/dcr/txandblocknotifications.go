@@ -2,8 +2,8 @@ package dcr
 
 import (
 	"github.com/monetarium/monetarium-wallet/errors"
-	sharedW "github.com/monetarium/monetarium-cryptopower/libwallet/assets/wallet"
-	"github.com/monetarium/monetarium-cryptopower/libwallet/utils"
+	sharedW "github.com/monetarium/skarb-wallet/libwallet/assets/wallet"
+	"github.com/monetarium/skarb-wallet/libwallet/utils"
 )
 
 func (asset *Asset) listenForTransactions() {

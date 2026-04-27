@@ -6,7 +6,7 @@ import (
 	"os"
 	"sync"
 
-	libutils "github.com/monetarium/monetarium-cryptopower/libwallet/utils"
+	libutils "github.com/monetarium/skarb-wallet/libwallet/utils"
 )
 
 // AppConfig is a helper for reading and storing app-wide config values using a

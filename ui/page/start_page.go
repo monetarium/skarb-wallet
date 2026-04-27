@@ -14,20 +14,20 @@ import (
 	"golang.org/x/text/cases"
 	"golang.org/x/text/language"
 
-	"github.com/monetarium/monetarium-cryptopower/app"
-	"github.com/monetarium/monetarium-cryptopower/appos"
-	"github.com/monetarium/monetarium-cryptopower/libwallet"
-	sharedW "github.com/monetarium/monetarium-cryptopower/libwallet/assets/wallet"
-	libutils "github.com/monetarium/monetarium-cryptopower/libwallet/utils"
-	"github.com/monetarium/monetarium-cryptopower/ui/cryptomaterial"
-	"github.com/monetarium/monetarium-cryptopower/ui/load"
-	"github.com/monetarium/monetarium-cryptopower/ui/modal"
-	"github.com/monetarium/monetarium-cryptopower/ui/page/components"
-	"github.com/monetarium/monetarium-cryptopower/ui/page/root"
-	"github.com/monetarium/monetarium-cryptopower/ui/page/settings"
-	"github.com/monetarium/monetarium-cryptopower/ui/preference"
-	"github.com/monetarium/monetarium-cryptopower/ui/utils"
-	"github.com/monetarium/monetarium-cryptopower/ui/values"
+	"github.com/monetarium/skarb-wallet/app"
+	"github.com/monetarium/skarb-wallet/appos"
+	"github.com/monetarium/skarb-wallet/libwallet"
+	sharedW "github.com/monetarium/skarb-wallet/libwallet/assets/wallet"
+	libutils "github.com/monetarium/skarb-wallet/libwallet/utils"
+	"github.com/monetarium/skarb-wallet/ui/cryptomaterial"
+	"github.com/monetarium/skarb-wallet/ui/load"
+	"github.com/monetarium/skarb-wallet/ui/modal"
+	"github.com/monetarium/skarb-wallet/ui/page/components"
+	"github.com/monetarium/skarb-wallet/ui/page/root"
+	"github.com/monetarium/skarb-wallet/ui/page/settings"
+	"github.com/monetarium/skarb-wallet/ui/preference"
+	"github.com/monetarium/skarb-wallet/ui/utils"
+	"github.com/monetarium/skarb-wallet/ui/values"
 )
 
 const (
@@ -158,13 +158,33 @@ func (sp *startPage) OnNavigatedTo() {
 }
 
 func (sp *startPage) initPage() {
-	sp.languageDropdown = sp.Theme.NewCommonDropDown([]cryptomaterial.DropDownItem{
-		{Text: titler.String(values.StrEnglish)},
-		{Text: titler.String(values.StrFrench)},
-		{Text: titler.String(values.StrSpanish)},
-		{Text: titler.String(values.StrChinese)},
-	}, nil, values.MarginPadding120, values.StartPageDropdownGroup, false)
+	// Build the onboarding language dropdown straight from preference.LangOptions
+	// so adding a new locale (e.g. Ukrainian) only needs to be done in one
+	// place — the LangOptions slice in ui/preference/list_preference.go.
+	langItems := make([]cryptomaterial.DropDownItem, 0, len(preference.LangOptions))
+	for _, opt := range preference.LangOptions {
+		langItems = append(langItems, cryptomaterial.DropDownItem{
+			Text: titler.String(values.String(opt.Value)),
+		})
+	}
+	sp.languageDropdown = sp.Theme.NewCommonDropDown(
+		langItems, nil, values.MarginPadding120, values.StartPageDropdownGroup, false)
 
+	// The dropdown is created with selectedIndex=0 — i.e. it visually shows
+	// the first locale (Ukrainian) — but no Changed event ever fires for the
+	// initial selection, so the active locale stays whatever values.UserLanguages
+	// happens to default to (English). Push the selected option into the
+	// translator now so the very first paint already uses the displayed locale.
+	values.SetUserLanguage(sp.selectedLanguageKey())
+
+	sp.refreshLocalizedStrings()
+}
+
+// refreshLocalizedStrings re-reads every cached localised string on the
+// start page so a language switch is reflected immediately. Called from
+// initPage at construction time and from OnLanguageChanged when the user
+// picks a different locale in the language dropdown.
+func (sp *startPage) refreshLocalizedStrings() {
 	sp.onBoardingScreens = []onBoardingScreen{
 		{
 			title:    values.String(values.StrMultiWalletSupport),
@@ -183,21 +203,39 @@ func (sp *startPage) initPage() {
 		},
 	}
 
-	sp.settingsOptions = []*settingsOption{
-		{
-			title:      values.String(values.StrRecommended),
-			message:    values.String(values.StrRecommendedSettingsMsg),
-			infoButton: sp.Theme.IconButton(sp.Theme.Icons.ActionInfo),
-			clickable:  sp.Theme.NewClickable(false),
-		},
-		{
-			title:      values.String(values.StrAdvanced),
-			message:    values.String(values.StrAdvancedSettingsMsg),
-			infoButton: sp.Theme.IconButton(sp.Theme.Icons.ActionInfo),
-			clickable:  sp.Theme.NewClickable(false),
-		},
+	if sp.settingsOptions == nil {
+		sp.settingsOptions = []*settingsOption{
+			{
+				infoButton: sp.Theme.IconButton(sp.Theme.Icons.ActionInfo),
+				clickable:  sp.Theme.NewClickable(false),
+			},
+			{
+				infoButton: sp.Theme.IconButton(sp.Theme.Icons.ActionInfo),
+				clickable:  sp.Theme.NewClickable(false),
+			},
+		}
+	}
+	sp.settingsOptions[0].title = values.String(values.StrRecommended)
+	sp.settingsOptions[0].message = values.String(values.StrRecommendedSettingsMsg)
+	sp.settingsOptions[1].title = values.String(values.StrAdvanced)
+	sp.settingsOptions[1].message = values.String(values.StrAdvancedSettingsMsg)
+
+	if sp.skipButton.Text != "" {
+		sp.skipButton.Text = values.String(values.StrSkip)
+	}
+	if sp.addWalletButton.Text != "" {
+		sp.addWalletButton.Text = values.String(values.StrAddWallet)
 	}
 }
+
+// AppSettingsChangeHandler hooks ────────────────────────────────────────────
+// startPage caches several localised strings (intro slider titles, settings
+// option labels, skip button) when the page is constructed. RefreshTheme
+// fires these callbacks when the user changes locale / dark mode / currency
+// from anywhere in the app, so we re-read the cached strings on demand.
+func (sp *startPage) OnLanguageChanged() { sp.refreshLocalizedStrings() }
+func (sp *startPage) OnDarkModeChanged(_ bool) {}
+func (sp *startPage) OnCurrencyChanged() {}
 
 func (sp *startPage) unlock() {
 	startupPasswordModal := modal.NewCreatePasswordModal(sp.Load).
@@ -514,29 +552,36 @@ func (sp *startPage) onBoardingScreensLayout(gtx C) D {
 	return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
 		layout.Rigid(func(gtx C) D {
 			if sp.currentPageIndex < startupSettingsPageIndex {
-				return sp.pageLayout(gtx, func(gtx C) D {
-					sp.nextButton.Inset = layout.UniformInset(values.MarginPadding15)
-					if sp.IsMobileView() {
-						sp.nextButton.Inset = layout.UniformInset(values.MarginPadding12)
-					}
-					return layout.Flex{
-						Alignment: layout.Middle,
-						Axis:      layout.Vertical,
-					}.Layout(gtx,
-						layout.Rigid(func(gtx C) D {
-							return layout.Inset{
-								Bottom: values.MarginPadding30,
-							}.Layout(gtx, sp.introScreenLayout)
-						}),
-						layout.Rigid(func(gtx C) D {
-							gtx.Constraints.Min.X = gtx.Dp(values.MarginPaddingTransform(sp.IsMobileView(), values.MarginPadding420))
-							if !sp.IsMobileView() {
-								return sp.introScreenButtons(gtx)
+				return layout.Stack{}.Layout(gtx,
+					// Body — intro slider with title/illustration/buttons.
+					layout.Expanded(func(gtx C) D {
+						return sp.pageLayout(gtx, func(gtx C) D {
+							sp.nextButton.Inset = layout.UniformInset(values.MarginPadding15)
+							if sp.IsMobileView() {
+								sp.nextButton.Inset = layout.UniformInset(values.MarginPadding12)
 							}
-							return layout.Inset{Top: values.MarginPadding64}.Layout(gtx, sp.introScreenButtons)
-						}),
-					)
-				})
+							return layout.Flex{
+								Alignment: layout.Middle,
+								Axis:      layout.Vertical,
+							}.Layout(gtx,
+								layout.Rigid(func(gtx C) D {
+									return layout.Inset{
+										Bottom: values.MarginPadding30,
+									}.Layout(gtx, sp.introScreenLayout)
+								}),
+								layout.Rigid(func(gtx C) D {
+									gtx.Constraints.Min.X = gtx.Dp(values.MarginPaddingTransform(sp.IsMobileView(), values.MarginPadding420))
+									if !sp.IsMobileView() {
+										return sp.introScreenButtons(gtx)
+									}
+									return layout.Inset{Top: values.MarginPadding64}.Layout(gtx, sp.introScreenButtons)
+								}),
+							)
+						})
+					}),
+					// Top-right language picker, overlaid above the slider.
+					layout.Expanded(sp.languagePickerBar),
+				)
 			}
 			return layout.Stack{}.Layout(gtx,
 				layout.Expanded(func(gtx C) D {
@@ -570,18 +615,9 @@ func (sp *startPage) onBoardingScreensLayout(gtx C) D {
 						)
 					})
 				}),
-				layout.Expanded(func(gtx C) D {
-					return layout.Flex{Axis: layout.Horizontal, Spacing: layout.SpaceStart, Alignment: layout.Middle}.Layout(gtx,
-						layout.Rigid(func(gtx C) D {
-							langTitle := sp.Theme.Label(values.TextSize16, values.String(values.StrLanguage))
-							langTitle.Font.Weight = font.Bold
-							return layout.Inset{Top: values.MarginPadding20}.Layout(gtx, langTitle.Layout)
-						}),
-						layout.Rigid(func(gtx C) D {
-							return layout.UniformInset(values.MarginPadding10).Layout(gtx, sp.languageDropdown.Layout)
-						}),
-					)
-				}),
+				// Language picker is now rendered globally inside pageHeaderLayout
+				// for every onboarding screen, so we no longer duplicate it here
+				// on the Choose-setup-type page.
 			)
 		}),
 	)
@@ -662,6 +698,37 @@ func (sp *startPage) settingsOptionsLayout(gtx C) D {
 	)
 }
 
+// languagePickerBar renders only the top-right language dropdown — used as an
+// overlay on the intro slider screens which don't render the full header bar.
+// Uses a cryptomaterial.LinearLayout with Alignment: layout.Middle so the
+// label and the dropdown share the same vertical centre line (a plain
+// layout.Flex with the label as a Rigid leaves them visually offset because
+// the dropdown's chip is taller than the bare text).
+func (sp *startPage) languagePickerBar(gtx C) D {
+	return layout.Inset{
+		Top:    values.MarginPadding12,
+		Right:  values.MarginPadding16,
+		Bottom: values.MarginPadding0,
+		Left:   values.MarginPadding12,
+	}.Layout(gtx, func(gtx C) D {
+		return layout.E.Layout(gtx, func(gtx C) D {
+			return cryptomaterial.LinearLayout{
+				Width:       cryptomaterial.WrapContent,
+				Height:      cryptomaterial.WrapContent,
+				Orientation: layout.Horizontal,
+				Alignment:   layout.Middle,
+			}.Layout(gtx,
+				layout.Rigid(func(gtx C) D {
+					lbl := sp.Theme.Label(values.TextSize16, values.String(values.StrLanguage))
+					lbl.Font.Weight = font.Bold
+					return layout.Inset{Right: values.MarginPadding10}.Layout(gtx, lbl.Layout)
+				}),
+				layout.Rigid(sp.languageDropdown.Layout),
+			)
+		})
+	})
+}
+
 func (sp *startPage) pageHeaderLayout(gtx C, headerText string, hideHeaderText bool) D {
 	return cryptomaterial.LinearLayout{
 		Width:       cryptomaterial.MatchParent,
@@ -686,6 +753,28 @@ func (sp *startPage) pageHeaderLayout(gtx C, headerText string, hideHeaderText b
 					return lbl.Layout(gtx)
 				}),
 			)
+		}),
+		// Right-aligned language picker: appears on every onboarding screen
+		// (welcome / introduction sliders / Choose-setup-type) so the user can
+		// switch language before they even start. Wrapped in a
+		// cryptomaterial.LinearLayout with Alignment: layout.Middle so the
+		// label and the dropdown chip share the same vertical centre.
+		layout.Flexed(1, func(gtx C) D {
+			return layout.E.Layout(gtx, func(gtx C) D {
+				return cryptomaterial.LinearLayout{
+					Width:       cryptomaterial.WrapContent,
+					Height:      cryptomaterial.WrapContent,
+					Orientation: layout.Horizontal,
+					Alignment:   layout.Middle,
+				}.Layout(gtx,
+					layout.Rigid(func(gtx C) D {
+						lbl := sp.Theme.Label(values.TextSize16, values.String(values.StrLanguage))
+						lbl.Font.Weight = font.Bold
+						return layout.Inset{Right: values.MarginPadding10}.Layout(gtx, lbl.Layout)
+					}),
+					layout.Rigid(sp.languageDropdown.Layout),
+				)
+			})
 		}),
 	)
 }
@@ -732,9 +821,18 @@ func (sp *startPage) setLanguagePref(useExistingUserPreference bool) {
 }
 
 func (sp *startPage) selectedLanguageKey() string {
+	// The dropdown shows the localised, title-cased name of each language
+	// ('English', 'Українська', 'Français', …). Match against the same
+	// transformation we used when populating the items so 'Українська' maps
+	// back to localizable.UKRAINIAN. The previous comparison
+	// (lowercased selection == opt.Value) only worked when the displayed
+	// label was identical to the lookup key — which is true for English
+	// ('English' → 'english') but not for Ukrainian ('Українська' ≠ 'ukrainian')
+	// or any other locale where the localised label differs from the key.
 	selectedLang := sp.languageDropdown.Selected()
 	for _, opt := range preference.LangOptions {
-		if strings.ToLower(selectedLang) == opt.Value {
+		displayed := titler.String(values.String(opt.Value))
+		if selectedLang == displayed {
 			return opt.Key
 		}
 	}

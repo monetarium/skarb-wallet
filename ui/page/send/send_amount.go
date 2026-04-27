@@ -7,11 +7,11 @@ import (
 	"gioui.org/io/key"
 	"gioui.org/layout"
 	"gioui.org/widget"
-	"github.com/monetarium/monetarium-cryptopower/libwallet/assets/dcr"
-	libUtil "github.com/monetarium/monetarium-cryptopower/libwallet/utils"
-	"github.com/monetarium/monetarium-cryptopower/ui/cryptomaterial"
-	"github.com/monetarium/monetarium-cryptopower/ui/utils"
-	"github.com/monetarium/monetarium-cryptopower/ui/values"
+	"github.com/monetarium/skarb-wallet/libwallet/assets/dcr"
+	libUtil "github.com/monetarium/skarb-wallet/libwallet/utils"
+	"github.com/monetarium/skarb-wallet/ui/cryptomaterial"
+	"github.com/monetarium/skarb-wallet/ui/utils"
+	"github.com/monetarium/skarb-wallet/ui/values"
 	"github.com/monetarium/monetarium-node/dcrutil"
 )
 

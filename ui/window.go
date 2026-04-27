@@ -18,15 +18,15 @@ import (
 	"golang.org/x/text/language"
 	"golang.org/x/text/message"
 
-	"github.com/monetarium/monetarium-cryptopower/app"
-	libutils "github.com/monetarium/monetarium-cryptopower/libwallet/utils"
-	"github.com/monetarium/monetarium-cryptopower/ui/assets"
-	"github.com/monetarium/monetarium-cryptopower/ui/cryptomaterial"
-	"github.com/monetarium/monetarium-cryptopower/ui/load"
-	"github.com/monetarium/monetarium-cryptopower/ui/modal"
-	"github.com/monetarium/monetarium-cryptopower/ui/notification"
-	"github.com/monetarium/monetarium-cryptopower/ui/page"
-	"github.com/monetarium/monetarium-cryptopower/ui/values"
+	"github.com/monetarium/skarb-wallet/app"
+	libutils "github.com/monetarium/skarb-wallet/libwallet/utils"
+	"github.com/monetarium/skarb-wallet/ui/assets"
+	"github.com/monetarium/skarb-wallet/ui/cryptomaterial"
+	"github.com/monetarium/skarb-wallet/ui/load"
+	"github.com/monetarium/skarb-wallet/ui/modal"
+	"github.com/monetarium/skarb-wallet/ui/notification"
+	"github.com/monetarium/skarb-wallet/ui/page"
+	"github.com/monetarium/skarb-wallet/ui/values"
 )
 
 // Window represents the app window (and UI in general). There should only be one.

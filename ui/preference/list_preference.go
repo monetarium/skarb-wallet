@@ -9,13 +9,13 @@ import (
 	"gioui.org/layout"
 	"gioui.org/widget"
 
-	sharedW "github.com/monetarium/monetarium-cryptopower/libwallet/assets/wallet"
-	libutils "github.com/monetarium/monetarium-cryptopower/libwallet/utils"
-	"github.com/monetarium/monetarium-cryptopower/ui/cryptomaterial"
-	"github.com/monetarium/monetarium-cryptopower/ui/load"
-	"github.com/monetarium/monetarium-cryptopower/ui/modal"
-	"github.com/monetarium/monetarium-cryptopower/ui/values"
-	"github.com/monetarium/monetarium-cryptopower/ui/values/localizable"
+	sharedW "github.com/monetarium/skarb-wallet/libwallet/assets/wallet"
+	libutils "github.com/monetarium/skarb-wallet/libwallet/utils"
+	"github.com/monetarium/skarb-wallet/ui/cryptomaterial"
+	"github.com/monetarium/skarb-wallet/ui/load"
+	"github.com/monetarium/skarb-wallet/ui/modal"
+	"github.com/monetarium/skarb-wallet/ui/values"
+	"github.com/monetarium/skarb-wallet/ui/values/localizable"
 )
 
 const (
@@ -46,12 +46,14 @@ var (
 	}
 
 	// LangOptions stores the configurable language options.
+	// Only locales that have been audited and rebranded for Skarb are exposed
+	// here. The fr/es/zh files inherited from upstream Cryptopower still
+	// contain Decred/DCR strings and a few "Cryptopower" mentions, so they're
+	// hidden from the user picker until properly translated. The .go files
+	// stay in the repo (and in `Languages`) so existing fallbacks keep working.
 	LangOptions = []ItemPreference{
-		{Key: localizable.ENGLISH, Value: values.StrEnglish},
 		{Key: localizable.UKRAINIAN, Value: values.StrUkrainian},
-		{Key: localizable.FRENCH, Value: values.StrFrench},
-		{Key: localizable.SPANISH, Value: values.StrSpanish},
-		{Key: localizable.CHINESE, Value: values.StrChinese},
+		{Key: localizable.ENGLISH, Value: values.StrEnglish},
 	}
 
 	// LogOptions are the selectable debug levels.

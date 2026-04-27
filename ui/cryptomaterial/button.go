@@ -15,7 +15,7 @@ import (
 	"gioui.org/widget"
 	"gioui.org/widget/material"
 
-	"github.com/monetarium/monetarium-cryptopower/ui/values"
+	"github.com/monetarium/skarb-wallet/ui/values"
 )
 
 type Button struct {
