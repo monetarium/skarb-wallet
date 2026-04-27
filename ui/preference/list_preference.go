@@ -46,14 +46,14 @@ var (
 	}
 
 	// LangOptions stores the configurable language options.
-	// Ukrainian is listed first because it's the project's primary target
-	// market; English follows as the canonical fallback.
+	// Only locales that have been audited and rebranded for Skarb are exposed
+	// here. The fr/es/zh files inherited from upstream Cryptopower still
+	// contain Decred/DCR strings and a few "Cryptopower" mentions, so they're
+	// hidden from the user picker until properly translated. The .go files
+	// stay in the repo (and in `Languages`) so existing fallbacks keep working.
 	LangOptions = []ItemPreference{
 		{Key: localizable.UKRAINIAN, Value: values.StrUkrainian},
 		{Key: localizable.ENGLISH, Value: values.StrEnglish},
-		{Key: localizable.FRENCH, Value: values.StrFrench},
-		{Key: localizable.SPANISH, Value: values.StrSpanish},
-		{Key: localizable.CHINESE, Value: values.StrChinese},
 	}
 
 	// LogOptions are the selectable debug levels.

@@ -1095,4 +1095,5 @@ const (
 	StrWalletsCreationLimitTitle             = "walletCreationLimitTitle"
 	StrWalletsCreationLimitBody              = "walletCreationLimitBody"
 	StrCreateOrRestoreToSeeBalances          = "createOrRestoreToSeeBalances"
+	StrAmountReceived                        = "amountReceived"
 )

@@ -352,6 +352,7 @@ const UK = `
 "removeWalletInfo" = "%v Дійсно видалити %v %s%v? Введіть назву гаманця нижче для підтвердження. %v"
 "noValidWalletFound" = "Гаманців ще немає"
 "createOrRestoreToSeeBalances" = "Створіть або відновіть гаманець Monetarium, щоб побачити баланси VAR і SKA."
+"amountReceived" = "Отримано %s %s"
 "changeSpendingPass" = "Змінити пароль для витрат"
 "changeStartupPassword" = "Змінити стартовий пароль"
 "setupStartupPassword" = "Налаштувати стартовий пароль"

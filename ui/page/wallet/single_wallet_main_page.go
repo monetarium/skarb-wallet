@@ -693,7 +693,12 @@ func (swmp *SingleWalletMasterPage) postTransactionNotification(t *sharedW.Trans
 		}
 		// remove trailing zeros from amount and convert to string
 		amount := strconv.FormatFloat(wal.ToAmount(t.Amount).ToCoin(), 'f', -1, 64)
-		notification = values.StringF(values.StrDcrReceived, amount)
+		// Monetarium tx notifications need to name the actual asset (VAR or
+		// SKAn) the user just received, not a fixed "DCR" suffix as upstream
+		// hardcoded. The coin symbol comes from the wallet's primary asset
+		// type — refine to per-tx CoinType once the notification path threads
+		// it through.
+		notification = values.StringF(values.StrAmountReceived, amount, wal.GetAssetType())
 	case dcr.TxTypeVote:
 		reward := strconv.FormatFloat(wal.ToAmount(t.VoteReward).ToCoin(), 'f', -1, 64)
 		notification = values.StringF(values.StrTicketVoted, reward)
