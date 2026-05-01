@@ -80,7 +80,16 @@ func (hp *HomePage) OnNavigatedTo() {
 // the wallet-detail subpage as its "back" callback so the top-left arrow on
 // each wallet sub-screen returns the user to the dashboard.
 func (hp *HomePage) showOverview() {
-	hp.Display(NewOverviewPage(hp.Load, func() {}))
+	// Hand the OverviewPage a callback so clicking a wallet card jumps
+	// straight into its detail page — same target as a sidebar entry click.
+	hp.Display(NewOverviewPage(hp.Load, func() {}, hp.openWallet))
+}
+
+// openWallet swaps the body subpage to a per-wallet detail page. Shared
+// between sidebar entries and Overview cards so both paths land on the same
+// place.
+func (hp *HomePage) openWallet(w sharedW.Asset) {
+	hp.Display(walletpage.NewSingleWalletMasterPage(hp.Load, w, hp.showOverview))
 }
 
 // toggleWalletSync is the v1 Monetarium ToggleSync implementation. It runs SPV
@@ -178,7 +187,7 @@ func (hp *HomePage) HandleUserInteractions(gtx layout.Context) {
 	}
 	for _, entry := range hp.walletEntries {
 		if entry.click != nil && entry.click.Clicked(gtx) {
-			hp.Display(walletpage.NewSingleWalletMasterPage(hp.Load, entry.wallet, hp.showOverview))
+			hp.openWallet(entry.wallet)
 		}
 	}
 	if cur := hp.CurrentPage(); cur != nil {

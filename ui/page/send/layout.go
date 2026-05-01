@@ -148,7 +148,7 @@ func (pg *Page) sendLayout(gtx C) D {
 					return D{}
 				}
 				return layout.Inset{Top: values.MarginPadding8}.Layout(gtx, func(gtx C) D {
-					return pg.coinTypeDropdown.Layout(gtx, "Asset")
+					return pg.coinTypeDropdown.Layout(gtx, values.String(values.StrAsset))
 				})
 			}),
 		)

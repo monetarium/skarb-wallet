@@ -637,14 +637,26 @@ func (pg *Page) showBalanceAfterSend() {
 	}
 }
 
+// activeAssetSymbol returns the symbol the page should annotate amounts with
+// (e.g. "VAR", "SKA-1"). Falls back to the wallet's asset type — which is the
+// legacy single-coin display ("DCR" on Decred forks) — only when the
+// CoinType dropdown isn't initialised yet.
+func (pg *Page) activeAssetSymbol() string {
+	if pg.coinTypeDropdown != nil {
+		return pg.coinTypeDropdown.Selected().String()
+	}
+	return string(pg.selectedWallet.GetAssetType())
+}
+
 func (pg *Page) clearEstimates() {
-	pg.txFee = " - " + string(pg.selectedWallet.GetAssetType())
+	symbol := pg.activeAssetSymbol()
+	pg.txFee = " - " + symbol
 	pg.feeRateSelector.TxFee = pg.txFee
 	pg.txFeeUSD = " - "
 	pg.feeRateSelector.TxFeeUSD = pg.txFeeUSD
-	pg.totalCost = " - " + string(pg.selectedWallet.GetAssetType())
+	pg.totalCost = " - " + symbol
 	pg.totalCostUSD = " - "
-	pg.balanceAfterSend = " - " + string(pg.selectedWallet.GetAssetType())
+	pg.balanceAfterSend = " - " + symbol
 	pg.balanceAfterSendUSD = " - "
 	pg.sendAmount = " - "
 	pg.sendAmountUSD = " - "
@@ -669,7 +681,7 @@ func (pg *Page) HandleUserInteractions(gtx C) {
 	pg.nextButton.SetEnabled(pg.allRecipientsIsValid())
 
 	if pg.infoButton.Button.Clicked(gtx) {
-		textWithUnit := values.String(values.StrSend) + " " + string(pg.selectedWallet.GetAssetType())
+		textWithUnit := values.String(values.StrSend) + " " + pg.activeAssetSymbol()
 		info := modal.NewCustomModal(pg.Load).
 			Title(textWithUnit).
 			Body(values.String(values.StrSendInfo)).
