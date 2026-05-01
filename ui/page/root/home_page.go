@@ -23,6 +23,7 @@ import (
 	sharedW "github.com/monetarium/skarb-wallet/libwallet/assets/wallet"
 	"github.com/monetarium/skarb-wallet/ui/cryptomaterial"
 	"github.com/monetarium/skarb-wallet/ui/load"
+	"github.com/monetarium/skarb-wallet/ui/modal"
 	"github.com/monetarium/skarb-wallet/ui/page/settings"
 	walletpage "github.com/monetarium/skarb-wallet/ui/page/wallet"
 	"github.com/monetarium/skarb-wallet/ui/values"
@@ -103,15 +104,53 @@ func (hp *HomePage) toggleWalletSync(wallet sharedW.Asset, unlock load.NeedUnloc
 		return
 	}
 	if !wallet.ContainsDiscoveredAccounts() && wallet.IsLocked() && !wallet.IsWatchingOnlyWallet() {
-		log.Warn("Wallet is locked — unlock it before starting sync (password modal not yet wired in v1).")
-		if unlock != nil {
-			unlock(false)
-		}
+		// Fresh wallet with a spending password and no discovered accounts.
+		// SPV needs the wallet unlocked so it can derive addresses while
+		// scanning. Prompt for the password, unlock, then start SPV.
+		hp.promptUnlockAndSync(wallet, unlock)
 		return
 	}
 	if unlock != nil {
 		unlock(true)
 	}
+	hp.startSpv(wallet)
+}
+
+// promptUnlockAndSync shows a password modal, unlocks the wallet on success
+// and kicks off SPV sync. Replaces the older silent log.Warn that left the
+// "Start sync" button visibly inert for any wallet protected by a spending
+// password.
+func (hp *HomePage) promptUnlockAndSync(wallet sharedW.Asset, unlock load.NeedUnlockRestore) {
+	if unlock != nil {
+		unlock(false)
+	}
+	pwModal := modal.NewCreatePasswordModal(hp.Load).
+		EnableName(false).
+		EnableConfirmPassword(false).
+		Title(values.String(values.StrUnlockWithPassword)).
+		PasswordHint(values.String(values.StrSpendingPassword)).
+		SetCancelable(true).
+		SetNegativeButtonText(values.String(values.StrCancel)).
+		SetPositiveButtonText(values.String(values.StrUnlock)).
+		SetPositiveButtonCallback(func(_, password string, m *modal.CreatePasswordModal) bool {
+			if err := wallet.UnlockWallet(password); err != nil {
+				m.SetError(err.Error())
+				return false
+			}
+			m.Dismiss()
+			if unlock != nil {
+				unlock(true)
+			}
+			hp.startSpv(wallet)
+			return true
+		})
+	hp.ParentWindow().ShowModal(pwModal)
+}
+
+// startSpv launches SPV in the background and routes any error through the
+// log. Centralised so both the locked-then-unlocked and the already-unlocked
+// paths use identical lifecycle handling.
+func (hp *HomePage) startSpv(wallet sharedW.Asset) {
 	go func() {
 		if err := wallet.SpvSync(); err != nil {
 			log.Errorf("SpvSync(%s): %v", wallet.GetWalletName(), err)
