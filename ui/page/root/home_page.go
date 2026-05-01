@@ -66,6 +66,10 @@ func NewHomePage(l *load.Load) *HomePage {
 func (hp *HomePage) ID() string { return HomePageID }
 
 // OnNavigatedTo seeds the sidebar from AssetsManager and pushes Overview.
+// Also kicks off SPV for any wallet that has the AutoSync flag turned on
+// (set in start_page.go when the user opts into "recommended" setup) so the
+// user lands on a syncing wallet rather than having to click "Start sync"
+// every launch.
 func (hp *HomePage) OnNavigatedTo() {
 	hp.refreshWalletList()
 	if hp.Load.ToggleSync == nil {
@@ -73,6 +77,29 @@ func (hp *HomePage) OnNavigatedTo() {
 	}
 	if hp.CurrentPage() == nil {
 		hp.showOverview()
+	}
+	hp.maybeAutoSync()
+}
+
+// maybeAutoSync scans every loaded wallet and starts SPV in the background
+// for those that asked for it via AutoSyncConfigKey. Locked wallets are
+// skipped (we'd need a password modal — done on demand from the Start sync
+// button instead).
+func (hp *HomePage) maybeAutoSync() {
+	for _, w := range hp.AssetsManager.AllWallets() {
+		if !w.ReadBoolConfigValueForKey(sharedW.AutoSyncConfigKey, false) {
+			continue
+		}
+		if w.IsConnectedToNetwork() {
+			continue
+		}
+		if w.IsLocked() && !w.IsWatchingOnlyWallet() && !w.ContainsDiscoveredAccounts() {
+			// Need an explicit unlock — skip silently rather than ambush the
+			// user with a password modal during page entry. They'll see the
+			// inactive sync indicator and can click Start sync to unlock.
+			continue
+		}
+		hp.startSpv(w)
 	}
 }
 
