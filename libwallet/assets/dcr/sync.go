@@ -206,10 +206,9 @@ func bootstrapPeerForNet(params *chaincfg.Params) string {
 	switch params.Net {
 	case wire.MainNet:
 		return "176.113.164.216:9508"
+	case wire.TestNet3:
+		return "176.9.28.21:19508"
 	}
-	// Testnet has no public bootstrap peer documented yet; surface that as an
-	// empty fallback so the user is forced into Settings → Specific peer with
-	// a coherent error rather than silently never connecting.
 	return ""
 }
 
