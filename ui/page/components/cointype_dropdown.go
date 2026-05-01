@@ -55,7 +55,7 @@ func (d *CoinTypeDropdown) Setup(w *dcr.Asset, selected ...cointype.CoinType) *C
 	items := make([]cryptomaterial.DropDownItem, 0, len(d.coinTypes))
 	for _, ct := range d.coinTypes {
 		items = append(items, cryptomaterial.DropDownItem{
-			Text:      ct.String(),
+			Text:      dcr.CoinSymbol(ct),
 			DisplayFn: d.itemLayout(ct),
 		})
 	}
@@ -68,19 +68,19 @@ func (d *CoinTypeDropdown) Setup(w *dcr.Asset, selected ...cointype.CoinType) *C
 	for _, ct := range d.coinTypes {
 		if ct == target {
 			d.selected = ct
-			d.dropdown.SetSelectedValue(ct.String())
+			d.dropdown.SetSelectedValue(dcr.CoinSymbol(ct))
 			return d
 		}
 	}
 	// Selected coin type isn't active on this chain — fall back to VAR.
 	d.selected = cointype.CoinTypeVAR
-	d.dropdown.SetSelectedValue(cointype.CoinTypeVAR.String())
+	d.dropdown.SetSelectedValue(dcr.CoinSymbol(cointype.CoinTypeVAR))
 	return d
 }
 
 func (d *CoinTypeDropdown) itemLayout(ct cointype.CoinType) layout.Widget {
 	return func(gtx layout.Context) layout.Dimensions {
-		lbl := d.Theme.SemiBoldLabel(ct.String())
+		lbl := d.Theme.SemiBoldLabel(dcr.CoinSymbol(ct))
 		lbl.MaxLines = 1
 		return lbl.Layout(gtx)
 	}
@@ -106,7 +106,7 @@ func (d *CoinTypeDropdown) Handle(gtx layout.Context) {
 	}
 	picked := d.dropdown.Selected()
 	for _, ct := range d.coinTypes {
-		if ct.String() == picked && ct != d.selected {
+		if dcr.CoinSymbol(ct) == picked && ct != d.selected {
 			d.selected = ct
 			if d.changedCallback != nil {
 				d.changedCallback(ct)

@@ -395,7 +395,7 @@ func LayoutTransactionRow(gtx C, l *load.Load, wal sharedW.Asset, tx *sharedW.Tr
 						// libwallet/assets/dcr/decodetx.go set tx.CoinType from
 						// the wire-level value; older rows that pre-date the
 						// patch read back as 0 (VAR).
-						chip := l.Theme.Label(l.ConvertTextSize(values.TextSize14), cointype.CoinType(tx.CoinType).String())
+						chip := l.Theme.Label(l.ConvertTextSize(values.TextSize14), dcr.CoinSymbol(cointype.CoinType(tx.CoinType)))
 						chip.Color = l.Theme.Color.GrayText2
 						chip.Font.Weight = font.SemiBold
 						return layout.Inset{Right: values.MarginPadding8}.Layout(gtx, chip.Layout)

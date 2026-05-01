@@ -180,7 +180,7 @@ func (op *OverviewPage) layoutWalletCard(gtx layout.Context, w sharedW.Asset) la
 	for _, ct := range cts {
 		bal := balancesByCoin[ct]
 		bal.CoinType = ct // ensure FormatCoinAmount picks the right branch
-		row := op.layoutBalanceRow(ct.String(), dcr.FormatCoinAmount(bal))
+		row := op.layoutBalanceRow(dcr.CoinSymbol(ct), dcr.FormatCoinAmount(bal))
 		coinChildren = append(coinChildren, layout.Rigid(row))
 	}
 

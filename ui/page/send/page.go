@@ -643,7 +643,7 @@ func (pg *Page) showBalanceAfterSend() {
 // CoinType dropdown isn't initialised yet.
 func (pg *Page) activeAssetSymbol() string {
 	if pg.coinTypeDropdown != nil {
-		return pg.coinTypeDropdown.Selected().String()
+		return dcr.CoinSymbol(pg.coinTypeDropdown.Selected())
 	}
 	return string(pg.selectedWallet.GetAssetType())
 }

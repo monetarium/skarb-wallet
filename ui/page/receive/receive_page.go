@@ -290,7 +290,7 @@ func (pg *Page) contentLayout(gtx C) D {
 							})
 						}),
 						layout.Rigid(func(gtx C) D {
-							hint := pg.Theme.Caption(values.StringF(values.StrSameAddressReceivesHint, pg.expectedCoinType))
+							hint := pg.Theme.Caption(values.StringF(values.StrSameAddressReceivesHint, dcr.CoinSymbol(pg.expectedCoinType)))
 							hint.Color = pg.Theme.Color.GrayText2
 							return layout.Inset{Top: values.MarginPadding6}.Layout(gtx, hint.Layout)
 						}),

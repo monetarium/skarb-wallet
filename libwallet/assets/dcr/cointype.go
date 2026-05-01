@@ -117,7 +117,24 @@ func FormatCoinAmount(bal dcrW.CoinBalance) string {
 	// 1e18 for every active SKA today; switch to a Params-driven lookup when
 	// that changes.
 	atomsStr := bal.SKATotal.ToDecimalString(cointype.AtomsPerSKACoin)
-	return atomsStr + " " + bal.CoinType.String()
+	return atomsStr + " " + CoinSymbol(bal.CoinType)
+}
+
+// CoinSymbol returns the user-facing symbol for a coin type. Wraps
+// cointype.CoinType.String() to drop the hyphen — upstream renders SKA tokens
+// as "SKA-1" / "SKA-2" / …, but the product brand format is "SKA1" / "SKA2".
+// VAR is unchanged.
+func CoinSymbol(ct cointype.CoinType) string {
+	if ct.IsVAR() {
+		return ct.String()
+	}
+	// "SKA-1" -> "SKA1". Fast path that avoids the strings package import in
+	// hot UI render paths.
+	s := ct.String()
+	if len(s) >= 5 && s[:4] == "SKA-" {
+		return s[:3] + s[4:]
+	}
+	return s
 }
 
 // IsCoinTypeActive reports whether the given coin type is active on the
