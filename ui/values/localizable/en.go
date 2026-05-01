@@ -13,7 +13,6 @@ const EN = `
 "accountMixer" = "AccountMixer"
 "accRenamed" = "Account renamed"
 "acctCreated" = "Account created"
-"acctCreated" = "Account created"
 "acctDetailsKey" = "%d external, %d internal, %d imported"
 "acctName" = "Account name"
 "acctNum" = "Account Number"

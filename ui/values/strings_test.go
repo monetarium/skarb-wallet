@@ -58,6 +58,38 @@ func TestNoStaleBrandInActiveLocales(t *testing.T) {
 	}
 }
 
+// TestNoDuplicateKeysInActiveLocales fails when a locale file defines the
+// same key twice. The init parser overwrites duplicates silently, so a typo
+// where a translation gets re-pasted near the bottom of a file (during
+// batched expansion) clobbers an earlier well-formed entry. A real example
+// from history: two "connectedTo" lines, the second one without the "%d"
+// placeholder, surfaced as "Підключено до%!(EXTRA string=1)" in the UI.
+func TestNoDuplicateKeysInActiveLocales(t *testing.T) {
+	for name, source := range map[string]string{
+		"en": localizable.EN,
+		"uk": localizable.UK,
+	} {
+		seen := make(map[string]int)
+		for _, line := range strings.Split(source, "\n") {
+			line = strings.TrimSpace(line)
+			if line == "" || strings.HasPrefix(line, "/") {
+				continue
+			}
+			matches := rex.FindAllStringSubmatch(line, -1)
+			if len(matches) == 0 {
+				continue
+			}
+			key := strings.Trim(matches[0][1], `"`)
+			seen[key]++
+		}
+		for key, count := range seen {
+			if count > 1 {
+				t.Errorf("locale %s defines %q %d times — second occurrence silently overwrites the first", name, key, count)
+			}
+		}
+	}
+}
+
 func keysOf(t *testing.T, source string) map[string]struct{} {
 	t.Helper()
 	out := make(map[string]struct{})
