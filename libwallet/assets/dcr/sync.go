@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"os"
+	"path/filepath"
 	"sort"
 	"sync"
 	"time"
@@ -240,6 +242,17 @@ func (asset *Asset) SpvSync() error {
 
 	asset.waitingForHeaders = true
 	asset.syncing = true
+
+	// Drop a stale peers.json before constructing the addrmgr. The on-disk
+	// format moved between dcrd versions; older caches deserialise as
+	// "unsupported IP type 0" and the addrmgr starts empty anyway. Removing
+	// the file removes an [ERR] line per launch and shaves a couple of
+	// seconds off bootstrap when the cache was the only seed.
+	if peersJSON := filepath.Join(asset.DataDir(), "peers.json"); peersJSON != "" {
+		if err := os.Remove(peersJSON); err != nil && !os.IsNotExist(err) {
+			log.Debugf("Could not remove stale peers.json: %v", err)
+		}
+	}
 
 	addr := &net.TCPAddr{IP: net.ParseIP("::1"), Port: 0}
 	addrManager := addrmgr.New(asset.DataDir()) // TODO: be mindful of tor
