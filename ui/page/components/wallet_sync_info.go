@@ -472,8 +472,11 @@ func (wsi *WalletSyncInfo) syncBoxTitleRow(gtx C) D {
 				layout.Rigid(statusLabel.Layout),
 				layout.Rigid(func(gtx C) D {
 					if wsi.wallet.IsConnectedToNetwork() {
-						connectedPeers := fmt.Sprintf("%d", wsi.wallet.ConnectedPeers())
-						return wsi.labelSize(textSize14, values.StringF(values.StrConnectedTo, connectedPeers)).Layout(gtx)
+						// Pass the int32 directly — StrConnectedTo's format
+						// is "Підключено до %d пірів". Pre-converting via
+						// Sprintf("%d", n) handed a string to %d and rendered
+						// the visible "%!d(string=1)" goof.
+						return wsi.labelSize(textSize14, values.StringF(values.StrConnectedTo, wsi.wallet.ConnectedPeers())).Layout(gtx)
 					}
 
 					if !wsi.safeIsStatusConnected() {
