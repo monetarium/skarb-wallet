@@ -6,16 +6,28 @@
 package dcr
 
 import (
-	"github.com/monetarium/skarb-wallet/libwallet/internal/loader"
 	"github.com/decred/slog"
+	"github.com/monetarium/monetarium-wallet/p2p"
+	"github.com/monetarium/monetarium-wallet/spv"
+	"github.com/monetarium/monetarium-wallet/wallet"
+	"github.com/monetarium/monetarium-wallet/wallet/udb"
+	"github.com/monetarium/skarb-wallet/libwallet/internal/loader"
 )
 
 var log = slog.Disabled
 
-// UseLogger sets the subsystem logs to use the provided loggers.
+// UseLogger sets the subsystem logs to use the provided loggers. Wires the
+// same backing logger into every upstream package whose logs we care about
+// during SPV — without these the spv, p2p, wallet and udb packages silently
+// discard everything (slog.Disabled by default), which made it impossible to
+// see why syncer.Run was bailing out before any peer connection.
 func UseLogger(logger slog.Logger) {
 	log = logger
 	loader.UseLogger(logger)
+	spv.UseLogger(logger)
+	p2p.UseLogger(logger)
+	wallet.UseLogger(logger)
+	udb.UseLogger(logger)
 }
 
 // Log writes a message to the log using LevelInfo.
