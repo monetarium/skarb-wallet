@@ -289,6 +289,12 @@ func (asset *Asset) SpvSync() error {
 	// losing connection to all persistent peers.
 	go func() {
 		syncError := syncer.Run(ctx)
+		// Log every exit reason so diagnosing "sync flips off" reports
+		// doesn't depend on stashed UI state. nil here means "errgroup.Wait
+		// returned without error" — usually a teardown via NoPeers that
+		// swallows the real cause. Keep an INF line so the timeline is
+		// reconstructable from the rotated log alone.
+		log.Infof("syncer.Run returned for wallet=%s: err=%v", asset.GetWalletName(), syncError)
 		// sync has ended or errored
 		if syncError != nil {
 			if syncError == context.DeadlineExceeded {
