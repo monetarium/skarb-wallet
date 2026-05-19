@@ -94,7 +94,12 @@ func init() {
 	receive.UseLogger(winLog)
 
 	logger.New(subsystemSLoggers)
-	dcrSpv.SetLevel(slog.LevelError)
+	// SPV used to be muted to ERROR-only — that hid the "Headers synced
+	// through block ...", "Transactions synced ...", peer connect/disconnect
+	// reasons and the actual cause of syncer.Run returning early. We need
+	// those at INF while the chain layer is still maturing.
+	dcrSpv.SetLevel(slog.LevelInfo)
+	syncLog.SetLevel(slog.LevelInfo)
 }
 
 var subsystemSLoggers = map[string]slog.Logger{
