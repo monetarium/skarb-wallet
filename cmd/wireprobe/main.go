@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/monetarium/monetarium-node/chaincfg"
+	"github.com/monetarium/monetarium-node/chaincfg/chainhash"
 	"github.com/monetarium/monetarium-node/wire"
 )
 
@@ -85,7 +86,45 @@ func main() {
 			}
 		case *wire.MsgVerAck:
 			fmt.Println("← verack — handshake complete.")
-			os.Exit(0)
+			// Send a verack back and then ask the peer for the genesis
+			// cfilter to confirm CF data actually flows, not just that the
+			// service bit is advertised.
+			if err := wire.WriteMessage(conn, wire.NewMsgVerAck(), wire.ProtocolVersion, params.Net); err != nil {
+				fmt.Printf("✘ Write verack: %v\n", err)
+				os.Exit(1)
+			}
+			fmt.Println("→ Sent: verack")
+			// getcfilterv2 with start=end=genesis: cheapest possible CF probe.
+			gen := params.GenesisHash
+			req := wire.NewMsgGetCFsV2(&gen, &gen)
+			if err := wire.WriteMessage(conn, req, wire.ProtocolVersion, params.Net); err != nil {
+				fmt.Printf("✘ Write getcfsv2: %v\n", err)
+				os.Exit(1)
+			}
+			fmt.Printf("→ Sent: getcfsv2 (genesis=%s)\n", gen)
+			// Wait for cfsv2 (or anything else) up to timeout.
+			_ = conn.SetReadDeadline(time.Now().Add(*timeout))
+			for j := 0; j < 6; j++ {
+				resp, _, err := wire.ReadMessage(conn, wire.ProtocolVersion, params.Net)
+				if err != nil {
+					fmt.Printf("✘ Read after getcfsv2: %v\n", err)
+					os.Exit(1)
+				}
+				if cfs, ok := resp.(*wire.MsgCFiltersV2); ok {
+					if len(cfs.CFilters) == 0 {
+						fmt.Println("✘ cfsv2 returned 0 filters — node likely has no CF index built.")
+						os.Exit(1)
+					}
+					fmt.Printf("← cfsv2 — got %d filter(s), genesis CF size %d bytes ✓\n",
+						len(cfs.CFilters), len(cfs.CFilters[0].Data))
+					fmt.Println("Node serves CF data end-to-end. SPV should work.")
+					_ = chainhash.Hash{}
+					os.Exit(0)
+				}
+				fmt.Printf("← %s (ignoring, waiting for cfsv2)\n", resp.Command())
+			}
+			fmt.Println("✘ Got 6 messages but no cfsv2 response — CF service flag is on but cfilter delivery is broken.")
+			os.Exit(1)
 		default:
 			fmt.Printf("← %s\n", m.Command())
 		}
