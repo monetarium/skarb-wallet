@@ -202,16 +202,34 @@ func (asset *Asset) EstimateFeeAndSize() (*sharedW.TxFeeAndSize, error) {
 		return nil, utils.TranslateError(err)
 	}
 
-	// Fee in Monetarium is paid in the SAME coin type as the transfer (not
-	// always VAR). FeeForSerializeSizeDualCoin returns a dcrutil.Amount-shaped
-	// fee for both VAR and SKA; the caller must format the value with the
-	// right atoms-per-coin scaling for display.
+	// Fee in Monetarium is paid in the SAME coin type as the transfer.
+	// monetarium-wallet@v1.3.10 split the old FeeForSerializeSizeDualCoin into
+	// two type-specific functions: int64-dcrutil.Amount for VAR, big.Int
+	// SKAAmount for SKA. Compute whichever applies and project the result back
+	// into dcrutil.Amount-shaped UnitValue for the UI (SKA losing precision
+	// for display only — actual tx authoring uses the full SKAAmount).
 	txCoinType := asset.TxCoinType()
-	feeToSendTx := txrules.FeeForSerializeSizeDualCoin(
-		txrules.DefaultRelayFeePerKb,
-		unsignedTx.EstimatedSignedSerializeSize,
-		txCoinType,
-	)
+	var feeToSendTx dcrutil.Amount
+	if txCoinType.IsVAR() {
+		feeToSendTx = txrules.FeeForSerializeSize(
+			txrules.DefaultRelayFeePerKb,
+			unsignedTx.EstimatedSignedSerializeSize,
+		)
+	} else {
+		skaRelayFee := cointype.SKAAmountFromInt64(int64(txrules.DefaultRelayFeePerKb))
+		skaFee := txrules.FeeForSerializeSizeSKA(skaRelayFee, unsignedTx.EstimatedSignedSerializeSize)
+		// SKA values can in theory exceed int64. For UI fee display this is a
+		// non-issue (fees are tiny), but log a warning if it ever happens so
+		// we know to introduce a *big.Int-aware fee channel up the stack.
+		// dcrutil.MaxAmount isn't exported (only in tests), so clamp to the
+		// same 21e6 * AtomsPerCoin literal here.
+		if i64, convErr := skaFee.Int64(); convErr == nil {
+			feeToSendTx = dcrutil.Amount(i64)
+		} else {
+			log.Warnf("SKA fee overflows int64, clamping for UI: %v", skaFee)
+			feeToSendTx = dcrutil.Amount(maxVARAtoms)
+		}
+	}
 	feeAmount := &sharedW.Amount{
 		UnitValue: int64(feeToSendTx),
 		CoinValue: feeToSendTx.ToCoin(),
@@ -302,10 +320,17 @@ func (asset *Asset) Broadcast(privatePassphrase, transactionLabel string) (strin
 
 	var additionalPkScripts map[wire.OutPoint][]byte
 
-	invalidSigs, err := asset.Internal().DCR.SignTransaction(ctx, &msgTx, txscript.SigHashAll, additionalPkScripts, nil, nil)
+	// monetarium-wallet v1.3.x added a third return — a bool signalling
+	// whether the wallet partially signed (some inputs left unsigned).
+	// Skarb v1 doesn't surface multisig flows, so a non-fully-signed result
+	// is the same as failure; log and bail.
+	invalidSigs, fullySigned, err := asset.Internal().DCR.SignTransaction(ctx, &msgTx, txscript.SigHashAll, additionalPkScripts, nil, nil)
 	if err != nil {
 		log.Error(err)
 		return "", err
+	}
+	if !fullySigned {
+		log.Warnf("SignTransaction returned without all inputs signed; multisig flows not supported in v1")
 	}
 
 	invalidInputIndexes := make([]uint32, len(invalidSigs))
@@ -427,7 +452,12 @@ func (asset *Asset) constructTransaction() (*txauthor.AuthoredTx, error) {
 	inputsSourceFunc := asset.makeInputSource(sendMax, unspents)
 
 	requiredConfirmations := asset.RequiredConfirmations()
-	return asset.Internal().DCR.NewUnsignedTransaction(ctx, outputs, txrules.DefaultRelayFeePerKb, asset.TxAuthoredInfo.sourceAccountNumber,
+	// monetarium-wallet v1.3.x switched relayFeePerKb from dcrutil.Amount to
+	// the dual-coin SKAAmount type. For VAR-driven txs we pass the same
+	// numeric value wrapped as SKAAmount; the wallet picks the right scaling
+	// internally based on output coin types.
+	relayFee := cointype.SKAAmountFromInt64(int64(txrules.DefaultRelayFeePerKb))
+	return asset.Internal().DCR.NewUnsignedTransaction(ctx, outputs, relayFee, asset.TxAuthoredInfo.sourceAccountNumber,
 		requiredConfirmations, outputSelectionAlgorithm, changeSource, inputsSourceFunc)
 }
 
@@ -481,7 +511,12 @@ func (asset *Asset) makeInputSource(sendMax bool, utxos []*sharedW.UnspentOutput
 			asset.RequiredConfirmations())
 	}
 
-	return func(target dcrutil.Amount) (*txauthor.InputDetail, error) {
+	// monetarium-wallet v1.3.x InputSource also receives a targetSKA value
+	// for SKA-denominated transactions. Skarb v1 only authors VAR-targeted
+	// txs through this path (SKA flows go via the SKA-aware wallet APIs),
+	// so we ignore targetSKA here. If we ever wire SKA tx authoring through
+	// this function, we must consume targetSKA to size the inputs.
+	return func(target dcrutil.Amount, _ cointype.SKAAmount) (*txauthor.InputDetail, error) {
 		// If an error was found return it first.
 		if sourceErr != nil {
 			return nil, sourceErr
