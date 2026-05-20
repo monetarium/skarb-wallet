@@ -30,6 +30,8 @@ func main() {
 	addr := flag.String("addr", "176.9.28.21:19508", "host:port of the peer to probe")
 	netName := flag.String("net", "testnet", "mainnet | testnet")
 	timeout := flag.Duration("timeout", 10*time.Second, "per-step deadline")
+	listen := flag.Duration("listen", 0, "after handshake, keep the connection open and log every inv/tx for this long (e.g. 5m). Use to diagnose 'received unrequested tx' protocol violations.")
+	passive := flag.Bool("passive", false, "with -listen, do NOT send getdata for received invs and do NOT ask for the mempool snapshot — only listen. Any MsgTx that arrives in this mode is by definition unsolicited and would be rejected by dcrwallet.")
 	flag.Parse()
 
 	var params *chaincfg.Params
@@ -118,7 +120,63 @@ func main() {
 					fmt.Printf("← cfsv2 — got %d filter(s), genesis CF size %d bytes ✓\n",
 						len(cfs.CFilters), len(cfs.CFilters[0].Data))
 					fmt.Println("Node serves CF data end-to-end. SPV should work.")
-					_ = chainhash.Hash{}
+					if *listen > 0 {
+						// Stay alive long enough to catch a tx push. Peer
+						// expects empty-but-present responses to getheaders
+						// and we have to answer pings — otherwise the node
+						// stalls us and closes the connection within
+						// seconds.
+						_ = wire.WriteMessage(conn, &wire.MsgHeaders{}, wire.ProtocolVersion, params.Net)
+						if !*passive {
+							_ = wire.WriteMessage(conn, wire.NewMsgMemPool(), wire.ProtocolVersion, params.Net)
+						}
+						mode := "active (inv → getdata → tx)"
+						if *passive {
+							mode = "passive (no getdata; any tx body received is an unsolicited push)"
+						}
+						fmt.Printf("\n→ Listening %s for %s\n", mode, *listen)
+						invSeen := map[chainhash.Hash]bool{}
+						deadline := time.Now().Add(*listen)
+						for time.Now().Before(deadline) {
+							_ = conn.SetReadDeadline(deadline)
+							m, _, err := wire.ReadMessage(conn, wire.ProtocolVersion, params.Net)
+							if err != nil {
+								fmt.Printf("✘ Read error during listen: %v\n", err)
+								break
+							}
+							switch x := m.(type) {
+							case *wire.MsgInv:
+								for _, inv := range x.InvList {
+									if inv.Type == wire.InvTypeTx {
+										invSeen[inv.Hash] = true
+										fmt.Printf("← inv  tx  %s\n", inv.Hash)
+										if !*passive {
+											// Mirror dcrwallet: ask for the body so we
+											// exercise inv→getdata→tx→hash.
+											gd := wire.NewMsgGetData()
+											hashCopy := inv.Hash
+											_ = gd.AddInvVect(wire.NewInvVect(wire.InvTypeTx, &hashCopy))
+											_ = wire.WriteMessage(conn, gd, wire.ProtocolVersion, params.Net)
+										}
+									}
+								}
+							case *wire.MsgTx:
+								computed := x.TxHash()
+								if invSeen[computed] {
+									fmt.Printf("← tx   %s  ✓ matches inv\n", computed)
+								} else {
+									fmt.Printf("← tx   %s  ✗ NO PRIOR INV — dcrwallet rejects this as 'received unrequested tx'\n", computed)
+								}
+							case *wire.MsgPing:
+								_ = wire.WriteMessage(conn, wire.NewMsgPong(x.Nonce), wire.ProtocolVersion, params.Net)
+							case *wire.MsgGetHeaders:
+								_ = wire.WriteMessage(conn, &wire.MsgHeaders{}, wire.ProtocolVersion, params.Net)
+							default:
+								fmt.Printf("← %s (ignored)\n", m.Command())
+							}
+						}
+						fmt.Printf("Listen window ended. Invs seen: %d.\n", len(invSeen))
+					}
 					os.Exit(0)
 				}
 				fmt.Printf("← %s (ignoring, waiting for cfsv2)\n", resp.Command())
