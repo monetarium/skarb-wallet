@@ -212,4 +212,11 @@ require (
 // of those projects update their github.com/lib/pq dependency.
 replace github.com/lib/pq => github.com/lib/pq v1.10.4
 
+// Local patch of monetarium-wallet@v1.3.10: receivedTx tolerates duplicate
+// MsgTx (silently drops repeats within an LRU window) instead of treating
+// every duplicate as a "received unrequested tx" protocol violation. Needed
+// because monetarium-node pushes SKAn txs a second time outside the
+// standard inv→getdata→tx exchange. See _vendored/monetarium-wallet/p2p/peering.go.
+replace github.com/monetarium/monetarium-wallet => ./_vendored/monetarium-wallet
+
 // https://github.com/ukane-philemon/dcrdex/tree/btc-node
