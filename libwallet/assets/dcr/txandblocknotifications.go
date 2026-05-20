@@ -1,10 +1,18 @@
 package dcr
 
 import (
+	"time"
+
 	"github.com/monetarium/monetarium-wallet/errors"
 	sharedW "github.com/monetarium/skarb-wallet/libwallet/assets/wallet"
 	"github.com/monetarium/skarb-wallet/libwallet/utils"
 )
+
+// slowListenerWatchdog logs a warning when a tx/block notification callback
+// takes longer than this. UI-side handlers that hold gioui locks past a few
+// hundred ms freeze the wallet visibly; the watchdog turns silent freezes
+// into traceable [WARN] lines pointing at the offending listener.
+const slowListenerWatchdog = 2 * time.Second
 
 func (asset *Asset) listenForTransactions() {
 	go func() {
@@ -15,6 +23,11 @@ func (asset *Asset) listenForTransactions() {
 			case v := <-n.C:
 				if v == nil {
 					return
+				}
+				batchStart := time.Now()
+				if len(v.UnminedTransactions) > 0 || len(v.AttachedBlocks) > 0 {
+					log.Infof("[%d] TX notification batch: unmined=%d attached_blocks=%d",
+						asset.ID, len(v.UnminedTransactions), len(v.AttachedBlocks))
 				}
 				for _, transaction := range v.UnminedTransactions {
 					tempTransaction, err := asset.decodeTransactionWithTxSummary(&transaction, nil)
@@ -30,7 +43,9 @@ func (asset *Asset) listenForTransactions() {
 					}
 
 					if !overwritten {
-						log.Infof("[%d] New Transaction %s", asset.ID, tempTransaction.Hash)
+						log.Infof("[%d] New Transaction %s (direction=%d amount=%d type=%s)",
+							asset.ID, tempTransaction.Hash, tempTransaction.Direction,
+							tempTransaction.Amount, tempTransaction.Type)
 						asset.mempoolTransactionNotification(tempTransaction)
 					}
 				}
@@ -49,14 +64,23 @@ func (asset *Asset) listenForTransactions() {
 							log.Errorf("[%d] Incoming block replace tx error :%v", asset.ID, err)
 							return
 						}
+						log.Infof("[%d] Tx confirmed %s at height %d",
+							asset.ID, transaction.Hash.String(), block.Header.Height)
 						asset.publishTransactionConfirmed(transaction.Hash.String(), int32(block.Header.Height))
 					}
 
+					log.Debugf("[%d] Block attached: height=%d txs=%d",
+						asset.ID, block.Header.Height, len(block.Transactions))
 					asset.publishBlockAttached(int32(block.Header.Height))
 				}
 
 				if len(v.AttachedBlocks) > 0 {
 					asset.checkWalletMixers()
+				}
+
+				if elapsed := time.Since(batchStart); elapsed > slowListenerWatchdog {
+					log.Warnf("[%d] TX notification batch took %s — UI may have observed a freeze",
+						asset.ID, elapsed)
 				}
 
 			case <-asset.syncData.syncCanceled:
@@ -110,13 +134,44 @@ func (asset *Asset) checkWalletMixers() {
 	}
 }
 
+// runListenerWatched fires listener body in a fresh goroutine and emits a
+// [WARN] line if it takes longer than slowListenerWatchdog. listenerID is the
+// uniqueIdentifier the caller registered with — surfaces *which* UI page is
+// holding things up, not just "some listener was slow".
+func (asset *Asset) runListenerWatched(event, listenerID string, body func()) {
+	go func() {
+		start := time.Now()
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			body()
+		}()
+		select {
+		case <-done:
+			if elapsed := time.Since(start); elapsed > slowListenerWatchdog {
+				log.Warnf("[%d] %s listener %q took %s — likely cause of perceived UI freeze",
+					asset.ID, event, listenerID, elapsed)
+			}
+		case <-time.After(slowListenerWatchdog):
+			log.Warnf("[%d] %s listener %q running longer than %s — UI freeze in progress",
+				asset.ID, event, listenerID, slowListenerWatchdog)
+			<-done
+			log.Warnf("[%d] %s listener %q completed after %s",
+				asset.ID, event, listenerID, time.Since(start))
+		}
+	}()
+}
+
 func (asset *Asset) mempoolTransactionNotification(transaction *sharedW.Transaction) {
 	asset.notificationListenersMu.RLock()
 	defer asset.notificationListenersMu.RUnlock()
 
-	for _, txAndBlockNotificationListener := range asset.txAndBlockNotificationListeners {
-		if txAndBlockNotificationListener.OnTransaction != nil {
-			go txAndBlockNotificationListener.OnTransaction(asset.ID, transaction)
+	for id, listener := range asset.txAndBlockNotificationListeners {
+		if listener.OnTransaction != nil {
+			id, listener := id, listener
+			asset.runListenerWatched("OnTransaction", id, func() {
+				listener.OnTransaction(asset.ID, transaction)
+			})
 		}
 	}
 }
@@ -125,9 +180,12 @@ func (asset *Asset) publishTransactionConfirmed(transactionHash string, blockHei
 	asset.notificationListenersMu.RLock()
 	defer asset.notificationListenersMu.RUnlock()
 
-	for _, txAndBlockNotificationListener := range asset.txAndBlockNotificationListeners {
-		if txAndBlockNotificationListener.OnTransactionConfirmed != nil {
-			go txAndBlockNotificationListener.OnTransactionConfirmed(asset.ID, transactionHash, blockHeight)
+	for id, listener := range asset.txAndBlockNotificationListeners {
+		if listener.OnTransactionConfirmed != nil {
+			id, listener := id, listener
+			asset.runListenerWatched("OnTransactionConfirmed", id, func() {
+				listener.OnTransactionConfirmed(asset.ID, transactionHash, blockHeight)
+			})
 		}
 	}
 }
@@ -136,9 +194,12 @@ func (asset *Asset) publishBlockAttached(blockHeight int32) {
 	asset.notificationListenersMu.RLock()
 	defer asset.notificationListenersMu.RUnlock()
 
-	for _, txAndBlockNotificationListener := range asset.txAndBlockNotificationListeners {
-		if txAndBlockNotificationListener.OnBlockAttached != nil {
-			go txAndBlockNotificationListener.OnBlockAttached(asset.ID, blockHeight)
+	for id, listener := range asset.txAndBlockNotificationListeners {
+		if listener.OnBlockAttached != nil {
+			id, listener := id, listener
+			asset.runListenerWatched("OnBlockAttached", id, func() {
+				listener.OnBlockAttached(asset.ID, blockHeight)
+			})
 		}
 	}
 }
