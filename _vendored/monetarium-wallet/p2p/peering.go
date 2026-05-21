@@ -45,7 +45,22 @@ var uaVersion = version.String()
 const minPver = wire.RemoveRejectVersion
 
 // Pver is the maximum protocol version implemented by the LocalPeer.
-const Pver = wire.BatchedCFiltersV2Version
+//
+// Monetarium patch: bumped from BatchedCFiltersV2Version (=11) to
+// SKABigIntVersion (=13). The upstream value made the wallet negotiate down
+// to pver=11 on every peer connection, which silently drops CoinType
+// (introduced at DualCoinVersion=12) and the variable-length SKA value
+// (introduced at SKABigIntVersion=13) on the wire. The resulting MsgTx
+// reconstructed by the wallet has Value=0/CoinType=VAR for every SKA output
+// and nil SKAValueIn for every SKA input — so TxHashFull() of that
+// reconstructed tx no longer reproduces the merkle root the node committed
+// to in the block header. End result: validate.DCP0005MerkleRoot fails on
+// the first block that contains an SKA tx the wallet's address matches in a
+// cfilter, and discovery (and thus sync) dies with
+// "invalid combined merkle root". See cmd/blockprobe/main.go which exercised
+// the same fetch path at pver=13 and proved the bytes-on-wire DO reproduce
+// the committed merkle root when decoded at the proper version.
+const Pver = wire.SKABigIntVersion
 
 // stallTimeout is the amount of time allowed before a request to receive data
 // that is known to exist at the RemotePeer times out with no matching reply.

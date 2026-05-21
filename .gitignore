@@ -17,3 +17,5 @@ TODO.local.md
 /syncprobe
 /resyncprobe
 /skahashtest
+/blockprobe
+/pvertest
