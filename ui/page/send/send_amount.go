@@ -16,6 +16,19 @@ import (
 	"github.com/monetarium/monetarium-node/dcrutil"
 )
 
+// unitLabel returns the user-facing coin symbol for the selected coin
+// type ("VAR", "SKA1"…"SKA255"). The legacy hint string used
+// fmt.Sprintf("Сума (%s)", string(assetType)) which baked in the WALLET
+// type ("DCR") regardless of the selected coin — wrong in the multi-coin
+// world. Skarb only ever serves one asset (the dcr-derived monetarium
+// wallet), so we just dispatch on coin type.
+func unitLabel(ct cointype.CoinType) string {
+	if ct.IsVAR() {
+		return "VAR"
+	}
+	return dcr.CoinSymbol(ct)
+}
+
 type sendAmount struct {
 	theme *cryptomaterial.Theme
 
@@ -47,7 +60,9 @@ func newSendAmount(theme *cryptomaterial.Theme, assetType libUtil.AssetType) *se
 		coinType:     cointype.CoinTypeVAR,
 	}
 
-	hit := fmt.Sprintf("%s (%s)", values.String(values.StrAmount), string(assetType))
+	// Initial placeholder defaults to VAR; setCoinType refreshes the hint
+	// when the user picks a SKAn token via the page-level dropdown.
+	hit := fmt.Sprintf("%s (%s)", values.String(values.StrAmount), unitLabel(sa.coinType))
 	sa.amountEditor = theme.Editor(new(widget.Editor), hit)
 	sa.amountEditor.Editor.SetText("")
 	sa.amountEditor.HasCustomButton = true
@@ -291,8 +306,11 @@ func (sa *sendAmount) setAssetType(assetType libUtil.AssetType) {
 }
 
 // setCoinType updates the coin type used by validAmount to convert the
-// user-typed float into integer atoms. Called by recipient.setCoinType, which
-// is in turn driven by the page's CoinType dropdown.
+// user-typed float into integer atoms, and refreshes the editor placeholder
+// hint so it matches the selected coin's symbol. Called by
+// recipient.setCoinType, which is in turn driven by the page's CoinType
+// dropdown.
 func (sa *sendAmount) setCoinType(ct cointype.CoinType) {
 	sa.coinType = ct
+	sa.amountEditor.Hint = fmt.Sprintf("%s (%s)", values.String(values.StrAmount), unitLabel(ct))
 }

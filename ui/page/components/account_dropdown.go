@@ -7,10 +7,12 @@ import (
 	"gioui.org/font"
 	"gioui.org/layout"
 	"github.com/monetarium/skarb-wallet/app"
+	"github.com/monetarium/skarb-wallet/libwallet/assets/dcr"
 	sharedW "github.com/monetarium/skarb-wallet/libwallet/assets/wallet"
 	"github.com/monetarium/skarb-wallet/ui/cryptomaterial"
 	"github.com/monetarium/skarb-wallet/ui/load"
 	"github.com/monetarium/skarb-wallet/ui/values"
+	"github.com/monetarium/monetarium-node/cointype"
 )
 
 type AccountDropdown struct {
@@ -21,6 +23,18 @@ type AccountDropdown struct {
 	allAccounts            []*sharedW.Account
 	accountChangedCallback func(*sharedW.Account)
 	accountIsValid         func(*sharedW.Account) bool
+
+	// coinType controls which coin's balance the dropdown displays per
+	// account. Defaults to VAR (CoinTypeVAR). When set to a SKAn type via
+	// SetCoinType, getAccountItemLayout fetches the per-account SKA
+	// balance and formats it under that coin's symbol instead of
+	// silently falling through to the dcrutil.Amount VAR formatter.
+	//
+	// The legacy code path showed "0 VAR" on the send page even when the
+	// user had selected SKA1 in the asset picker, which made the wallet
+	// look like it had no funds available to send — a classic source of
+	// "the wallet is broken" support tickets.
+	coinType cointype.CoinType
 }
 
 func NewAccountDropdown(l *load.Load) *AccountDropdown {
@@ -96,8 +110,62 @@ func (d *AccountDropdown) AccountValidator(accountIsValid func(*sharedW.Account)
 	return d
 }
 
+// SetCoinType switches the dropdown's per-account balance display to the
+// given coin type. Pass cointype.CoinTypeVAR to restore default behaviour.
+// Callers should invoke this *after* Setup so the dropdown items are
+// already populated; the next layout pass will pick up the new coin.
+func (d *AccountDropdown) SetCoinType(ct cointype.CoinType) {
+	if d.coinType == ct {
+		return
+	}
+	d.coinType = ct
+	// Rebuild the DisplayFn for each existing item so the inline
+	// SKA-balance lookup is bound against the new coin type immediately.
+	// Without this rebuild the dropdown keeps the previous closure and
+	// would only update after a fresh Setup() call.
+	if d.selectedWallet == nil {
+		return
+	}
+	items := make([]cryptomaterial.DropDownItem, 0, len(d.allAccounts))
+	for _, account := range d.allAccounts {
+		items = append(items, cryptomaterial.DropDownItem{
+			Text:      fmt.Sprint(account.Number),
+			Icon:      d.Theme.Icons.AccountIcon,
+			DisplayFn: d.getAccountItemLayout(account),
+		})
+	}
+	d.dropdown.SetItems(items)
+}
+
 func (d *AccountDropdown) getAccountItemLayout(account *sharedW.Account) layout.Widget {
 	return func(gtx C) D {
+		// totalLabel / spendableLabel are the two strings rendered on the
+		// right side of the dropdown row. By default we use the account's
+		// own VAR-shaped Balance fields. When SetCoinType was called with
+		// a SKAn type, we look up the per-account SKA balance live and
+		// format it under FormatCoinAmount, which puts the right unit
+		// ("SKA1") + the right number of decimals (1e18 atoms/coin).
+		totalLabel := account.Balance.Total.String()
+		spendableLabel := account.Balance.Spendable.String()
+		if d.coinType.IsSKA() {
+			if dcrAsset, ok := d.selectedWallet.(*dcr.Asset); ok {
+				if bal, err := dcrAsset.GetCoinBalance(account.Number, d.coinType); err == nil {
+					totalLabel = dcr.FormatCoinAmount(bal)
+					// CoinBalance carries Spendable as a sub-field; map
+					// the same shape so SKA users see "X SKA1" instead of
+					// the always-zero VAR Balance.Spendable.
+					spendBal := bal
+					spendBal.Total = bal.Spendable
+					spendBal.SKATotal = bal.SKASpendable
+					spendableLabel = dcr.FormatCoinAmount(spendBal)
+				}
+			}
+		}
+		if d.selectedWallet != nil && d.selectedWallet.IsWatchingOnlyWallet() {
+			account.Balance.Spendable = d.selectedWallet.ToAmount(0)
+			spendableLabel = account.Balance.Spendable.String()
+		}
+
 		return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
 			layout.Rigid(func(gtx C) D {
 				return layout.Flex{Axis: layout.Horizontal, Spacing: layout.SpaceBetween}.Layout(gtx,
@@ -108,7 +176,7 @@ func (d *AccountDropdown) getAccountItemLayout(account *sharedW.Account) layout.
 						return lbl.Layout(gtx)
 					}),
 					layout.Rigid(func(gtx C) D {
-						return d.Theme.Label(values.TextSizeTransform(d.IsMobileView(), values.TextSize16), account.Balance.Total.String()).Layout(gtx)
+						return d.Theme.Label(values.TextSizeTransform(d.IsMobileView(), values.TextSize16), totalLabel).Layout(gtx)
 					}),
 				)
 			}),
@@ -120,10 +188,7 @@ func (d *AccountDropdown) getAccountItemLayout(account *sharedW.Account) layout.
 						return spendableText.Layout(gtx)
 					}),
 					layout.Rigid(func(gtx C) D {
-						if d.selectedWallet != nil && d.selectedWallet.IsWatchingOnlyWallet() {
-							account.Balance.Spendable = d.selectedWallet.ToAmount(0)
-						}
-						return d.Theme.Label(values.TextSizeTransform(d.IsMobileView(), values.TextSize14), account.Balance.Spendable.String()).Layout(gtx)
+						return d.Theme.Label(values.TextSizeTransform(d.IsMobileView(), values.TextSize14), spendableLabel).Layout(gtx)
 					}),
 				)
 			}),

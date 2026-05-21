@@ -173,6 +173,13 @@ func (pg *Page) applyCoinType(ct cointype.CoinType) {
 	for _, rc := range pg.recipients {
 		rc.setCoinType(ct)
 	}
+	// Switch the source-account dropdown to show the SKA balance for the
+	// selected coin (instead of always showing VAR), so a user with 0 VAR
+	// and 550 SKA1 stops seeing "0 VAR" and concluding the wallet is
+	// empty.
+	if pg.accountDropdown != nil {
+		pg.accountDropdown.SetCoinType(ct)
+	}
 	pg.validateAndConstructTx()
 }
 
@@ -432,15 +439,26 @@ func (pg *Page) constructTx() {
 	feeAtom := feeAndSize.Fee.UnitValue
 	wal := pg.selectedWallet
 
+	// Coin-type-aware display strings. wal.ToAmount(N).String() and the
+	// AssetAmount.String() returned from addSendDestination both
+	// hard-code the VAR suffix via dcrutil.Amount.String() — so a SKA
+	// send was rendering "X.XX VAR" in the fee, total, balance-after, and
+	// send-amount rows. dcr.FormatTxAmount dispatches on the selected
+	// CoinType and emits the correct unit ("VAR" / "SKA1" / "SKA2"…).
+	displayCoinType := uint8(cointype.CoinTypeVAR)
+	if pg.coinTypeDropdown != nil {
+		displayCoinType = uint8(pg.coinTypeDropdown.Selected())
+	}
+
 	// populate display data
-	pg.txFee = wal.ToAmount(feeAtom).String()
+	pg.txFee = dcr.FormatTxAmount(feeAtom, displayCoinType)
 
 	pg.feeRateSelector.EstSignedSize = fmt.Sprintf("%d Bytes", feeAndSize.EstimatedSignedSize)
 	pg.feeRateSelector.TxFee = pg.txFee
 	pg.feeRateSelector.SetFeerate(feeAndSize.FeeRate)
-	pg.totalCost = totalCost.String()
-	pg.balanceAfterSend = balanceAfterSend.String()
-	pg.sendAmount = wal.ToAmount(totalAmount).String()
+	pg.totalCost = dcr.FormatTxAmount(totalCost.ToInt(), displayCoinType)
+	pg.balanceAfterSend = dcr.FormatTxAmount(balanceAfterSend.ToInt(), displayCoinType)
+	pg.sendAmount = dcr.FormatTxAmount(totalAmount, displayCoinType)
 	pg.destinationAddress = pg.getDestinationAddresses()
 	pg.destinationAccount = pg.getDestinationAccounts()
 	pg.sourceAccount = sourceAccount
@@ -509,6 +527,23 @@ func (pg *Page) addSendDestination() (sharedW.AssetAmount, sharedW.AssetAmount, 
 	}
 	feeAtom := feeAndSize.Fee.UnitValue
 	spendableAmount := sourceAccount.Balance.Spendable.ToInt()
+	// VAR-only sourceAccount.Balance was the pre-multi-coin behaviour;
+	// for SKAn sends we look up the per-coin balance so "balance after
+	// send" math (and SendMax bookkeeping) doesn't underflow because the
+	// VAR account balance is zero. This also matches what the AccountDropdown
+	// now displays after SetCoinType propagation.
+	if pg.coinTypeDropdown != nil && pg.coinTypeDropdown.Selected().IsSKA() {
+		if dcrAsset, ok := pg.selectedWallet.(*dcr.Asset); ok {
+			if bal, err := dcrAsset.GetCoinBalance(sourceAccount.Number, pg.coinTypeDropdown.Selected()); err == nil {
+				// CoinBalance carries int64 (clamped) Spendable for SKA;
+				// good enough as long as the user's balance fits in int64
+				// (phase-1 ceiling ~9.22 SKA per total — see
+				// AmountAtomForCoinType). Larger balances need a big.Int
+				// path here.
+				spendableAmount = int64(bal.Spendable)
+			}
+		}
+	}
 	if len(selectedUTXOs) > 0 {
 		spendableAmount = pg.selectedUTXOs.totalUTXOsAmount
 	}
