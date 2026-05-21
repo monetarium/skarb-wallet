@@ -3,6 +3,7 @@ package dcr
 import (
 	"context"
 	"fmt"
+	"math/big"
 
 	"github.com/monetarium/monetarium-node/cointype"
 	"github.com/monetarium/monetarium-node/dcrutil"
@@ -118,6 +119,31 @@ func FormatCoinAmount(bal dcrW.CoinBalance) string {
 	// that changes.
 	atomsStr := bal.SKATotal.ToDecimalString(cointype.AtomsPerSKACoin)
 	return atomsStr + " " + CoinSymbol(bal.CoinType)
+}
+
+// FormatTxAmount renders a transaction-side int64 atom value with the correct
+// scale and unit suffix for the given coin type. Use this anywhere we display
+// a tx amount (history list, tx details, notification text) so an SKA tx
+// stops being labeled "X.XXXXXXXX VAR" by the legacy dcrutil.Amount.String().
+//
+// VAR amounts go through dcrutil.Amount.String() unchanged (1e8 atoms/coin).
+// SKA amounts use big.Int math against AtomsPerSKACoin (1e18 by default), so
+// an int64 atom value below int64-max renders losslessly; for amounts that
+// were already clamped to int64 by the tx decoder (single UTXO > ~9.22 SKA)
+// the formatted number is exact for the clamped int64, not the original
+// big.Int — a known Phase-1 limitation flagged by the decoder warning.
+//
+// coinType is a uint8 because sharedW.Transaction.CoinType is uint8 to stay
+// stable across the storm-DB schema; we coerce to cointype.CoinType inside.
+func FormatTxAmount(atoms int64, coinType uint8) string {
+	ct := cointype.CoinType(coinType)
+	if !ct.IsValid() || ct.IsVAR() {
+		return dcrutil.Amount(atoms).String()
+	}
+	// SKA path: build a *big.Int and run it through ToDecimalString for the
+	// same trailing-zero-trim formatting FormatCoinAmount uses on balances.
+	amt := cointype.NewSKAAmount(big.NewInt(atoms))
+	return amt.ToDecimalString(cointype.AtomsPerSKACoin) + " " + CoinSymbol(ct)
 }
 
 // CoinSymbol returns the user-facing symbol for a coin type. Wraps

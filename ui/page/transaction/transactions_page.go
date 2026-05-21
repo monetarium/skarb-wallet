@@ -800,8 +800,10 @@ func exportTxs(assets []sharedW.Asset, fileName string) error {
 				tx.Hash,
 				tx.Type,
 				txhelper.TxDirectionString(tx.Direction),
-				a.ToAmount(tx.Fee).String(),
-				a.ToAmount(tx.Amount).String(),
+				// CSV row formatted under the tx's actual CoinType so SKA exports
+				// don't silently rebrand to "X.XX VAR" via dcrutil.Amount.String().
+				dcr.FormatTxAmount(tx.Fee, tx.CoinType),
+				dcr.FormatTxAmount(tx.Amount, tx.CoinType),
 			})
 			if err != nil {
 				return fmt.Errorf("csv.Writer.Write error: %v", err)

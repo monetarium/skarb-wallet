@@ -403,10 +403,15 @@ func (pg *TxDetailsPage) txDetailsHeader(gtx C) D {
 							col := pg.Theme.Color.GrayText2
 							return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
 								layout.Rigid(func(gtx C) D {
-									title := pg.wallet.ToAmount(pg.transaction.Amount).String()
+									// Format the headline amount with the tx's actual coin
+									// type — never assume VAR. Without this an SKA receive
+									// shows "X.YZ VAR" because dcrutil.Amount.String()
+									// hard-codes the VAR suffix. pg.transaction.CoinType
+									// (uint8) was set at decode time from outputs[0].CoinType.
+									title := dcr.FormatTxAmount(pg.transaction.Amount, pg.transaction.CoinType)
 									switch pg.transaction.Type {
 									case txhelper.TxTypeMixed:
-										title = pg.wallet.ToAmount(pg.transaction.MixDenomination).String()
+										title = dcr.FormatTxAmount(pg.transaction.MixDenomination, pg.transaction.CoinType)
 									case txhelper.TxTypeRegular:
 										if pg.transaction.Direction == txhelper.TxDirectionSent && !strings.Contains(title, "-") {
 											title = "-" + title
@@ -759,7 +764,9 @@ func (pg *TxDetailsPage) txnTypeAndID(gtx C) D {
 			if pg.wallet.GetAssetType() == libutils.BTCWalletAsset && transaction.Direction == txhelper.TxDirectionReceived {
 				return D{}
 			}
-			return pg.keyValue(gtx, values.String(values.StrTxFee), pg.Theme.Label(values.TextSize14, pg.wallet.ToAmount(transaction.Fee).String()).Layout)
+			// Fee is paid in the same coin as the transaction (Monetarium consensus rule),
+			// so format it under the tx's CoinType — not always as VAR.
+			return pg.keyValue(gtx, values.String(values.StrTxFee), pg.Theme.Label(values.TextSize14, dcr.FormatTxAmount(transaction.Fee, transaction.CoinType)).Layout)
 		}),
 		layout.Rigid(func(gtx C) D {
 			// hide section for non ticket transactions
@@ -852,7 +859,10 @@ func (pg *TxDetailsPage) txnIORow(gtx C, amount int64, acctNum int32, address st
 	}
 
 	accountName = fmt.Sprintf("(%s)", accountName)
-	amt := pg.wallet.ToAmount(amount).String()
+	// Per-input/output row amount also follows the tx's CoinType. All inputs
+	// AND outputs of a single Monetarium tx share one CoinType (consensus
+	// enforced), so it's safe to take the tx-level value.
+	amt := dcr.FormatTxAmount(amount, pg.transaction.CoinType)
 
 	return layout.Inset{Top: values.MarginPadding8}.Layout(gtx, func(gtx C) D {
 		card := pg.Theme.Card()

@@ -269,7 +269,9 @@ func LayoutTransactionRow(gtx C, l *load.Load, wal sharedW.Asset, tx *sharedW.Tr
 
 	dp16 := values.MarginPaddingTransform(l.IsMobileView(), values.MarginPadding16)
 	txStatus := TransactionTitleIcon(l, wal, tx)
-	amount := wal.ToAmount(tx.Amount).String()
+	// Use the tx's stored CoinType for the unit + scale (1e8 VAR vs 1e18 SKA);
+	// wal.ToAmount(tx.Amount).String() always renders as VAR.
+	amount := dcr.FormatTxAmount(tx.Amount, tx.CoinType)
 	assetIcon := CoinImageBySymbol(l, wal.GetAssetType(), wal.IsWatchingOnlyWallet())
 	walName := l.Theme.Label(values.TextSize14, wal.GetWalletName())
 	grayText := l.Theme.Color.GrayText2
@@ -300,7 +302,7 @@ func LayoutTransactionRow(gtx C, l *load.Load, wal sharedW.Asset, tx *sharedW.Tr
 			}.Layout(gtx,
 				layout.Rigid(func(gtx C) D {
 					if tx.Type == txhelper.TxTypeRegular {
-						amount := wal.ToAmount(tx.Amount).String()
+						amount := dcr.FormatTxAmount(tx.Amount, tx.CoinType)
 						if tx.Direction == txhelper.TxDirectionSent && !strings.Contains(amount, "-") {
 							amount = "-" + amount
 						}
