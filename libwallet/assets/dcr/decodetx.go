@@ -5,6 +5,7 @@ import (
 
 	w "github.com/monetarium/monetarium-wallet/wallet"
 	sharedW "github.com/monetarium/skarb-wallet/libwallet/assets/wallet"
+	"github.com/monetarium/skarb-wallet/libwallet/addresshelper"
 	"github.com/monetarium/skarb-wallet/libwallet/txhelper"
 	"github.com/monetarium/monetarium-node/blockchain/stake"
 	"github.com/monetarium/monetarium-node/chaincfg"
@@ -23,7 +24,7 @@ func (asset *Asset) DecodeTransaction(walletTx *sharedW.TxInfoFromWallet, netPar
 		return nil, err
 	}
 
-	inputs, totalWalletInput, totalWalletUnmixedInputs := asset.decodeTxInputs(msgTx, walletTx.Inputs)
+	inputs, totalWalletInput, totalWalletUnmixedInputs := asset.decodeTxInputs(msgTx, netParams, walletTx.Inputs)
 	outputs, totalWalletOutput, totalWalletMixedOutputs, mixedOutputsCount := asset.decodeTxOutputs(msgTx, netParams, walletTx.Outputs)
 
 	amount, direction := txhelper.TransactionAmountAndDirection(totalWalletInput, totalWalletOutput, int64(txFee))
@@ -86,7 +87,7 @@ func (asset *Asset) DecodeTransaction(walletTx *sharedW.TxInfoFromWallet, netPar
 	}, nil
 }
 
-func (asset *Asset) decodeTxInputs(mtx *wire.MsgTx, walletInputs []*sharedW.WInput) (inputs []*sharedW.TxInput, totalWalletInputs, totalWalletUnmixedInputs int64) {
+func (asset *Asset) decodeTxInputs(mtx *wire.MsgTx, netParams *chaincfg.Params, walletInputs []*sharedW.WInput) (inputs []*sharedW.TxInput, totalWalletInputs, totalWalletUnmixedInputs int64) {
 	inputs = make([]*sharedW.TxInput, len(mtx.TxIn))
 	unmixedAccountNumber := asset.ReadInt32ConfigValueForKey(sharedW.AccountMixerUnmixedAccount, -1)
 
@@ -98,12 +99,27 @@ func (asset *Asset) decodeTxInputs(mtx *wire.MsgTx, walletInputs []*sharedW.WInp
 		// outputTotal - inputTotal = 0 - 0 = 0 with fee=0) instead of
 		// "Received". Phase 1 keeps int64-shaped Amount; the helper
 		// logs and clamps when an SKA value overflows int64.
+		//
+		// SenderAddress is derived from the input's sigScript (which
+		// reveals the spender's pubkey for P2PKH); it gives us a real
+		// "From" address to show in the UI for received transactions
+		// even though SPV mode never stores the sender's prior
+		// outputs. Empty string for non-P2PKH inputs (coinbase, OP_RETURN
+		// spend, multisig P2SH); the UI must handle the empty case.
+		var senderAddress string
+		if addr, err := addresshelper.SigScriptSenderAddress(txIn.SignatureScript, netParams); err != nil {
+			log.Debugf("SigScriptSenderAddress(tx=%s input=%d): %v",
+				mtx.TxHash(), i, err)
+		} else {
+			senderAddress = addr
+		}
 		input := &sharedW.TxInput{
 			PreviousTransactionHash:  txIn.PreviousOutPoint.Hash.String(),
 			PreviousTransactionIndex: int32(txIn.PreviousOutPoint.Index),
 			PreviousOutpoint:         txIn.PreviousOutPoint.String(),
 			Amount:                   skaOrVARAtoms(txIn.SKAValueIn, txIn.ValueIn, "TxInput"),
 			AccountNumber:            -1, // correct account number is set below if this is a wallet output
+			SenderAddress:            senderAddress,
 		}
 
 		// override account details if this is wallet input

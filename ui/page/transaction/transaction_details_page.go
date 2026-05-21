@@ -600,9 +600,22 @@ func (pg *TxDetailsPage) txnTypeAndID(gtx C) D {
 		},
 	}.Layout(gtx,
 		layout.Rigid(func(gtx C) D {
-			// hide section for received transactions
+			// For RECEIVED transactions, "From" = sender address(es) derived
+			// from each input's sigScript (which reveals the spender's
+			// secp256k1 pubkey, hashed to a P2PKH address). The legacy code
+			// hid this block entirely on receive, but Skarb extracts the
+			// sender address at decode time (TxInput.SenderAddress) so we
+			// can finally show a meaningful "From" panel. Distinct addresses
+			// only — a multi-input tx from one wallet usually re-signs from
+			// one address.
 			if pg.transaction.Type == txhelper.TxTypeRegular && pg.transaction.Direction == txhelper.TxDirectionReceived {
-				return D{}
+				addrs := uniqueSenderAddresses(pg.transaction.Inputs)
+				if len(addrs) == 0 {
+					return D{} // no resolvable P2PKH inputs; nothing useful to display
+				}
+				return pg.keyValue(gtx, values.String(values.StrFrom), func(gtx C) D {
+					return layoutSenderAddressList(gtx, pg, addrs)
+				})
 			}
 
 			label := values.String(values.StrFrom)
@@ -1056,4 +1069,56 @@ func (pg *TxDetailsPage) OnNavigatedFrom() {}
 
 func timeString(timestamp int64) string {
 	return time.Unix(timestamp, 0).Format("Jan 2, 2006 15:04:05 PM")
+}
+
+// uniqueSenderAddresses returns the de-duplicated, ordered list of
+// SenderAddress fields populated by the tx decoder. A typical received
+// transaction has every input signed from the same address, so this collapses
+// to one entry; multi-source sends (rare but possible) keep the full list.
+// Empty SenderAddress values (non-P2PKH inputs we couldn't resolve) are
+// silently skipped. Order matches the input order, which is the order the
+// chain stored them in.
+func uniqueSenderAddresses(inputs []*sharedW.TxInput) []string {
+	seen := make(map[string]struct{}, len(inputs))
+	out := make([]string, 0, len(inputs))
+	for _, in := range inputs {
+		if in == nil || in.SenderAddress == "" {
+			continue
+		}
+		if _, dup := seen[in.SenderAddress]; dup {
+			continue
+		}
+		seen[in.SenderAddress] = struct{}{}
+		out = append(out, in.SenderAddress)
+	}
+	return out
+}
+
+// layoutSenderAddressList renders the "From" panel content for a received
+// transaction: one click-to-copy address row per unique sender address.
+// Styled to match the "To" panel for sent transactions (primary color,
+// clickable, copies on tap with the same toast text).
+func layoutSenderAddressList(gtx C, pg *TxDetailsPage, addrs []string) D {
+	// Pre-allocate per-address clickables once per layout pass. The
+	// transactionWdg.copyTextButtons pool is sized for I/O rows; this is a
+	// separate header-level concern so we use ad-hoc clickables, refreshed
+	// each frame. Cheap — addrs is small (typically 1).
+	flexChilds := make([]layout.FlexChild, 0, len(addrs)*2)
+	for i := range addrs {
+		address := addrs[i]
+		clickable := pg.Theme.NewClickable(false)
+		flexChilds = append(flexChilds, layout.Rigid(func(gtx C) D {
+			if clickable.Clicked(gtx) {
+				gtx.Execute(clipboard.WriteCmd{Data: io.NopCloser(strings.NewReader(address))})
+				pg.Toast.Notify(values.String(values.StrTxHashCopied))
+			}
+			lbl := pg.Theme.Label(values.TextSize14, pageutils.SplitSingleString(address, 0))
+			lbl.Color = pg.Theme.Color.Primary
+			return clickable.Layout(gtx, lbl.Layout)
+		}))
+		if i < len(addrs)-1 {
+			flexChilds = append(flexChilds, layout.Rigid(layout.Spacer{Height: values.MarginPadding5}.Layout))
+		}
+	}
+	return layout.Flex{Axis: layout.Vertical}.Layout(gtx, flexChilds...)
 }

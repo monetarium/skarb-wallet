@@ -340,6 +340,13 @@ type TxInput struct {
 	PreviousOutpoint         string `json:"previous_outpoint"`
 	Amount                   int64  `json:"amount"`
 	AccountNumber            int32  `json:"account_number"`
+	// SenderAddress is the P2PKH address whose pubkey signed this input,
+	// derived from the sigScript at decode time. Used to populate the
+	// "From" panel on received transactions where no other source of the
+	// sender's address is available (SPV wallets don't store other users'
+	// prior outputs). Empty string when the sigScript isn't a standard
+	// P2PKH push pair (multisig, OP_RETURN spends, etc.).
+	SenderAddress string `json:"sender_address,omitempty"`
 }
 
 type TxOutput struct {

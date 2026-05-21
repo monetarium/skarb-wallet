@@ -24,7 +24,12 @@ const (
 	//     receives stop being misclassified as Sent/Transferred and the
 	//     "From" panel renders correctly. Forces a one-shot reindex on
 	//     upgrade so already-saved rows pick up the new amount/direction.
-	currentTxParserVersion int32 = 2
+	// v3: TxInput.SenderAddress populated by addresshelper from each
+	//     P2PKH input's sigScript so received-transaction details can
+	//     surface a real sender address. Old rows have empty SenderAddress
+	//     forever; bumping forces them to be re-decoded with the new
+	//     populated field.
+	currentTxParserVersion int32 = 3
 )
 
 func (asset *Asset) IndexTransactions() error {
