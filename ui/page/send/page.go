@@ -417,10 +417,29 @@ func (pg *Page) constructTx() {
 	// Tag the in-progress transaction with the selected coin type. SetTxCoinType
 	// is a no-op when the choice hasn't changed.
 	if dcrAsset, ok := pg.selectedWallet.(*dcr.Asset); ok && pg.coinTypeDropdown != nil {
-		if err := dcrAsset.SetTxCoinType(pg.coinTypeDropdown.Selected()); err != nil {
+		ct := pg.coinTypeDropdown.Selected()
+		if err := dcrAsset.SetTxCoinType(ct); err != nil {
 			pg.setRecipientsAmountErr(err)
 			pg.clearEstimates()
 			return
+		}
+		// Defensive re-sync: the AccountDropdown's coin type ought to
+		// have been switched by applyCoinType when the asset selector
+		// changed, but that callback can race with construct cycles
+		// triggered from other dropdowns (account, amount). If they
+		// drift the user sees the SKA balance row while the asset
+		// selector says VAR (or vice versa) and the form refuses to
+		// send because spendable comes from the wrong coin. Pushing the
+		// current asset selection through every construct pass keeps
+		// both dropdowns and the in-memory TxCoinType pointing at the
+		// same thing.
+		if pg.accountDropdown != nil {
+			pg.accountDropdown.SetCoinType(ct)
+		}
+		// Also keep every recipient's amount editor in sync — same
+		// drift problem on the float→atoms conversion side.
+		for _, rc := range pg.recipients {
+			rc.setCoinType(ct)
 		}
 	}
 

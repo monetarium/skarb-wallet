@@ -525,9 +525,18 @@ func (asset *Asset) makeInputSource(sendMax bool, utxos []*sharedW.UnspentOutput
 	}
 
 	if sourceErr == nil && totalInputValue == 0 {
-		// Constructs an error describing the possible reasons why the
-		// wallet balance cannot be spent.
-		sourceErr = fmt.Errorf("inputs have less than %d confirmations",
+		// Reachable in two distinct situations that this function
+		// can't disambiguate on its own:
+		//   - The account has utxos but every one is still
+		//     unconfirmed (< RequiredConfirmations blocks deep).
+		//   - The account has no VAR utxos at all — typically because
+		//     the user is trying to send VAR from an account that
+		//     only holds SKA tokens.
+		// The original phrasing only mentioned confirmations, which
+		// then got translated to "Некоректна сума" via TranslateErr and
+		// looked like the user typed an invalid number. Mention the
+		// likelier cause first so the form points at the real problem.
+		sourceErr = fmt.Errorf("no spendable VAR in this account (need confirmed UTXOs >= %d blocks deep)",
 			asset.RequiredConfirmations())
 	}
 
