@@ -37,9 +37,19 @@ func formatBalance(gtx C, l *load.Load, amount string, mainTextSize unit.Sp, col
 		startIndex = loc[1] // start scaling from the end
 	}
 
+	// stopIndex marks the boundary between value digits and the " UNIT"
+	// suffix. Upstream logic had its conditional inverted: it overrode
+	// stopIndex with len(amount) ONLY when a unit was found, which made
+	// the unit suffix invisible AND, when no unit was found, left
+	// stopIndex at -1 so the guard below returned an empty layout for
+	// the entire row. With getIndexUnit() now falling back to "last
+	// space" we usually get a real index here, but for amounts that are
+	// pure digits ("0", "0.00000000") we still need the "no unit found
+	// → use whole string as value" fallback. Renaming + fixing the
+	// condition makes the intent explicit.
 	stopIndex = getIndexUnit(amount)
-	isUnitExist := stopIndex != -1
-	if isUnitExist {
+	noUnit := stopIndex == -1
+	if noUnit {
 		stopIndex = len(amount)
 	}
 
@@ -103,8 +113,23 @@ func formatBalanceWithHidden(gtx C, l *load.Load, amount string, mainTextSize un
 	return txt.Layout(gtx)
 }
 
-// getIndexUnit returns index of unit currency in amount and
-// helps to break out the unit part from the amount string.
+// getIndexUnit returns the index of the leading space before the unit suffix
+// inside a "<value> <unit>"-shaped amount string, or -1 if no unit can be
+// found.
+//
+// Historically this only recognized the wallet-TYPE identifiers ("BTC",
+// "DCR", "LTC") — i.e., the names of the upstream Cryptopower coin
+// kinds. Monetarium prints its amounts with the COIN-LEVEL unit instead
+// ("VAR" for the base asset, "SKA1"…"SKA255" for the per-token coins),
+// so neither of the original tokens ever matched a real Skarb amount and
+// formatBalance silently bailed via its stopIndex<=0 guard — that's why
+// the Recent Transactions feed showed every SKA1 row with the asset
+// label visible but no amount text at all.
+//
+// We now fall back to a generic "last space" rule: if no recognized
+// hard-coded prefix matches but the string ends with " SOMETHING", treat
+// that final whitespace as the value/unit boundary. Covers VAR, every
+// SKA1…SKA255 token, USD, and any future coin we haven't enumerated.
 func getIndexUnit(amount string) int {
 	if strings.Contains(amount, string(utils.BTCWalletAsset)) {
 		return strings.Index(amount, " "+string(utils.BTCWalletAsset))
@@ -112,6 +137,12 @@ func getIndexUnit(amount string) int {
 		return strings.Index(amount, " "+string(utils.DCRWalletAsset))
 	} else if strings.Contains(amount, string(utils.LTCWalletAsset)) {
 		return strings.Index(amount, " "+string(utils.LTCWalletAsset))
+	}
+	// Generic suffix: "<digits>.<digits> <UNIT>" or "<digits> <UNIT>".
+	// Use the LAST space so a future format like "1,234.56 SKA1" still
+	// splits on the right whitespace.
+	if idx := strings.LastIndex(amount, " "); idx > 0 {
+		return idx
 	}
 	return -1
 }
