@@ -91,11 +91,18 @@ func (asset *Asset) decodeTxInputs(mtx *wire.MsgTx, walletInputs []*sharedW.WInp
 	unmixedAccountNumber := asset.ReadInt32ConfigValueForKey(sharedW.AccountMixerUnmixedAccount, -1)
 
 	for i, txIn := range mtx.TxIn {
+		// SKA inputs carry their atom value in SKAValueIn (*big.Int) and
+		// have ValueIn=0. Reading ValueIn alone zeros every SKA input
+		// row, which cascades into TransactionAmountAndDirection
+		// classifying SKA receives as "Transferred"/"Sent" (because
+		// outputTotal - inputTotal = 0 - 0 = 0 with fee=0) instead of
+		// "Received". Phase 1 keeps int64-shaped Amount; the helper
+		// logs and clamps when an SKA value overflows int64.
 		input := &sharedW.TxInput{
 			PreviousTransactionHash:  txIn.PreviousOutPoint.Hash.String(),
 			PreviousTransactionIndex: int32(txIn.PreviousOutPoint.Index),
 			PreviousOutpoint:         txIn.PreviousOutPoint.String(),
-			Amount:                   txIn.ValueIn,
+			Amount:                   skaOrVARAtoms(txIn.SKAValueIn, txIn.ValueIn, "TxInput"),
 			AccountNumber:            -1, // correct account number is set below if this is a wallet output
 		}
 
@@ -147,9 +154,19 @@ func (asset *Asset) decodeTxOutputs(mtx *wire.MsgTx, netParams *chaincfg.Params,
 			scriptType = scriptClass.String()
 		}
 
+		// Same SKA/VAR pivot as decodeTxInputs: SKA outputs have Value=0
+		// and carry their atom value in SKAValue. Without this pivot
+		// SKA receives show "0 SKA" in every row and the direction
+		// classifier misreads zero in / zero out as not-received.
+		var amount int64
+		if txOut.CoinType.IsSKA() {
+			amount = skaOrVARAtoms(txOut.SKAValue, 0, "TxOutput")
+		} else {
+			amount = txOut.Value
+		}
 		output := &sharedW.TxOutput{
 			Index:         int32(i),
-			Amount:        txOut.Value,
+			Amount:        amount,
 			Version:       int32(txOut.Version),
 			ScriptType:    scriptType,
 			Address:       address, // correct address, account name and number set below if this is a wallet output

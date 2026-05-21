@@ -2,11 +2,35 @@ package dcr
 
 import (
 	"fmt"
+	"math"
+	"math/big"
 
 	w "github.com/monetarium/monetarium-wallet/wallet"
 	sharedW "github.com/monetarium/skarb-wallet/libwallet/assets/wallet"
 	"github.com/monetarium/monetarium-node/chaincfg/chainhash"
 )
+
+// skaOrVARAtoms returns the atom count for a wallet input/output as int64,
+// preferring the SKA big.Int when present and falling back to the VAR int64
+// otherwise. SKA values larger than MaxInt64 (a single UTXO holding more than
+// ~9.22 SKA) get clamped to MaxInt64 and a warning is logged so the
+// truncation does not silently zero the row; total-amount arithmetic over a
+// clamped value is still wrong, but at least the row classifies as
+// "Received"/"Sent" instead of being misread as zero-value. context describes
+// the call site for the log.
+func skaOrVARAtoms(skaAtoms *big.Int, varAtoms int64, context string) int64 {
+	if skaAtoms == nil {
+		return varAtoms
+	}
+	if skaAtoms.IsInt64() {
+		return skaAtoms.Int64()
+	}
+	log.Warnf("%s: SKA value %s overflows int64; clamping to MaxInt64. "+
+		"Phase-1 send/receive UI is limited to ~9.22 SKA per row; "+
+		"plumb big.Int through the tx-summary path to lift this cap.",
+		context, skaAtoms.String())
+	return math.MaxInt64
+}
 
 func (asset *Asset) decodeTransactionWithTxSummary(txSummary *w.TransactionSummary,
 	blockHash *chainhash.Hash,
@@ -31,9 +55,18 @@ func (asset *Asset) decodeTransactionWithTxSummary(txSummary *w.TransactionSumma
 			log.Error(err)
 		}
 
+		// PreviousAmount carries VAR atoms (zero for SKA inputs); the SKA
+		// atom value lives in PreviousSKAAmount as a *big.Int. If only the
+		// VAR field is read, every SKA-input wallet row reports
+		// AmountIn=0, which then propagates to total-input arithmetic and
+		// causes TransactionAmountAndDirection to misclassify SKA receives
+		// (zero in, zero out, zero fee → "Transferred"/"Sent" rather than
+		// "Received"). Phase 1 keeps the int64 channel: pick whichever
+		// field is set, log loudly if an SKA value overflows int64 (caps
+		// at ~9.22 SKA, see AmountAtomForCoinType in utils.go).
 		walletInputs[i] = &sharedW.WInput{
 			Index:    int32(input.Index),
-			AmountIn: int64(input.PreviousAmount),
+			AmountIn: skaOrVARAtoms(input.PreviousSKAAmount, int64(input.PreviousAmount), "WInput"),
 			WAccount: &sharedW.WAccount{
 				AccountNumber: accountNumber,
 				AccountName:   accountName,
@@ -51,7 +84,7 @@ func (asset *Asset) decodeTransactionWithTxSummary(txSummary *w.TransactionSumma
 
 		walletOutputs[i] = &sharedW.WOutput{
 			Index:     int32(output.Index),
-			AmountOut: int64(output.Amount),
+			AmountOut: skaOrVARAtoms(output.SKAAmount, int64(output.Amount), "WOutput"),
 			Internal:  output.Internal,
 			Address:   output.Address.String(),
 			WAccount: &sharedW.WAccount{

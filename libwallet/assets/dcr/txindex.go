@@ -7,9 +7,50 @@ import (
 	"github.com/monetarium/monetarium-node/chaincfg/chainhash"
 )
 
+// txParserVersionConfigKey + currentTxParserVersion drive a one-shot
+// reindex when the tx-decoder semantics change in a way that affects rows
+// already in walletdata.db. Bump currentTxParserVersion whenever decoded
+// tx fields change (Amount / Direction / CoinType / etc.) — on next sync
+// the wallet drops the saved tx rows and rebuilds them from the wallet's
+// authoritative tx store. Without this, existing rows from before the
+// change keep their stale shape forever and the UI displays the wrong
+// direction / address for old transactions.
+const (
+	txParserVersionConfigKey = "tx_parser_version"
+
+	// v1: pre-multi-coin (every tx assumed VAR).
+	// v2: SKA inputs/outputs read from SKAValueIn / SKAValue instead of
+	//     the int64 ValueIn/Value (which are zero for SKA), so SKA
+	//     receives stop being misclassified as Sent/Transferred and the
+	//     "From" panel renders correctly. Forces a one-shot reindex on
+	//     upgrade so already-saved rows pick up the new amount/direction.
+	currentTxParserVersion int32 = 2
+)
+
 func (asset *Asset) IndexTransactions() error {
 	if !asset.WalletOpened() {
 		return utils.ErrDCRNotInitialized
+	}
+
+	// Best-effort: if the saved tx-parser version is older than what
+	// this build understands, drop the saved tx rows and reset the
+	// index pointer. The normal indexing pass below then rebuilds
+	// from the wallet's tx store with the current decoder. We do this
+	// once per upgrade — the version is bumped to the current value at
+	// the end so subsequent IndexTransactions() runs are a no-op for
+	// the migration path. Failures here are logged but don't abort
+	// indexing; a stale row is worse than a logged warning.
+	storedVersion := asset.ReadInt32ConfigValueForKey(txParserVersionConfigKey, 1)
+	if storedVersion < currentTxParserVersion {
+		log.Infof("[%d] tx-parser upgrade %d → %d: clearing saved tx rows for one-shot reindex",
+			asset.ID, storedVersion, currentTxParserVersion)
+		if err := asset.GetWalletDataDb().ClearSavedTransactions(&sharedW.Transaction{}); err != nil {
+			log.Warnf("[%d] tx-parser upgrade: ClearSavedTransactions failed: %v "+
+				"(continuing with stale rows; you can manually re-trigger via Settings → Rescan)",
+				asset.ID, err)
+		} else {
+			asset.SaveUserConfigValue(txParserVersionConfigKey, currentTxParserVersion)
+		}
 	}
 
 	asset.dbMutex.Lock()
