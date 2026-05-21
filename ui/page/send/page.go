@@ -157,7 +157,9 @@ func NewSendPage(l *load.Load, wallet sharedW.Asset) *Page {
 
 // applyCoinType is fired when the user picks a different asset (VAR / SKA-n)
 // in the CoinType dropdown. It tells the wallet authoring layer about the new
-// coin type and re-validates the form so fee/balance estimates refresh.
+// coin type, propagates it to every recipient's amount editor (so the
+// float→atoms conversion uses the right base), and re-validates the form so
+// fee/balance estimates refresh.
 func (pg *Page) applyCoinType(ct cointype.CoinType) {
 	dcrAsset, ok := pg.selectedWallet.(*dcr.Asset)
 	if !ok {
@@ -167,6 +169,9 @@ func (pg *Page) applyCoinType(ct cointype.CoinType) {
 		if err := dcrAsset.SetTxCoinType(ct); err != nil {
 			log.Errorf("SetTxCoinType(%s): %v", ct, err)
 		}
+	}
+	for _, rc := range pg.recipients {
+		rc.setCoinType(ct)
 	}
 	pg.validateAndConstructTx()
 }
@@ -192,6 +197,12 @@ func (pg *Page) addRecipient() {
 		rc.initializeAccountSelectors(pg.accountDropdown.SelectedAccount())
 	}
 	rc.amount.setExchangeRate(pg.exchangeRate)
+	// Seed the recipient's amount editor with the page-level coin type so
+	// the very first amount the user types is converted using the right
+	// atoms/coin scale even if they never touch the CoinType dropdown.
+	if pg.coinTypeDropdown != nil {
+		rc.setCoinType(pg.coinTypeDropdown.Selected())
+	}
 	pg.recipients = append(pg.recipients, rc)
 	pg.currentIDRecipient++
 }

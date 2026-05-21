@@ -14,6 +14,7 @@ import (
 	"github.com/monetarium/skarb-wallet/ui/load"
 	"github.com/monetarium/skarb-wallet/ui/modal"
 	"github.com/monetarium/skarb-wallet/ui/values"
+	"github.com/monetarium/monetarium-node/cointype"
 )
 
 type recipient struct {
@@ -81,6 +82,14 @@ func (rp *recipient) cleanAllErrors() {
 func (rp *recipient) setDestinationAssetType(assetType libUtil.AssetType) {
 	rp.amount.setAssetType(assetType)
 	rp.sendDestination.initDestinationWalletSelector(assetType)
+}
+
+// setCoinType propagates the page-level CoinType (VAR / SKA-n) into the amount
+// editor so the float-to-atoms conversion picks the right scale (1e8 vs 1e18).
+// Called by Page.applyCoinType whenever the user changes the asset dropdown
+// AND once at construction time so the default VAR scaling is explicit.
+func (rp *recipient) setCoinType(ct cointype.CoinType) {
+	rp.amount.setCoinType(ct)
 }
 
 func (rp *recipient) isAccountValid(sourceAccount, account *sharedW.Account) bool {

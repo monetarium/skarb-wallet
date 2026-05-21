@@ -7,6 +7,7 @@ import (
 
 	sharedW "github.com/monetarium/skarb-wallet/libwallet/assets/wallet"
 	"github.com/monetarium/skarb-wallet/libwallet/utils"
+	"github.com/monetarium/monetarium-node/cointype"
 	"github.com/monetarium/monetarium-node/dcrutil"
 )
 
@@ -47,6 +48,39 @@ func AmountAtom(f float64) int64 {
 		return -1
 	}
 	return int64(amount)
+}
+
+// AmountAtomForCoinType converts a user-typed float amount to integer atoms
+// in the base appropriate for the given coin type:
+//
+//   - VAR: 1 coin = 1e8 atoms (delegates to dcrutil.NewAmount).
+//   - SKA: 1 coin = 1e18 atoms.
+//
+// Returns -1 on error (negative input, NaN, overflow). For SKA, the int64
+// return ceiling caps the per-output amount at ~9.22 SKA (= floor(math.MaxInt64 /
+// 1e18)). That is enough for the testnet flows we currently exercise; the
+// upper layers should treat -1 as a hard rejection and surface a clear error
+// to the user. Lifting that cap requires plumbing *big.Int (cointype.SKAAmount)
+// through the entire send pipeline — not done in phase 1.
+func AmountAtomForCoinType(f float64, ct cointype.CoinType) int64 {
+	if ct.IsSKA() {
+		// Reject negatives, NaN, and amounts that would overflow int64.
+		if math.IsNaN(f) || f < 0 {
+			log.Errorf("AmountAtomForCoinType(SKA): rejecting non-finite/negative %v", f)
+			return -1
+		}
+		const skaAtomsPerCoin = 1e18
+		atoms := f * skaAtomsPerCoin
+		if atoms > float64(math.MaxInt64) {
+			log.Errorf("AmountAtomForCoinType(SKA): %v overflows int64; max single-output amount in phase 1 is %v SKA",
+				f, math.MaxInt64/skaAtomsPerCoin)
+			return -1
+		}
+		// math.Round rather than truncate, otherwise float jitter
+		// (e.g. 1.0 → 0.9999999…) silently drops one atom.
+		return int64(math.Round(atoms))
+	}
+	return AmountAtom(f)
 }
 
 func calculateTotalTimeRemaining(timeRemainingInSeconds time.Duration) string {

@@ -447,16 +447,36 @@ func (asset *Asset) constructTransaction() (*txauthor.AuthoredTx, error) {
 		}
 	}
 
-	// Use the custom input source function instead of querying the same data from the
-	// db for every utxo.
-	inputsSourceFunc := asset.makeInputSource(sendMax, unspents)
-
 	requiredConfirmations := asset.RequiredConfirmations()
-	// monetarium-wallet v1.3.x switched relayFeePerKb from dcrutil.Amount to
-	// the dual-coin SKAAmount type. For VAR-driven txs we pass the same
-	// numeric value wrapped as SKAAmount; the wallet picks the right scaling
-	// internally based on output coin types.
-	relayFee := cointype.SKAAmountFromInt64(int64(txrules.DefaultRelayFeePerKb))
+
+	// Phase-1 dual-coin send routing:
+	//
+	//   - VAR:  pass our custom InputSource (asset.makeInputSource). It was
+	//           added to dodge dcrwallet's gap-address-limit issue when the
+	//           wallet's default source generates a fresh change address
+	//           per call. relayFee = DefaultRelayFeePerKb wrapped as SKAAmount.
+	//   - SKA:  pass nil InputSource so monetarium-wallet's
+	//           MakeInputSourceWithCoinType picks UTXOs of the matching SKA
+	//           coin type (sharedW.UnspentOutput doesn't carry CoinType /
+	//           SKAValue, so our VAR-shaped source can't see SKA UTXOs at
+	//           all). relayFee = cointype.Zero() so the wallet uses the
+	//           per-coin chainparams MinRelayTxFee via RelayFeeForCoinType.
+	//
+	// The change source stays the same for both: txauthor rewrites the
+	// change output's CoinType to match the tx's inferred coin type AND
+	// repopulates Value=0/SKAValue=big.Int for SKA. We only have to provide
+	// a P2PKH script via MakeTxChangeSource.
+	txCoinType := asset.TxAuthoredInfo.coinType
+	var inputsSourceFunc txauthor.InputSource
+	var relayFee cointype.SKAAmount
+	if txCoinType.IsSKA() {
+		inputsSourceFunc = nil
+		relayFee = cointype.Zero()
+	} else {
+		inputsSourceFunc = asset.makeInputSource(sendMax, unspents)
+		relayFee = cointype.SKAAmountFromInt64(int64(txrules.DefaultRelayFeePerKb))
+	}
+
 	return asset.Internal().DCR.NewUnsignedTransaction(ctx, outputs, relayFee, asset.TxAuthoredInfo.sourceAccountNumber,
 		requiredConfirmations, outputSelectionAlgorithm, changeSource, inputsSourceFunc)
 }
@@ -587,9 +607,28 @@ func (asset *Asset) changeSource(ctx context.Context) (txauthor.ChangeSource, er
 	return changeSource, nil
 }
 
-// validateSendAmount validate the amount to send to a destination address
+// validateSendAmount validates the per-output amount against the in-progress
+// transaction's coin type. For VAR the bound is the 21M-coin supply cap
+// expressed in 1e8-atom units; for SKA we accept anything that fits in int64,
+// because phase-1 atom math is int64-bounded everywhere downstream (1e18
+// atoms/coin caps a single output at ~9.22 SKA, see AmountAtomForCoinType).
+// The per-coin supply cap will gate larger SKA flows once we plumb big.Int
+// end-to-end.
 func (asset *Asset) validateSendAmount(sendMax bool, atomAmount int64) error {
-	if !sendMax && (atomAmount <= 0 || atomAmount > maxVARAtoms) {
+	if sendMax {
+		return nil
+	}
+	if atomAmount <= 0 {
+		return errors.E(errors.Invalid, "invalid amount")
+	}
+	ct := asset.TxCoinType()
+	if ct.IsSKA() {
+		// int64 is the only ceiling that matters in phase 1; the
+		// caller (AmountAtomForCoinType) already rejected float→int64
+		// overflow before we got here.
+		return nil
+	}
+	if atomAmount > maxVARAtoms {
 		return errors.E(errors.Invalid, "invalid amount")
 	}
 	return nil
