@@ -29,7 +29,15 @@ const (
 	//     surface a real sender address. Old rows have empty SenderAddress
 	//     forever; bumping forces them to be re-decoded with the new
 	//     populated field.
-	currentTxParserVersion int32 = 3
+	// v4: Transaction.AmountAtoms / FeeAtoms + per-I/O AmountAtoms hold
+	//     the lossless big.Int decimal string for SKA flows that exceed
+	//     int64 (a single SKA UTXO holding > 9.22 SKA already overflows
+	//     int64 at 1e18 atoms/coin). Before this, every such row was
+	//     clamped to 9223372036854775807 atoms and the fee column read
+	//     "0 SKA1" because in - out cancelled. Bump triggers a reindex
+	//     so rows from emission txs and large SKA receives display the
+	//     real numbers.
+	currentTxParserVersion int32 = 4
 )
 
 func (asset *Asset) IndexTransactions() error {

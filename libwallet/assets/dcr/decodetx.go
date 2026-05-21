@@ -2,6 +2,7 @@ package dcr
 
 import (
 	"fmt"
+	"math/big"
 
 	w "github.com/monetarium/monetarium-wallet/wallet"
 	sharedW "github.com/monetarium/skarb-wallet/libwallet/assets/wallet"
@@ -26,6 +27,37 @@ func (asset *Asset) DecodeTransaction(walletTx *sharedW.TxInfoFromWallet, netPar
 
 	inputs, totalWalletInput, totalWalletUnmixedInputs := asset.decodeTxInputs(msgTx, netParams, walletTx.Inputs)
 	outputs, totalWalletOutput, totalWalletMixedOutputs, mixedOutputsCount := asset.decodeTxOutputs(msgTx, netParams, walletTx.Outputs)
+
+	// Compute SKA tx aggregates losslessly: total-in, total-out, fee. Used
+	// when amounts exceed int64 (single SKA UTXO above ~9.22 SKA), where
+	// the int64 'amount' / 'fee' fields below would have been clamped to
+	// MaxInt64 and the row would display "9.22 SKA1 fee=0" forever.
+	var skaTotalIn, skaTotalOut *big.Int
+	var skaTotalWalletOut *big.Int // outputs we own — for direction / amount display
+	if len(msgTx.TxOut) > 0 && msgTx.TxOut[0].CoinType.IsSKA() {
+		skaTotalIn = new(big.Int)
+		for _, in := range msgTx.TxIn {
+			if in.SKAValueIn != nil {
+				skaTotalIn.Add(skaTotalIn, in.SKAValueIn)
+			}
+		}
+		skaTotalOut = new(big.Int)
+		for _, out := range msgTx.TxOut {
+			if out.SKAValue != nil {
+				skaTotalOut.Add(skaTotalOut, out.SKAValue)
+			}
+		}
+		// Sum of OUR outputs in big.Int. Used for "received" amount.
+		skaTotalWalletOut = new(big.Int)
+		for _, wo := range walletTx.Outputs {
+			if int(wo.Index) < len(msgTx.TxOut) {
+				out := msgTx.TxOut[wo.Index]
+				if out.SKAValue != nil {
+					skaTotalWalletOut.Add(skaTotalWalletOut, out.SKAValue)
+				}
+			}
+		}
+	}
 
 	amount, direction := txhelper.TransactionAmountAndDirection(totalWalletInput, totalWalletOutput, int64(txFee))
 
@@ -57,6 +89,44 @@ func (asset *Asset) DecodeTransaction(walletTx *sharedW.TxInfoFromWallet, netPar
 		txCoinType = uint8(msgTx.TxOut[0].CoinType)
 	}
 
+	// Phase-2 lossless amount/fee for SKA, populated only when total_in or
+	// total_out exceeds int64; we keep int64 for the cheap display path on
+	// small SKA sends. Direction comes from the int64 classifier above —
+	// good enough because the wallet outputs/inputs of an SKA tx that
+	// crosses int64 are still distinguishable as "you received something"
+	// (totalWalletOutput > 0 in those rows).
+	var amountAtoms, feeAtoms string
+	if skaTotalOut != nil && skaTotalIn != nil {
+		fee := new(big.Int).Sub(skaTotalIn, skaTotalOut)
+		if fee.Sign() < 0 {
+			// SKA emission txs have skaTotalIn = 0 by design; clamp
+			// negative differences to zero so the UI doesn't show a
+			// "negative fee" misnomer.
+			fee.SetInt64(0)
+		}
+		feeAtoms = fee.String()
+		// Pick the display amount based on direction (int64 classifier
+		// already decided this — we mirror it):
+		//   Received: total wallet-owned output value.
+		//   Sent / Transferred: total non-wallet output value (= what
+		//   actually left the wallet, before fee). For phase-1 we
+		//   approximate Sent as skaTotalOut - skaTotalWalletOut; if
+		//   that's zero (everything went to ourselves) fall through to
+		//   skaTotalWalletOut.
+		switch direction {
+		case txhelper.TxDirectionReceived:
+			amountAtoms = skaTotalWalletOut.String()
+		case txhelper.TxDirectionSent:
+			external := new(big.Int).Sub(skaTotalOut, skaTotalWalletOut)
+			if external.Sign() > 0 {
+				amountAtoms = external.String()
+			} else {
+				amountAtoms = skaTotalWalletOut.String()
+			}
+		default:
+			amountAtoms = skaTotalWalletOut.String()
+		}
+	}
 	return &sharedW.Transaction{
 		Hash:        msgTx.TxHash().String(),
 		Type:        txType,
@@ -67,12 +137,14 @@ func (asset *Asset) DecodeTransaction(walletTx *sharedW.TxInfoFromWallet, netPar
 		MixDenomination: mixDenom,
 		MixCount:        mixedOutputsCount,
 
-		Version:  int32(msgTx.Version),
-		LockTime: int32(msgTx.LockTime),
-		Expiry:   int32(msgTx.Expiry),
-		Fee:      int64(txFee),
-		FeeRate:  int64(txFeeRate),
-		Size:     txSize,
+		Version:     int32(msgTx.Version),
+		LockTime:    int32(msgTx.LockTime),
+		Expiry:      int32(msgTx.Expiry),
+		Fee:         int64(txFee),
+		FeeRate:     int64(txFeeRate),
+		Size:        txSize,
+		AmountAtoms: amountAtoms,
+		FeeAtoms:    feeAtoms,
 
 		Direction: direction,
 		Amount:    amount,
@@ -113,6 +185,13 @@ func (asset *Asset) decodeTxInputs(mtx *wire.MsgTx, netParams *chaincfg.Params, 
 		} else {
 			senderAddress = addr
 		}
+		// Carry the lossless atom count too. Only set for SKA inputs; VAR
+		// inputs already fit in Amount (int64). Display reads AmountAtoms
+		// when non-empty.
+		var amountAtoms string
+		if txIn.SKAValueIn != nil && txIn.SKAValueIn.Sign() > 0 {
+			amountAtoms = txIn.SKAValueIn.String()
+		}
 		input := &sharedW.TxInput{
 			PreviousTransactionHash:  txIn.PreviousOutPoint.Hash.String(),
 			PreviousTransactionIndex: int32(txIn.PreviousOutPoint.Index),
@@ -120,6 +199,7 @@ func (asset *Asset) decodeTxInputs(mtx *wire.MsgTx, netParams *chaincfg.Params, 
 			Amount:                   skaOrVARAtoms(txIn.SKAValueIn, txIn.ValueIn, "TxInput"),
 			AccountNumber:            -1, // correct account number is set below if this is a wallet output
 			SenderAddress:            senderAddress,
+			AmountAtoms:              amountAtoms,
 		}
 
 		// override account details if this is wallet input
@@ -180,6 +260,10 @@ func (asset *Asset) decodeTxOutputs(mtx *wire.MsgTx, netParams *chaincfg.Params,
 		} else {
 			amount = txOut.Value
 		}
+		var outAmountAtoms string
+		if txOut.CoinType.IsSKA() && txOut.SKAValue != nil && txOut.SKAValue.Sign() > 0 {
+			outAmountAtoms = txOut.SKAValue.String()
+		}
 		output := &sharedW.TxOutput{
 			Index:         int32(i),
 			Amount:        amount,
@@ -188,6 +272,7 @@ func (asset *Asset) decodeTxOutputs(mtx *wire.MsgTx, netParams *chaincfg.Params,
 			Address:       address, // correct address, account name and number set below if this is a wallet output
 			AccountNumber: -1,
 			CoinType:      uint8(txOut.CoinType),
+			AmountAtoms:   outAmountAtoms,
 		}
 
 		// override address and account details if this is wallet output

@@ -127,11 +127,11 @@ func FormatCoinAmount(bal dcrW.CoinBalance) string {
 // stops being labeled "X.XXXXXXXX VAR" by the legacy dcrutil.Amount.String().
 //
 // VAR amounts go through dcrutil.Amount.String() unchanged (1e8 atoms/coin).
-// SKA amounts use big.Int math against AtomsPerSKACoin (1e18 by default), so
-// an int64 atom value below int64-max renders losslessly; for amounts that
-// were already clamped to int64 by the tx decoder (single UTXO > ~9.22 SKA)
-// the formatted number is exact for the clamped int64, not the original
-// big.Int — a known Phase-1 limitation flagged by the decoder warning.
+// SKA amounts use big.Int math against AtomsPerSKACoin (1e18 by default).
+//
+// Use FormatTxAmountBig when the atom value may exceed int64 — the int64
+// channel here gets clamped at decode time and the row would display the
+// MaxInt64 / 1e18 = 9.223... SKA1 ceiling forever.
 //
 // coinType is a uint8 because sharedW.Transaction.CoinType is uint8 to stay
 // stable across the storm-DB schema; we coerce to cointype.CoinType inside.
@@ -140,9 +140,31 @@ func FormatTxAmount(atoms int64, coinType uint8) string {
 	if !ct.IsValid() || ct.IsVAR() {
 		return dcrutil.Amount(atoms).String()
 	}
-	// SKA path: build a *big.Int and run it through ToDecimalString for the
-	// same trailing-zero-trim formatting FormatCoinAmount uses on balances.
 	amt := cointype.NewSKAAmount(big.NewInt(atoms))
+	return amt.ToDecimalString(cointype.AtomsPerSKACoin) + " " + CoinSymbol(ct)
+}
+
+// FormatTxAmountBig is the lossless variant for SKA amounts that exceed
+// int64. Pass the decimal-string atoms field from TxInput / TxOutput /
+// Transaction.AmountAtoms (populated by the tx decoder when the big.Int
+// value would otherwise be clamped to MaxInt64). When the string is empty,
+// it falls back to the int64 path so callers can write a single dispatch:
+//
+//	FormatTxAmountBig(in.AmountAtoms, in.Amount, tx.CoinType)
+//
+// VAR coin type ignores the big-int path entirely (VAR fits in int64 by
+// definition of its 21M*1e8 supply cap); for SKA we render the big.Int
+// directly. Returns "X.YZ Unit" — same suffix grammar as FormatTxAmount.
+func FormatTxAmountBig(atomsStr string, atomsInt int64, coinType uint8) string {
+	ct := cointype.CoinType(coinType)
+	if !ct.IsValid() || ct.IsVAR() || atomsStr == "" {
+		return FormatTxAmount(atomsInt, coinType)
+	}
+	atoms, ok := new(big.Int).SetString(atomsStr, 10)
+	if !ok {
+		return FormatTxAmount(atomsInt, coinType)
+	}
+	amt := cointype.NewSKAAmount(atoms)
 	return amt.ToDecimalString(cointype.AtomsPerSKACoin) + " " + CoinSymbol(ct)
 }
 

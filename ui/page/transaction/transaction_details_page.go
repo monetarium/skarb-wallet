@@ -408,7 +408,10 @@ func (pg *TxDetailsPage) txDetailsHeader(gtx C) D {
 									// shows "X.YZ VAR" because dcrutil.Amount.String()
 									// hard-codes the VAR suffix. pg.transaction.CoinType
 									// (uint8) was set at decode time from outputs[0].CoinType.
-									title := dcr.FormatTxAmount(pg.transaction.Amount, pg.transaction.CoinType)
+									// AmountAtoms is the lossless big.Int decimal string for
+									// SKA values that exceed int64 (single UTXO > ~9.22 SKA);
+									// FormatTxAmountBig falls back to int64 when empty.
+									title := dcr.FormatTxAmountBig(pg.transaction.AmountAtoms, pg.transaction.Amount, pg.transaction.CoinType)
 									switch pg.transaction.Type {
 									case txhelper.TxTypeMixed:
 										title = dcr.FormatTxAmount(pg.transaction.MixDenomination, pg.transaction.CoinType)
@@ -778,8 +781,10 @@ func (pg *TxDetailsPage) txnTypeAndID(gtx C) D {
 				return D{}
 			}
 			// Fee is paid in the same coin as the transaction (Monetarium consensus rule),
-			// so format it under the tx's CoinType — not always as VAR.
-			return pg.keyValue(gtx, values.String(values.StrTxFee), pg.Theme.Label(values.TextSize14, dcr.FormatTxAmount(transaction.Fee, transaction.CoinType)).Layout)
+			// so format it under the tx's CoinType — not always as VAR. For SKA
+			// FeeAtoms carries the lossless big.Int decimal; otherwise we fall
+			// back to the int64 Fee (exact for VAR; clamped for very large SKA).
+			return pg.keyValue(gtx, values.String(values.StrTxFee), pg.Theme.Label(values.TextSize14, dcr.FormatTxAmountBig(transaction.FeeAtoms, transaction.Fee, transaction.CoinType)).Layout)
 		}),
 		layout.Rigid(func(gtx C) D {
 			// hide section for non ticket transactions
@@ -832,8 +837,15 @@ func (pg *TxDetailsPage) txnInputs(gtx C) D {
 	collapsibleBody := func(gtx C) D {
 		return pg.transactionInputsContainer.Layout(gtx, len(transaction.Inputs), func(gtx C, i int) D {
 			input := transaction.Inputs[i]
-			addr := pageutils.SplitSingleString(input.PreviousOutpoint, 20)
-			return pg.txnIORow(gtx, input.Amount, input.AccountNumber, addr, i)
+			// Prefer the resolved P2PKH sender address over the raw
+			// outpoint when we managed to derive it — that's what an
+			// end user actually wants to see in a "where did this come
+			// from" row. Fall back to outpoint hash:index otherwise.
+			line := input.SenderAddress
+			if line == "" {
+				line = pageutils.SplitSingleString(input.PreviousOutpoint, 20)
+			}
+			return pg.txnIORow(gtx, input.Amount, input.AmountAtoms, input.AccountNumber, line, i)
 		})
 	}
 	return pg.pageSections(gtx, func(gtx C) D {
@@ -854,7 +866,7 @@ func (pg *TxDetailsPage) txnOutputs(gtx C) D {
 		x := len(transaction.Inputs)
 		return pg.transactionOutputsContainer.Layout(gtx, len(transaction.Outputs), func(gtx C, i int) D {
 			output := transaction.Outputs[i]
-			return pg.txnIORow(gtx, output.Amount, output.AccountNumber, output.Address, i+x)
+			return pg.txnIORow(gtx, output.Amount, output.AmountAtoms, output.AccountNumber, output.Address, i+x)
 		})
 	}
 	return pg.pageSections(gtx, func(gtx C) D {
@@ -862,7 +874,7 @@ func (pg *TxDetailsPage) txnOutputs(gtx C) D {
 	})
 }
 
-func (pg *TxDetailsPage) txnIORow(gtx C, amount int64, acctNum int32, address string, i int) D {
+func (pg *TxDetailsPage) txnIORow(gtx C, amount int64, amountAtoms string, acctNum int32, address string, i int) D {
 	accountName := values.String(values.StrExternal)
 	if acctNum != -1 {
 		name, err := pg.wallet.AccountName(acctNum)
@@ -874,8 +886,10 @@ func (pg *TxDetailsPage) txnIORow(gtx C, amount int64, acctNum int32, address st
 	accountName = fmt.Sprintf("(%s)", accountName)
 	// Per-input/output row amount also follows the tx's CoinType. All inputs
 	// AND outputs of a single Monetarium tx share one CoinType (consensus
-	// enforced), so it's safe to take the tx-level value.
-	amt := dcr.FormatTxAmount(amount, pg.transaction.CoinType)
+	// enforced), so it's safe to take the tx-level value. amountAtoms (the
+	// lossless big.Int decimal) takes precedence over the int64 amount
+	// when the SKA value would otherwise be clamped at MaxInt64.
+	amt := dcr.FormatTxAmountBig(amountAtoms, amount, pg.transaction.CoinType)
 
 	return layout.Inset{Top: values.MarginPadding8}.Layout(gtx, func(gtx C) D {
 		card := pg.Theme.Card()

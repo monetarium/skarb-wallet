@@ -318,6 +318,17 @@ type Transaction struct {
 	Inputs    []*TxInput  `json:"inputs"`
 	Outputs   []*TxOutput `json:"outputs"`
 
+	// AmountAtoms / FeeAtoms carry the full-precision atom counts as decimal
+	// strings; populated only for SKA transactions where the value can
+	// exceed int64 (a single SKA UTXO can hold > 9.22 SKA, which already
+	// overflows int64 atoms at 1e18/coin). VAR txs leave these empty and
+	// the existing int64 fields above are exact. When non-empty, display
+	// code MUST prefer these over Amount/Fee — otherwise the wallet shows
+	// the clamped 9.223372036854775807 SKA1 row even for txs that moved
+	// billions of SKA atoms.
+	AmountAtoms string `json:"amount_atoms,omitempty"`
+	FeeAtoms    string `json:"fee_atoms,omitempty"`
+
 	// CoinType identifies which Monetarium asset moved in this transaction.
 	// 0 = VAR; 1..255 = SKAn. All outputs share the same CoinType so this is
 	// the asset of the transaction as a whole. Older databases that pre-date
@@ -347,6 +358,11 @@ type TxInput struct {
 	// prior outputs). Empty string when the sigScript isn't a standard
 	// P2PKH push pair (multisig, OP_RETURN spends, etc.).
 	SenderAddress string `json:"sender_address,omitempty"`
+	// AmountAtoms is the full-precision big.Int atom count as a decimal
+	// string; populated only for SKA inputs whose value exceeds int64 or
+	// for any SKA input when we want lossless display. Display code MUST
+	// prefer it over Amount when present.
+	AmountAtoms string `json:"amount_atoms,omitempty"`
 }
 
 type TxOutput struct {
@@ -361,6 +377,8 @@ type TxOutput struct {
 	// 0 = VAR; 1..255 = SKAn. All outputs in a single tx share the same
 	// CoinType, so the tx-level CoinType is also derivable from outputs[0].
 	CoinType uint8 `json:"coin_type,omitempty"`
+	// AmountAtoms: see TxInput.AmountAtoms — same role for outputs.
+	AmountAtoms string `json:"amount_atoms,omitempty"`
 }
 
 // TxInfoFromWallet contains tx data that relates to the querying wallet.
