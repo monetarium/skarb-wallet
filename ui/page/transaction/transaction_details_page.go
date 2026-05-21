@@ -59,6 +59,15 @@ type TxDetailsPage struct {
 	transactionOutputsContainer layout.List
 
 	destAddressClickables     []*cryptomaterial.Clickable
+	// senderAddressClickables backs the click-to-copy on the "From" panel
+	// for received transactions. One stable Clickable per unique sender
+	// address (derived from input sigScripts in TxInput.SenderAddress).
+	// Must be a long-lived field — creating a fresh Clickable inside the
+	// layout callback throws away the click state Gio recorded on the
+	// previous input frame, which is exactly why the original
+	// layoutSenderAddressList shipped non-copying rows.
+	senderAddressClickables   []*cryptomaterial.Clickable
+	senderAddresses           []string // mirrors senderAddressClickables (same length, same order)
 	associatedTicketClickable *cryptomaterial.Clickable
 	hashClickable             *cryptomaterial.Clickable
 	rebroadcastClickable      *cryptomaterial.Clickable
@@ -128,6 +137,17 @@ func NewTransactionDetailsPage(l *load.Load, wallet sharedW.Asset, transaction *
 		rebroadcastClickable:   l.Theme.NewClickable(true),
 		rebroadcastIcon:        l.Theme.Icons.Rebroadcast,
 		txDestinationAddresses: make([]string, 0),
+	}
+
+	// Materialize one stable Clickable per unique sender address so click
+	// events accumulate across layout passes. Source addresses come from
+	// TxInput.SenderAddress (derived from each P2PKH input's sigScript at
+	// decode time). De-duplicated to match what layoutSenderAddressList
+	// renders.
+	pg.senderAddresses = uniqueSenderAddresses(transaction.Inputs)
+	pg.senderAddressClickables = make([]*cryptomaterial.Clickable, len(pg.senderAddresses))
+	for i := range pg.senderAddressClickables {
+		pg.senderAddressClickables[i] = l.Theme.NewClickable(true)
 	}
 
 	pg.backButton = components.GetBackButton(pg.Load)
@@ -612,12 +632,11 @@ func (pg *TxDetailsPage) txnTypeAndID(gtx C) D {
 			// only — a multi-input tx from one wallet usually re-signs from
 			// one address.
 			if pg.transaction.Type == txhelper.TxTypeRegular && pg.transaction.Direction == txhelper.TxDirectionReceived {
-				addrs := uniqueSenderAddresses(pg.transaction.Inputs)
-				if len(addrs) == 0 {
+				if len(pg.senderAddresses) == 0 {
 					return D{} // no resolvable P2PKH inputs; nothing useful to display
 				}
 				return pg.keyValue(gtx, values.String(values.StrFrom), func(gtx C) D {
-					return layoutSenderAddressList(gtx, pg, addrs)
+					return layoutSenderAddressList(gtx, pg)
 				})
 			}
 
@@ -1110,23 +1129,29 @@ func uniqueSenderAddresses(inputs []*sharedW.TxInput) []string {
 
 // layoutSenderAddressList renders the "From" panel content for a received
 // transaction: one click-to-copy address row per unique sender address.
-// Styled to match the "To" panel for sent transactions (primary color,
-// clickable, copies on tap with the same toast text).
-func layoutSenderAddressList(gtx C, pg *TxDetailsPage, addrs []string) D {
-	// Pre-allocate per-address clickables once per layout pass. The
-	// transactionWdg.copyTextButtons pool is sized for I/O rows; this is a
-	// separate header-level concern so we use ad-hoc clickables, refreshed
-	// each frame. Cheap — addrs is small (typically 1).
+// Reads the address list + clickables from struct fields populated once in
+// NewTransactionDetailsPage — creating a fresh Clickable inside the layout
+// callback (the first attempt at this helper) loses click state across
+// frames because Gio routes input events to a Tag that gets reallocated
+// every layout pass. Styled to match the "To" panel for sent transactions
+// (primary color, click-to-copy on tap, same toast text).
+//
+// Long addresses (Decred-style ~34 chars) are middle-truncated so each row
+// fits on one line in the narrow right-column area of the details header;
+// the full address is what gets copied to the clipboard, and the full
+// address is also visible verbatim in the "Inputs consumed" section below.
+func layoutSenderAddressList(gtx C, pg *TxDetailsPage) D {
+	addrs := pg.senderAddresses
 	flexChilds := make([]layout.FlexChild, 0, len(addrs)*2)
 	for i := range addrs {
 		address := addrs[i]
-		clickable := pg.Theme.NewClickable(false)
+		clickable := pg.senderAddressClickables[i]
 		flexChilds = append(flexChilds, layout.Rigid(func(gtx C) D {
 			if clickable.Clicked(gtx) {
 				gtx.Execute(clipboard.WriteCmd{Data: io.NopCloser(strings.NewReader(address))})
 				pg.Toast.Notify(values.String(values.StrTxHashCopied))
 			}
-			lbl := pg.Theme.Label(values.TextSize14, pageutils.SplitSingleString(address, 0))
+			lbl := pg.Theme.Label(values.TextSize14, ellipsizeMiddle(address, 24))
 			lbl.Color = pg.Theme.Color.Primary
 			return clickable.Layout(gtx, lbl.Layout)
 		}))
@@ -1135,4 +1160,22 @@ func layoutSenderAddressList(gtx C, pg *TxDetailsPage, addrs []string) D {
 		}
 	}
 	return layout.Flex{Axis: layout.Vertical}.Layout(gtx, flexChilds...)
+}
+
+// ellipsizeMiddle returns s if it already fits in maxLen runes, otherwise
+// returns a "head…tail" version where head+tail together fit. We don't try
+// to be perfectly precise about width — Decred mainnet/testnet P2PKH
+// addresses are a fixed 35 chars, so maxLen=24 yields a stable
+// "Tsxxxxxxxxxxx…xxxxxxxxxx" shape that fits the details header on the
+// usual desktop window without wrapping. The full address still lives in
+// the click-to-copy payload and in the inputs section below.
+func ellipsizeMiddle(s string, maxLen int) string {
+	r := []rune(s)
+	if len(r) <= maxLen || maxLen < 4 {
+		return s
+	}
+	keep := maxLen - 1 // 1 rune for the ellipsis
+	head := keep / 2
+	tail := keep - head
+	return string(r[:head]) + "…" + string(r[len(r)-tail:])
 }
