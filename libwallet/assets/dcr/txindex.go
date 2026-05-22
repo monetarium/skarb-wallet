@@ -44,7 +44,14 @@ const (
 	//     produced a partial write). Bump forces a clean reindex against
 	//     the new (non-unique-indexed) schema so previously-stubbed
 	//     sent txs come back with real data.
-	currentTxParserVersion int32 = 5
+	// v6: v5 reindex used start-height=-1 to also pull unmined txs but
+	//     that flag triggers RangeTransactions' BACKWARDS-iteration
+	//     branch which then skips every mined block within the requested
+	//     range — wallets that had been working on v5 lost their
+	//     receive history. Fixed by using end-height=-1 instead (mined
+	//     blocks iterate forward, then unmined are appended). Re-bump
+	//     to repopulate the storm DB on upgrade so receive txs come back.
+	currentTxParserVersion int32 = 6
 )
 
 func (asset *Asset) IndexTransactions() error {
@@ -132,19 +139,27 @@ func (asset *Asset) IndexTransactions() error {
 
 	endHeight := asset.GetBestBlockHeight()
 
-	// When beginHeight == 0 we are running a fresh / migration-driven
-	// reindex; pass -1 instead so monetarium-wallet's RangeTransactions
-	// also iterates the unmined-tx pool. Otherwise sent txs that have
-	// been broadcast but not yet mined never make it into the local
-	// storm DB until the network confirms them (which on a stalled
-	// testnet may be never). The upstream rangeFn handles both
-	// block.Header == nil (unmined) and != nil (mined) cases.
-	startNum := beginHeight
-	if startNum == 0 {
-		startNum = -1
+	// monetarium-wallet's RangeTransactions semantics:
+	//   - begin < 0  → iterates unmined FIRST, then runs block iteration
+	//                  with begin normalized to MaxInt32 (which causes
+	//                  the rangeBlockTransactions to take its BACKWARDS
+	//                  branch, starting at MaxInt32 and going down — and
+	//                  with end == real tip the only iterations that
+	//                  satisfy `end <= height` are heights above tip,
+	//                  so block iteration is effectively a no-op).
+	//   - end < 0    → iterates blocks normally with begin..MaxInt32,
+	//                  THEN appends unmined at the end.
+	// We want BOTH mined and unmined when running a migration reindex.
+	// Use end=-1 so block iteration covers the real chain forwards and
+	// the post-iteration unmined pull happens via the second branch in
+	// RangeTransactions. The earlier attempt at begin=-1 dropped every
+	// mined tx because of the backwards-iteration trap above.
+	startBlock := w.NewBlockIdentifierFromHeight(beginHeight)
+	endNum := endHeight
+	if beginHeight == 0 {
+		endNum = -1
 	}
-	startBlock := w.NewBlockIdentifierFromHeight(startNum)
-	endBlock := w.NewBlockIdentifierFromHeight(endHeight)
+	endBlock := w.NewBlockIdentifierFromHeight(endNum)
 
 	defer func() {
 		count, err := asset.GetWalletDataDb().Count(utils.TxFilterAll, asset.RequiredConfirmations(), endHeight, &sharedW.Transaction{})
