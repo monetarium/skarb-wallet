@@ -583,6 +583,11 @@ func (asset *Asset) estimateBlockHeadersCountAfter(lastHeaderTime int64) int32 {
 }
 
 func (asset *Asset) notifySyncError(err error) {
+	// Log the exact error here — otherwise it only reaches the UI's silent
+	// OnSyncEndedWithError callback and the operator has to guess why
+	// syncer.Run returned. Helps a lot for tracking down "sync turns off
+	// the moment I enable it" reports.
+	log.Errorf("Sync ended with error (wallet=%s): %v", asset.GetWalletName(), err)
 	for _, syncProgressListener := range asset.syncProgressListeners() {
 		if syncProgressListener.OnSyncEndedWithError != nil {
 			syncProgressListener.OnSyncEndedWithError(err)

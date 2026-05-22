@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
+	"math/big"
 	"time"
 
 	"github.com/monetarium/monetarium-wallet/errors"
@@ -123,20 +124,30 @@ func (asset *Asset) IsUnsignedTxExist() bool {
 }
 
 func (asset *Asset) AddSendDestination(id int, address string, atomAmount int64, sendMax bool) error {
+	return asset.AddSendDestinationBig(id, address, atomAmount, "", sendMax)
+}
+
+// AddSendDestinationBig is the lossless variant: pass atomAmountBig as a
+// decimal-string big.Int when the SKA atom count exceeds int64. Empty
+// string falls back to the int64 atomAmount path for VAR and small-SKA
+// sends. UI callers building an SKA send should always pass the big.Int
+// string when the amount might overflow int64 (i.e. >9.22 SKA per output).
+func (asset *Asset) AddSendDestinationBig(id int, address string, atomAmount int64, atomAmountBig string, sendMax bool) error {
 	_, err := stdaddr.DecodeAddress(address, asset.chainParams)
 	if err != nil {
 		return utils.TranslateError(err)
 	}
 
-	if err := asset.validateSendAmount(sendMax, atomAmount); err != nil {
+	if err := asset.validateSendAmountBig(sendMax, atomAmount, atomAmountBig); err != nil {
 		return err
 	}
 
 	asset.TxAuthoredInfo.destinations[id] = &sharedW.TransactionDestination{
-		ID:         id,
-		Address:    address,
-		UnitAmount: atomAmount,
-		SendMax:    sendMax,
+		ID:            id,
+		Address:       address,
+		UnitAmount:    atomAmount,
+		UnitAmountBig: atomAmountBig,
+		SendMax:       sendMax,
 	}
 	asset.TxAuthoredInfo.needsConstruct = true
 
@@ -202,16 +213,34 @@ func (asset *Asset) EstimateFeeAndSize() (*sharedW.TxFeeAndSize, error) {
 		return nil, utils.TranslateError(err)
 	}
 
-	// Fee in Monetarium is paid in the SAME coin type as the transfer (not
-	// always VAR). FeeForSerializeSizeDualCoin returns a dcrutil.Amount-shaped
-	// fee for both VAR and SKA; the caller must format the value with the
-	// right atoms-per-coin scaling for display.
+	// Fee in Monetarium is paid in the SAME coin type as the transfer.
+	// monetarium-wallet@v1.3.10 split the old FeeForSerializeSizeDualCoin into
+	// two type-specific functions: int64-dcrutil.Amount for VAR, big.Int
+	// SKAAmount for SKA. Compute whichever applies and project the result back
+	// into dcrutil.Amount-shaped UnitValue for the UI (SKA losing precision
+	// for display only — actual tx authoring uses the full SKAAmount).
 	txCoinType := asset.TxCoinType()
-	feeToSendTx := txrules.FeeForSerializeSizeDualCoin(
-		txrules.DefaultRelayFeePerKb,
-		unsignedTx.EstimatedSignedSerializeSize,
-		txCoinType,
-	)
+	var feeToSendTx dcrutil.Amount
+	if txCoinType.IsVAR() {
+		feeToSendTx = txrules.FeeForSerializeSize(
+			txrules.DefaultRelayFeePerKb,
+			unsignedTx.EstimatedSignedSerializeSize,
+		)
+	} else {
+		skaRelayFee := cointype.SKAAmountFromInt64(int64(txrules.DefaultRelayFeePerKb))
+		skaFee := txrules.FeeForSerializeSizeSKA(skaRelayFee, unsignedTx.EstimatedSignedSerializeSize)
+		// SKA values can in theory exceed int64. For UI fee display this is a
+		// non-issue (fees are tiny), but log a warning if it ever happens so
+		// we know to introduce a *big.Int-aware fee channel up the stack.
+		// dcrutil.MaxAmount isn't exported (only in tests), so clamp to the
+		// same 21e6 * AtomsPerCoin literal here.
+		if i64, convErr := skaFee.Int64(); convErr == nil {
+			feeToSendTx = dcrutil.Amount(i64)
+		} else {
+			log.Warnf("SKA fee overflows int64, clamping for UI: %v", skaFee)
+			feeToSendTx = dcrutil.Amount(maxVARAtoms)
+		}
+	}
 	feeAmount := &sharedW.Amount{
 		UnitValue: int64(feeToSendTx),
 		CoinValue: feeToSendTx.ToCoin(),
@@ -302,10 +331,17 @@ func (asset *Asset) Broadcast(privatePassphrase, transactionLabel string) (strin
 
 	var additionalPkScripts map[wire.OutPoint][]byte
 
-	invalidSigs, err := asset.Internal().DCR.SignTransaction(ctx, &msgTx, txscript.SigHashAll, additionalPkScripts, nil, nil)
+	// monetarium-wallet v1.3.x added a third return — a bool signalling
+	// whether the wallet partially signed (some inputs left unsigned).
+	// Skarb v1 doesn't surface multisig flows, so a non-fully-signed result
+	// is the same as failure; log and bail.
+	invalidSigs, fullySigned, err := asset.Internal().DCR.SignTransaction(ctx, &msgTx, txscript.SigHashAll, additionalPkScripts, nil, nil)
 	if err != nil {
 		log.Error(err)
 		return "", err
+	}
+	if !fullySigned {
+		log.Warnf("SignTransaction returned without all inputs signed; multisig flows not supported in v1")
 	}
 
 	invalidInputIndexes := make([]uint32, len(invalidSigs))
@@ -389,7 +425,19 @@ func (asset *Asset) constructTransaction() (*txauthor.AuthoredTx, error) {
 			}
 			sendMax = true
 		} else {
-			output, err := txhelper.MakeCoinTypeTxOutput(destination.Address, destination.UnitAmount, asset.TxAuthoredInfo.coinType, asset.chainParams)
+			// Prefer the big.Int companion field when set — that's the
+			// lossless atom count for SKA outputs whose value exceeds
+			// int64. UnitAmount alone caps at MaxInt64 (~9.22 SKA) and
+			// would silently truncate larger sends.
+			var amountBig *big.Int
+			if destination.UnitAmountBig != "" {
+				parsed, ok := new(big.Int).SetString(destination.UnitAmountBig, 10)
+				if !ok {
+					return nil, fmt.Errorf("destination %d: invalid big.Int amount %q", destination.ID, destination.UnitAmountBig)
+				}
+				amountBig = parsed
+			}
+			output, err := txhelper.MakeCoinTypeTxOutputBig(destination.Address, destination.UnitAmount, amountBig, asset.TxAuthoredInfo.coinType, asset.chainParams)
 			if err != nil {
 				log.Errorf("constructTransaction: error preparing tx output: %v", err)
 				return nil, fmt.Errorf("make tx output error: %v", err)
@@ -422,12 +470,37 @@ func (asset *Asset) constructTransaction() (*txauthor.AuthoredTx, error) {
 		}
 	}
 
-	// Use the custom input source function instead of querying the same data from the
-	// db for every utxo.
-	inputsSourceFunc := asset.makeInputSource(sendMax, unspents)
-
 	requiredConfirmations := asset.RequiredConfirmations()
-	return asset.Internal().DCR.NewUnsignedTransaction(ctx, outputs, txrules.DefaultRelayFeePerKb, asset.TxAuthoredInfo.sourceAccountNumber,
+
+	// Phase-1 dual-coin send routing:
+	//
+	//   - VAR:  pass our custom InputSource (asset.makeInputSource). It was
+	//           added to dodge dcrwallet's gap-address-limit issue when the
+	//           wallet's default source generates a fresh change address
+	//           per call. relayFee = DefaultRelayFeePerKb wrapped as SKAAmount.
+	//   - SKA:  pass nil InputSource so monetarium-wallet's
+	//           MakeInputSourceWithCoinType picks UTXOs of the matching SKA
+	//           coin type (sharedW.UnspentOutput doesn't carry CoinType /
+	//           SKAValue, so our VAR-shaped source can't see SKA UTXOs at
+	//           all). relayFee = cointype.Zero() so the wallet uses the
+	//           per-coin chainparams MinRelayTxFee via RelayFeeForCoinType.
+	//
+	// The change source stays the same for both: txauthor rewrites the
+	// change output's CoinType to match the tx's inferred coin type AND
+	// repopulates Value=0/SKAValue=big.Int for SKA. We only have to provide
+	// a P2PKH script via MakeTxChangeSource.
+	txCoinType := asset.TxAuthoredInfo.coinType
+	var inputsSourceFunc txauthor.InputSource
+	var relayFee cointype.SKAAmount
+	if txCoinType.IsSKA() {
+		inputsSourceFunc = nil
+		relayFee = cointype.Zero()
+	} else {
+		inputsSourceFunc = asset.makeInputSource(sendMax, unspents)
+		relayFee = cointype.SKAAmountFromInt64(int64(txrules.DefaultRelayFeePerKb))
+	}
+
+	return asset.Internal().DCR.NewUnsignedTransaction(ctx, outputs, relayFee, asset.TxAuthoredInfo.sourceAccountNumber,
 		requiredConfirmations, outputSelectionAlgorithm, changeSource, inputsSourceFunc)
 }
 
@@ -475,13 +548,27 @@ func (asset *Asset) makeInputSource(sendMax bool, utxos []*sharedW.UnspentOutput
 	}
 
 	if sourceErr == nil && totalInputValue == 0 {
-		// Constructs an error describing the possible reasons why the
-		// wallet balance cannot be spent.
-		sourceErr = fmt.Errorf("inputs have less than %d confirmations",
+		// Reachable in two distinct situations that this function
+		// can't disambiguate on its own:
+		//   - The account has utxos but every one is still
+		//     unconfirmed (< RequiredConfirmations blocks deep).
+		//   - The account has no VAR utxos at all — typically because
+		//     the user is trying to send VAR from an account that
+		//     only holds SKA tokens.
+		// The original phrasing only mentioned confirmations, which
+		// then got translated to "Некоректна сума" via TranslateErr and
+		// looked like the user typed an invalid number. Mention the
+		// likelier cause first so the form points at the real problem.
+		sourceErr = fmt.Errorf("no spendable VAR in this account (need confirmed UTXOs >= %d blocks deep)",
 			asset.RequiredConfirmations())
 	}
 
-	return func(target dcrutil.Amount) (*txauthor.InputDetail, error) {
+	// monetarium-wallet v1.3.x InputSource also receives a targetSKA value
+	// for SKA-denominated transactions. Skarb v1 only authors VAR-targeted
+	// txs through this path (SKA flows go via the SKA-aware wallet APIs),
+	// so we ignore targetSKA here. If we ever wire SKA tx authoring through
+	// this function, we must consume targetSKA to size the inputs.
+	return func(target dcrutil.Amount, _ cointype.SKAAmount) (*txauthor.InputDetail, error) {
 		// If an error was found return it first.
 		if sourceErr != nil {
 			return nil, sourceErr
@@ -552,9 +639,50 @@ func (asset *Asset) changeSource(ctx context.Context) (txauthor.ChangeSource, er
 	return changeSource, nil
 }
 
-// validateSendAmount validate the amount to send to a destination address
+// validateSendAmount validates the per-output amount against the in-progress
+// transaction's coin type. For VAR the bound is the 21M-coin supply cap
+// expressed in 1e8-atom units; for SKA the int64 channel is unbounded
+// (callers use AddSendDestinationBig with a *big.Int string for amounts
+// above ~9.22 SKA, and validateSendAmountBig is the actual validator there).
 func (asset *Asset) validateSendAmount(sendMax bool, atomAmount int64) error {
-	if !sendMax && (atomAmount <= 0 || atomAmount > maxVARAtoms) {
+	return asset.validateSendAmountBig(sendMax, atomAmount, "")
+}
+
+// validateSendAmountBig is the big.Int-aware validator. When atomAmountBig
+// is non-empty it parses as a decimal-string *big.Int and is used as the
+// source of truth (must be positive); otherwise we fall back to the int64
+// atomAmount with the legacy bounds. SKA has no supply cap check yet
+// because per-coin SKACoinConfig has the limit only on the node side and
+// re-checking it here would duplicate consensus logic — the wallet will
+// fail loudly at NewUnsignedTransaction time if the amount is out of range.
+func (asset *Asset) validateSendAmountBig(sendMax bool, atomAmount int64, atomAmountBig string) error {
+	if sendMax {
+		return nil
+	}
+	ct := asset.TxCoinType()
+	if atomAmountBig != "" {
+		big, ok := new(big.Int).SetString(atomAmountBig, 10)
+		if !ok {
+			return errors.E(errors.Invalid, "invalid amount")
+		}
+		if big.Sign() <= 0 {
+			return errors.E(errors.Invalid, "invalid amount")
+		}
+		// For SKA there is no per-output supply cap enforced here.
+		// VAR amounts should never need the big.Int path (VAR fits in
+		// int64 by definition); flag if a caller misuses it.
+		if ct.IsVAR() && !big.IsInt64() {
+			return errors.E(errors.Invalid, "VAR amount exceeds int64")
+		}
+		return nil
+	}
+	if atomAmount <= 0 {
+		return errors.E(errors.Invalid, "invalid amount")
+	}
+	if ct.IsSKA() {
+		return nil
+	}
+	if atomAmount > maxVARAtoms {
 		return errors.E(errors.Invalid, "invalid amount")
 	}
 	return nil

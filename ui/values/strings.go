@@ -1096,4 +1096,9 @@ const (
 	StrWalletsCreationLimitBody              = "walletCreationLimitBody"
 	StrCreateOrRestoreToSeeBalances          = "createOrRestoreToSeeBalances"
 	StrAmountReceived                        = "amountReceived"
+	StrAsset                                 = "asset"
+	StrWipeNetworkState                      = "wipeNetworkState"
+	StrWipeNetworkStateBody                  = "wipeNetworkStateBody"
+	StrExpectedAsset                         = "expectedAsset"
+	StrSameAddressReceivesHint               = "sameAddressReceivesHint"
 )

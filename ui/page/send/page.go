@@ -102,6 +102,13 @@ type authoredTxData struct {
 	balanceAfterSendUSD string
 	sendAmount          string
 	sendAmountUSD       string
+	// Big.Int companions for SKA flows whose atom totals overflow int64.
+	// Populated by addSendDestination only when needed; empty string falls
+	// back to the int64 fields above for display. constructTx then chooses
+	// the right channel via dcr.FormatTxAmountBig.
+	totalCostBig        string
+	balanceAfterSendBig string
+	totalSendAmountBig  string
 }
 
 type selectedUTXOsInfo struct {
@@ -157,7 +164,9 @@ func NewSendPage(l *load.Load, wallet sharedW.Asset) *Page {
 
 // applyCoinType is fired when the user picks a different asset (VAR / SKA-n)
 // in the CoinType dropdown. It tells the wallet authoring layer about the new
-// coin type and re-validates the form so fee/balance estimates refresh.
+// coin type, propagates it to every recipient's amount editor (so the
+// float→atoms conversion uses the right base), and re-validates the form so
+// fee/balance estimates refresh.
 func (pg *Page) applyCoinType(ct cointype.CoinType) {
 	dcrAsset, ok := pg.selectedWallet.(*dcr.Asset)
 	if !ok {
@@ -167,6 +176,16 @@ func (pg *Page) applyCoinType(ct cointype.CoinType) {
 		if err := dcrAsset.SetTxCoinType(ct); err != nil {
 			log.Errorf("SetTxCoinType(%s): %v", ct, err)
 		}
+	}
+	for _, rc := range pg.recipients {
+		rc.setCoinType(ct)
+	}
+	// Switch the source-account dropdown to show the SKA balance for the
+	// selected coin (instead of always showing VAR), so a user with 0 VAR
+	// and 550 SKA1 stops seeing "0 VAR" and concluding the wallet is
+	// empty.
+	if pg.accountDropdown != nil {
+		pg.accountDropdown.SetCoinType(ct)
 	}
 	pg.validateAndConstructTx()
 }
@@ -192,6 +211,12 @@ func (pg *Page) addRecipient() {
 		rc.initializeAccountSelectors(pg.accountDropdown.SelectedAccount())
 	}
 	rc.amount.setExchangeRate(pg.exchangeRate)
+	// Seed the recipient's amount editor with the page-level coin type so
+	// the very first amount the user types is converted using the right
+	// atoms/coin scale even if they never touch the CoinType dropdown.
+	if pg.coinTypeDropdown != nil {
+		rc.setCoinType(pg.coinTypeDropdown.Selected())
+	}
 	pg.recipients = append(pg.recipients, rc)
 	pg.currentIDRecipient++
 }
@@ -399,10 +424,29 @@ func (pg *Page) constructTx() {
 	// Tag the in-progress transaction with the selected coin type. SetTxCoinType
 	// is a no-op when the choice hasn't changed.
 	if dcrAsset, ok := pg.selectedWallet.(*dcr.Asset); ok && pg.coinTypeDropdown != nil {
-		if err := dcrAsset.SetTxCoinType(pg.coinTypeDropdown.Selected()); err != nil {
+		ct := pg.coinTypeDropdown.Selected()
+		if err := dcrAsset.SetTxCoinType(ct); err != nil {
 			pg.setRecipientsAmountErr(err)
 			pg.clearEstimates()
 			return
+		}
+		// Defensive re-sync: the AccountDropdown's coin type ought to
+		// have been switched by applyCoinType when the asset selector
+		// changed, but that callback can race with construct cycles
+		// triggered from other dropdowns (account, amount). If they
+		// drift the user sees the SKA balance row while the asset
+		// selector says VAR (or vice versa) and the form refuses to
+		// send because spendable comes from the wrong coin. Pushing the
+		// current asset selection through every construct pass keeps
+		// both dropdowns and the in-memory TxCoinType pointing at the
+		// same thing.
+		if pg.accountDropdown != nil {
+			pg.accountDropdown.SetCoinType(ct)
+		}
+		// Also keep every recipient's amount editor in sync — same
+		// drift problem on the float→atoms conversion side.
+		for _, rc := range pg.recipients {
+			rc.setCoinType(ct)
 		}
 	}
 
@@ -421,15 +465,29 @@ func (pg *Page) constructTx() {
 	feeAtom := feeAndSize.Fee.UnitValue
 	wal := pg.selectedWallet
 
+	// Coin-type-aware display strings. wal.ToAmount(N).String() and the
+	// AssetAmount.String() returned from addSendDestination both
+	// hard-code the VAR suffix via dcrutil.Amount.String() — so a SKA
+	// send was rendering "X.XX VAR" in the fee, total, balance-after, and
+	// send-amount rows. dcr.FormatTxAmount dispatches on the selected
+	// CoinType and emits the correct unit ("VAR" / "SKA1" / "SKA2"…).
+	displayCoinType := uint8(cointype.CoinTypeVAR)
+	if pg.coinTypeDropdown != nil {
+		displayCoinType = uint8(pg.coinTypeDropdown.Selected())
+	}
+
 	// populate display data
-	pg.txFee = wal.ToAmount(feeAtom).String()
+	pg.txFee = dcr.FormatTxAmount(feeAtom, displayCoinType)
 
 	pg.feeRateSelector.EstSignedSize = fmt.Sprintf("%d Bytes", feeAndSize.EstimatedSignedSize)
 	pg.feeRateSelector.TxFee = pg.txFee
 	pg.feeRateSelector.SetFeerate(feeAndSize.FeeRate)
-	pg.totalCost = totalCost.String()
-	pg.balanceAfterSend = balanceAfterSend.String()
-	pg.sendAmount = wal.ToAmount(totalAmount).String()
+	// Use big.Int strings when populated (SKA flows above int64); else
+	// fall back to the int64 channel. addSendDestination clears the big
+	// fields on the in-range path so this stays a pure dispatch.
+	pg.totalCost = dcr.FormatTxAmountBig(pg.totalCostBig, totalCost.ToInt(), displayCoinType)
+	pg.balanceAfterSend = dcr.FormatTxAmountBig(pg.balanceAfterSendBig, balanceAfterSend.ToInt(), displayCoinType)
+	pg.sendAmount = dcr.FormatTxAmountBig(pg.totalSendAmountBig, totalAmount, displayCoinType)
 	pg.destinationAddress = pg.getDestinationAddresses()
 	pg.destinationAccount = pg.getDestinationAccounts()
 	pg.sourceAccount = sourceAccount
@@ -445,14 +503,14 @@ func (pg *Page) constructTx() {
 		pg.sendAmountUSD = utils.FormatAsUSDString(pg.Printer, usdAmount)
 	}
 
-	pg.checkAssetCoverage(sourceAccount, totalAmount, feeAtom)
+	pg.checkAssetCoverage(sourceAccount, totalAmount, feeAtom, pg.totalSendAmountBig)
 }
 
 // checkAssetCoverage validates that the selected CoinType has enough balance to
 // cover (amount + fee) on the source account. Monetarium pays the fee in the
 // SAME asset as the transfer, so a SKA-1 transfer with no SKA-1 in the wallet
 // fails even when the user has plenty of VAR.
-func (pg *Page) checkAssetCoverage(sourceAccount *sharedW.Account, totalAmount, feeAtom int64) {
+func (pg *Page) checkAssetCoverage(sourceAccount *sharedW.Account, totalAmount, feeAtom int64, totalAmountBigStr string) {
 	dcrAsset, ok := pg.selectedWallet.(*dcr.Asset)
 	if !ok || pg.coinTypeDropdown == nil {
 		return
@@ -468,17 +526,29 @@ func (pg *Page) checkAssetCoverage(sourceAccount *sharedW.Account, totalAmount, 
 		log.Errorf("checkAssetCoverage: GetCoinBalance(%s): %v", ct, err)
 		return
 	}
-	// SKA balances live in big.Int; fee + amount fit in int64 atoms space at
-	// the wire level for sane transactions, so the comparison is well-defined.
-	required := totalAmount + feeAtom
+	// Build the required-atom big.Int from the lossless big-string when the
+	// SKA amount overflowed int64 (constructTx populated totalAmountBigStr
+	// in that case). Otherwise lift the int64 totalAmount + feeAtom.
+	var required *big.Int
+	if totalAmountBigStr != "" {
+		if parsed, ok := new(big.Int).SetString(totalAmountBigStr, 10); ok {
+			required = new(big.Int).Add(parsed, big.NewInt(feeAtom))
+		}
+	}
+	if required == nil {
+		required = big.NewInt(totalAmount + feeAtom)
+	}
 	available := bal.SKASpendable.BigInt()
 	if available == nil {
 		available = new(big.Int)
 	}
-	if available.Cmp(big.NewInt(required)) < 0 {
-		msg := fmt.Sprintf("not enough %s to cover amount + fee (have %s atoms, need %d atoms)",
-			ct, available.String(), required)
-		pg.setRecipientsAmountErr(fmt.Errorf("%s", msg))
+	if available.Cmp(required) < 0 {
+		// Surface as the localized "insufficient funds" so it shows
+		// translated; the detailed atom-by-atom error goes to the log
+		// for diagnosis.
+		log.Warnf("checkAssetCoverage: %s shortfall — have %s atoms, need %s atoms",
+			ct, available.String(), required.String())
+		pg.setRecipientsAmountErr(fmt.Errorf("%s", libUtil.ErrInsufficientBalance))
 	}
 }
 
@@ -491,42 +561,164 @@ func (pg *Page) addSendDestination() (sharedW.AssetAmount, sharedW.AssetAmount, 
 		selectedUTXOs = pg.selectedUTXOs.selectedUTXOs
 	}
 
-	feeAndSize, err := pg.selectedWallet.EstimateFeeAndSize()
-	if err != nil {
-		pg.setRecipientsAmountErr(err)
-		return nil, nil, 0, err
-	}
-	feeAtom := feeAndSize.Fee.UnitValue
+	// Note: we no longer call EstimateFeeAndSize up here. The legacy code
+	// did it BEFORE adding the destinations to TxAuthoredInfo, which made
+	// the wallet build an empty tx for the estimate; that worked for VAR
+	// with positive balance but errored for SKA-only accounts (the wallet
+	// falls back to txCoinType=VAR when outputs is empty, then tries
+	// VAR input selection against a zero VAR balance and fails — which
+	// returned a "no spendable VAR" error that clearEstimates+early-return
+	// then wiped to a "- SKA1" placeholder with no diagnostic shown to
+	// the user). The recipient destinations are added first (loop below),
+	// and EstimateFeeAndSize moves to the end so it operates on a real
+	// outputs slice.
+	var feeAtom int64
 	spendableAmount := sourceAccount.Balance.Spendable.ToInt()
+	// spendableBig holds the lossless big.Int spendable (atoms) for the
+	// active coin. Used to compute balanceAfterSend without int64
+	// clamping, and to detect the case where the user has > int64 atoms
+	// available and SendMax would otherwise silently send only ~9.22 SKA.
+	var spendableBig *big.Int
+	if pg.coinTypeDropdown != nil && pg.coinTypeDropdown.Selected().IsSKA() {
+		if dcrAsset, ok := pg.selectedWallet.(*dcr.Asset); ok {
+			if bal, err := dcrAsset.GetCoinBalance(sourceAccount.Number, pg.coinTypeDropdown.Selected()); err == nil {
+				// SKAAmount is a value type; BigInt() returns the
+				// underlying *big.Int (never nil for a real balance).
+				// Fall back to the int64-clamped Spendable if the
+				// SKA accessor somehow yields a nil internal — shouldn't
+				// happen for active balances but defensive.
+				spendableBig = bal.SKASpendable.BigInt()
+				if spendableBig == nil {
+					spendableBig = big.NewInt(int64(bal.Spendable))
+				}
+				// Mirror the big-int spendable into the int64 channel so
+				// VAR-style arithmetic below behaves sanely for SKA
+				// balances that fit. For balances that overflow int64
+				// we clamp here, but the SendMax path below detects this
+				// and refuses to silently truncate the request — the
+				// authoring path is still int64-capped in phase 1
+				// (see MakeCoinTypeTxOutput).
+				if spendableBig.IsInt64() {
+					spendableAmount = spendableBig.Int64()
+				} else {
+					spendableAmount = int64(bal.Spendable) // already clamped to MaxInt64 upstream
+				}
+			}
+		}
+	}
 	if len(selectedUTXOs) > 0 {
 		spendableAmount = pg.selectedUTXOs.totalUTXOsAmount
+		spendableBig = big.NewInt(spendableAmount)
 	}
 
 	wal := pg.selectedWallet
 	var totalSendAmount int64
+	// Big.Int accumulators populated alongside the int64 ones; we use the
+	// big channel when totals overflow int64 (SKA balances > 9.22 SKA).
+	totalCostBig := new(big.Int)
+	totalSendAmountBig := new(big.Int)
+
+	// First pass: add destinations so EstimateFeeAndSize below builds the
+	// real tx, not an empty one. Fee defaults to 0 inside this pass
+	// because we don't know the actual fee yet; it gets added to the
+	// totals after the post-loop EstimateFeeAndSize call.
 	for _, recipient := range pg.recipients {
 		destinationAddress := recipient.destinationAddress()
-		amountAtom, SendMax := recipient.validAmount()
-		err := pg.selectedWallet.AddSendDestination(recipient.id, destinationAddress, amountAtom, SendMax)
+		amountAtom, amountAtomBig, SendMax := recipient.validAmountBig()
+		var err error
+		if dcrAsset, ok := pg.selectedWallet.(*dcr.Asset); ok {
+			err = dcrAsset.AddSendDestinationBig(recipient.id, destinationAddress, amountAtom, amountAtomBig, SendMax)
+		} else {
+			err = pg.selectedWallet.AddSendDestination(recipient.id, destinationAddress, amountAtom, SendMax)
+		}
 		if err != nil {
 			if strings.Contains(err.Error(), "amount") {
 				recipient.amountValidationError(err.Error())
 			} else {
 				recipient.addressValidationError(err.Error())
 			}
-
 			pg.clearEstimates()
 		}
 
-		if SendMax {
-			amountAtom = spendableAmount - feeAtom
-			recipient.setAmount(amountAtom)
+		// Build the recipient's atom contribution as big.Int.
+		var amountBig *big.Int
+		if amountAtomBig != "" {
+			if parsed, ok := new(big.Int).SetString(amountAtomBig, 10); ok {
+				amountBig = parsed
+			}
 		}
+		if amountBig == nil {
+			amountBig = big.NewInt(amountAtom)
+		}
+		totalSendAmountBig.Add(totalSendAmountBig, amountBig)
+		totalCostBig.Add(totalCostBig, amountBig)
+
 		totalSendAmount += amountAtom
-		cost := amountAtom + feeAtom
-		totalCost += cost
+		totalCost += amountAtom
 	}
-	balanceAfterSend := wal.ToAmount(spendableAmount - totalCost)
+
+	// Now that destinations are in place, ask the wallet for a real
+	// fee+size estimate against the actual outputs. For the SKA path the
+	// wallet picks UTXOs of the matching coin type via
+	// MakeInputSourceWithCoinType — so this works regardless of VAR
+	// balance, which is what the legacy pre-loop call could not handle.
+	feeAndSize, feeErr := pg.selectedWallet.EstimateFeeAndSize()
+	if feeErr != nil {
+		pg.setRecipientsAmountErr(feeErr)
+		return nil, nil, 0, feeErr
+	}
+	feeAtom = feeAndSize.Fee.UnitValue
+	feeBig := big.NewInt(feeAtom)
+	totalCost += feeAtom * int64(len(pg.recipients))
+	for range pg.recipients {
+		totalCostBig.Add(totalCostBig, feeBig)
+	}
+
+	// SendMax pass — runs AFTER fee estimate so we can subtract a real
+	// fee from the spendable. Refuses when SKA balance exceeds int64
+	// because phase-1 authoring still caps single-output SKA at int64
+	// atoms (no sweep API wired yet).
+	for _, recipient := range pg.recipients {
+		_, _, SendMax := recipient.validAmountBig()
+		if !SendMax {
+			continue
+		}
+		if spendableBig != nil && !spendableBig.IsInt64() {
+			recipient.amountValidationError(values.String(values.StrInvalidAmount))
+			log.Warnf("SendMax refused: %s balance %s atoms exceeds int64; phase-1 author can only emit up to ~9.22 SKA in one tx",
+				pg.coinTypeDropdown.Selected(), spendableBig.String())
+			pg.clearEstimates()
+			continue
+		}
+		amountAtom := spendableAmount - feeAtom
+		recipient.setAmount(amountAtom)
+	}
+	// Compute balance-after-send and totals in big.Int when the SKA
+	// balance OR the cumulative cost has overflowed int64. The int64
+	// channel stays populated for VAR and in-range SKA paths so the
+	// returned AssetAmount value is meaningful when small; the
+	// big.Int companions feed the lossless display formatters.
+	var balanceAfterSend sharedW.AssetAmount
+	useBig := (spendableBig != nil && !spendableBig.IsInt64()) || !totalCostBig.IsInt64()
+	if useBig && spendableBig != nil {
+		remainBig := new(big.Int).Sub(spendableBig, totalCostBig)
+		// Stash the big.Int remainder where constructTx can read it for
+		// the display string; the int64 wrapper here is just a
+		// placeholder for the legacy AssetAmount return shape.
+		pg.balanceAfterSendBig = remainBig.String()
+		pg.totalCostBig = totalCostBig.String()
+		pg.totalSendAmountBig = totalSendAmountBig.String()
+		clamp := remainBig
+		if !clamp.IsInt64() {
+			clamp = big.NewInt(int64(^uint64(0) >> 1)) // MaxInt64 sentinel
+		}
+		balanceAfterSend = wal.ToAmount(clamp.Int64())
+	} else {
+		pg.balanceAfterSendBig = ""
+		pg.totalCostBig = ""
+		pg.totalSendAmountBig = ""
+		balanceAfterSend = wal.ToAmount(spendableAmount - totalCost)
+	}
 	return wal.ToAmount(totalCost), balanceAfterSend, totalSendAmount, nil
 
 }
@@ -637,14 +829,26 @@ func (pg *Page) showBalanceAfterSend() {
 	}
 }
 
+// activeAssetSymbol returns the symbol the page should annotate amounts with
+// (e.g. "VAR", "SKA-1"). Falls back to the wallet's asset type — which is the
+// legacy single-coin display ("DCR" on Decred forks) — only when the
+// CoinType dropdown isn't initialised yet.
+func (pg *Page) activeAssetSymbol() string {
+	if pg.coinTypeDropdown != nil {
+		return dcr.CoinSymbol(pg.coinTypeDropdown.Selected())
+	}
+	return string(pg.selectedWallet.GetAssetType())
+}
+
 func (pg *Page) clearEstimates() {
-	pg.txFee = " - " + string(pg.selectedWallet.GetAssetType())
+	symbol := pg.activeAssetSymbol()
+	pg.txFee = " - " + symbol
 	pg.feeRateSelector.TxFee = pg.txFee
 	pg.txFeeUSD = " - "
 	pg.feeRateSelector.TxFeeUSD = pg.txFeeUSD
-	pg.totalCost = " - " + string(pg.selectedWallet.GetAssetType())
+	pg.totalCost = " - " + symbol
 	pg.totalCostUSD = " - "
-	pg.balanceAfterSend = " - " + string(pg.selectedWallet.GetAssetType())
+	pg.balanceAfterSend = " - " + symbol
 	pg.balanceAfterSendUSD = " - "
 	pg.sendAmount = " - "
 	pg.sendAmountUSD = " - "
@@ -669,7 +873,7 @@ func (pg *Page) HandleUserInteractions(gtx C) {
 	pg.nextButton.SetEnabled(pg.allRecipientsIsValid())
 
 	if pg.infoButton.Button.Clicked(gtx) {
-		textWithUnit := values.String(values.StrSend) + " " + string(pg.selectedWallet.GetAssetType())
+		textWithUnit := values.String(values.StrSend) + " " + pg.activeAssetSymbol()
 		info := modal.NewCustomModal(pg.Load).
 			Title(textWithUnit).
 			Body(values.String(values.StrSendInfo)).

@@ -59,6 +59,15 @@ type TxDetailsPage struct {
 	transactionOutputsContainer layout.List
 
 	destAddressClickables     []*cryptomaterial.Clickable
+	// senderAddressClickables backs the click-to-copy on the "From" panel
+	// for received transactions. One stable Clickable per unique sender
+	// address (derived from input sigScripts in TxInput.SenderAddress).
+	// Must be a long-lived field — creating a fresh Clickable inside the
+	// layout callback throws away the click state Gio recorded on the
+	// previous input frame, which is exactly why the original
+	// layoutSenderAddressList shipped non-copying rows.
+	senderAddressClickables   []*cryptomaterial.Clickable
+	senderAddresses           []string // mirrors senderAddressClickables (same length, same order)
 	associatedTicketClickable *cryptomaterial.Clickable
 	hashClickable             *cryptomaterial.Clickable
 	rebroadcastClickable      *cryptomaterial.Clickable
@@ -129,6 +138,11 @@ func NewTransactionDetailsPage(l *load.Load, wallet sharedW.Asset, transaction *
 		rebroadcastIcon:        l.Theme.Icons.Rebroadcast,
 		txDestinationAddresses: make([]string, 0),
 	}
+
+	// Materialize sender-address clickables. See refreshSenderClickables
+	// for the rebuild contract — must also fire whenever pg.transaction
+	// is reassigned (ticket-spender navigation, back-stack).
+	pg.refreshSenderClickables()
 
 	pg.backButton = components.GetBackButton(pg.Load)
 
@@ -316,6 +330,7 @@ func (pg *TxDetailsPage) Layout(gtx C) D {
 				pg.transaction = pg.txBackStack
 				pg.getTXSourceAccountAndDirection()
 				pg.txnWidgets = pg.initTxnWidgets()
+				pg.refreshSenderClickables() // tx reassigned; pool must follow
 				pg.txBackStack = nil
 				pg.ParentWindow().Reload()
 			},
@@ -403,10 +418,18 @@ func (pg *TxDetailsPage) txDetailsHeader(gtx C) D {
 							col := pg.Theme.Color.GrayText2
 							return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
 								layout.Rigid(func(gtx C) D {
-									title := pg.wallet.ToAmount(pg.transaction.Amount).String()
+									// Format the headline amount with the tx's actual coin
+									// type — never assume VAR. Without this an SKA receive
+									// shows "X.YZ VAR" because dcrutil.Amount.String()
+									// hard-codes the VAR suffix. pg.transaction.CoinType
+									// (uint8) was set at decode time from outputs[0].CoinType.
+									// AmountAtoms is the lossless big.Int decimal string for
+									// SKA values that exceed int64 (single UTXO > ~9.22 SKA);
+									// FormatTxAmountBig falls back to int64 when empty.
+									title := dcr.FormatTxAmountBig(pg.transaction.AmountAtoms, pg.transaction.Amount, pg.transaction.CoinType)
 									switch pg.transaction.Type {
 									case txhelper.TxTypeMixed:
-										title = pg.wallet.ToAmount(pg.transaction.MixDenomination).String()
+										title = dcr.FormatTxAmount(pg.transaction.MixDenomination, pg.transaction.CoinType)
 									case txhelper.TxTypeRegular:
 										if pg.transaction.Direction == txhelper.TxDirectionSent && !strings.Contains(title, "-") {
 											title = "-" + title
@@ -595,9 +618,21 @@ func (pg *TxDetailsPage) txnTypeAndID(gtx C) D {
 		},
 	}.Layout(gtx,
 		layout.Rigid(func(gtx C) D {
-			// hide section for received transactions
+			// For RECEIVED transactions, "From" = sender address(es) derived
+			// from each input's sigScript (which reveals the spender's
+			// secp256k1 pubkey, hashed to a P2PKH address). The legacy code
+			// hid this block entirely on receive, but Skarb extracts the
+			// sender address at decode time (TxInput.SenderAddress) so we
+			// can finally show a meaningful "From" panel. Distinct addresses
+			// only — a multi-input tx from one wallet usually re-signs from
+			// one address.
 			if pg.transaction.Type == txhelper.TxTypeRegular && pg.transaction.Direction == txhelper.TxDirectionReceived {
-				return D{}
+				if len(pg.senderAddresses) == 0 {
+					return D{} // no resolvable P2PKH inputs; nothing useful to display
+				}
+				return pg.keyValue(gtx, values.String(values.StrFrom), func(gtx C) D {
+					return layoutSenderAddressList(gtx, pg)
+				})
 			}
 
 			label := values.String(values.StrFrom)
@@ -759,7 +794,11 @@ func (pg *TxDetailsPage) txnTypeAndID(gtx C) D {
 			if pg.wallet.GetAssetType() == libutils.BTCWalletAsset && transaction.Direction == txhelper.TxDirectionReceived {
 				return D{}
 			}
-			return pg.keyValue(gtx, values.String(values.StrTxFee), pg.Theme.Label(values.TextSize14, pg.wallet.ToAmount(transaction.Fee).String()).Layout)
+			// Fee is paid in the same coin as the transaction (Monetarium consensus rule),
+			// so format it under the tx's CoinType — not always as VAR. For SKA
+			// FeeAtoms carries the lossless big.Int decimal; otherwise we fall
+			// back to the int64 Fee (exact for VAR; clamped for very large SKA).
+			return pg.keyValue(gtx, values.String(values.StrTxFee), pg.Theme.Label(values.TextSize14, dcr.FormatTxAmountBig(transaction.FeeAtoms, transaction.Fee, transaction.CoinType)).Layout)
 		}),
 		layout.Rigid(func(gtx C) D {
 			// hide section for non ticket transactions
@@ -812,8 +851,15 @@ func (pg *TxDetailsPage) txnInputs(gtx C) D {
 	collapsibleBody := func(gtx C) D {
 		return pg.transactionInputsContainer.Layout(gtx, len(transaction.Inputs), func(gtx C, i int) D {
 			input := transaction.Inputs[i]
-			addr := pageutils.SplitSingleString(input.PreviousOutpoint, 20)
-			return pg.txnIORow(gtx, input.Amount, input.AccountNumber, addr, i)
+			// Prefer the resolved P2PKH sender address over the raw
+			// outpoint when we managed to derive it — that's what an
+			// end user actually wants to see in a "where did this come
+			// from" row. Fall back to outpoint hash:index otherwise.
+			line := input.SenderAddress
+			if line == "" {
+				line = pageutils.SplitSingleString(input.PreviousOutpoint, 20)
+			}
+			return pg.txnIORow(gtx, input.Amount, input.AmountAtoms, input.AccountNumber, line, i)
 		})
 	}
 	return pg.pageSections(gtx, func(gtx C) D {
@@ -834,7 +880,7 @@ func (pg *TxDetailsPage) txnOutputs(gtx C) D {
 		x := len(transaction.Inputs)
 		return pg.transactionOutputsContainer.Layout(gtx, len(transaction.Outputs), func(gtx C, i int) D {
 			output := transaction.Outputs[i]
-			return pg.txnIORow(gtx, output.Amount, output.AccountNumber, output.Address, i+x)
+			return pg.txnIORow(gtx, output.Amount, output.AmountAtoms, output.AccountNumber, output.Address, i+x)
 		})
 	}
 	return pg.pageSections(gtx, func(gtx C) D {
@@ -842,7 +888,7 @@ func (pg *TxDetailsPage) txnOutputs(gtx C) D {
 	})
 }
 
-func (pg *TxDetailsPage) txnIORow(gtx C, amount int64, acctNum int32, address string, i int) D {
+func (pg *TxDetailsPage) txnIORow(gtx C, amount int64, amountAtoms string, acctNum int32, address string, i int) D {
 	accountName := values.String(values.StrExternal)
 	if acctNum != -1 {
 		name, err := pg.wallet.AccountName(acctNum)
@@ -852,7 +898,12 @@ func (pg *TxDetailsPage) txnIORow(gtx C, amount int64, acctNum int32, address st
 	}
 
 	accountName = fmt.Sprintf("(%s)", accountName)
-	amt := pg.wallet.ToAmount(amount).String()
+	// Per-input/output row amount also follows the tx's CoinType. All inputs
+	// AND outputs of a single Monetarium tx share one CoinType (consensus
+	// enforced), so it's safe to take the tx-level value. amountAtoms (the
+	// lossless big.Int decimal) takes precedence over the int64 amount
+	// when the SKA value would otherwise be clamped at MaxInt64.
+	amt := dcr.FormatTxAmountBig(amountAtoms, amount, pg.transaction.CoinType)
 
 	return layout.Inset{Top: values.MarginPadding8}.Layout(gtx, func(gtx C) D {
 		card := pg.Theme.Card()
@@ -972,6 +1023,7 @@ func (pg *TxDetailsPage) HandleUserInteractions(gtx C) {
 			pg.transaction = pg.ticketSpent
 			pg.getTXSourceAccountAndDirection()
 			pg.txnWidgets = pg.initTxnWidgets()
+			pg.refreshSenderClickables() // tx reassigned; pool must follow
 			pg.ParentWindow().Reload()
 		}
 	}
@@ -1046,4 +1098,106 @@ func (pg *TxDetailsPage) OnNavigatedFrom() {}
 
 func timeString(timestamp int64) string {
 	return time.Unix(timestamp, 0).Format("Jan 2, 2006 15:04:05 PM")
+}
+
+// refreshSenderClickables rebuilds pg.senderAddresses + pg.senderAddressClickables
+// against the current pg.transaction.Inputs. Must be called whenever
+// pg.transaction is reassigned (constructor, ticket-spender forward navigation,
+// back-stack unwind), otherwise:
+//   - layoutSenderAddressList copies the wrong address on click, because the
+//     pre-existing slice describes the previous transaction.
+//   - if the new tx has MORE unique senders than the old, the layout indexer
+//     panics with index out of range on pg.senderAddressClickables[i].
+//
+// One stable Clickable per unique sender survives layout passes — Gio routes
+// pointer input to a specific Tag value, so creating fresh Clickables inside
+// the layout callback (as the original ad-hoc implementation did) silently
+// loses every click.
+func (pg *TxDetailsPage) refreshSenderClickables() {
+	if pg.transaction == nil {
+		pg.senderAddresses = nil
+		pg.senderAddressClickables = nil
+		return
+	}
+	pg.senderAddresses = uniqueSenderAddresses(pg.transaction.Inputs)
+	pg.senderAddressClickables = make([]*cryptomaterial.Clickable, len(pg.senderAddresses))
+	for i := range pg.senderAddressClickables {
+		pg.senderAddressClickables[i] = pg.Theme.NewClickable(true)
+	}
+}
+
+// uniqueSenderAddresses returns the de-duplicated, ordered list of
+// SenderAddress fields populated by the tx decoder. A typical received
+// transaction has every input signed from the same address, so this collapses
+// to one entry; multi-source sends (rare but possible) keep the full list.
+// Empty SenderAddress values (non-P2PKH inputs we couldn't resolve) are
+// silently skipped. Order matches the input order, which is the order the
+// chain stored them in.
+func uniqueSenderAddresses(inputs []*sharedW.TxInput) []string {
+	seen := make(map[string]struct{}, len(inputs))
+	out := make([]string, 0, len(inputs))
+	for _, in := range inputs {
+		if in == nil || in.SenderAddress == "" {
+			continue
+		}
+		if _, dup := seen[in.SenderAddress]; dup {
+			continue
+		}
+		seen[in.SenderAddress] = struct{}{}
+		out = append(out, in.SenderAddress)
+	}
+	return out
+}
+
+// layoutSenderAddressList renders the "From" panel content for a received
+// transaction: one click-to-copy address row per unique sender address.
+// Reads the address list + clickables from struct fields populated once in
+// NewTransactionDetailsPage — creating a fresh Clickable inside the layout
+// callback (the first attempt at this helper) loses click state across
+// frames because Gio routes input events to a Tag that gets reallocated
+// every layout pass. Styled to match the "To" panel for sent transactions
+// (primary color, click-to-copy on tap, same toast text).
+//
+// Long addresses (Decred-style ~34 chars) are middle-truncated so each row
+// fits on one line in the narrow right-column area of the details header;
+// the full address is what gets copied to the clipboard, and the full
+// address is also visible verbatim in the "Inputs consumed" section below.
+func layoutSenderAddressList(gtx C, pg *TxDetailsPage) D {
+	addrs := pg.senderAddresses
+	flexChilds := make([]layout.FlexChild, 0, len(addrs)*2)
+	for i := range addrs {
+		address := addrs[i]
+		clickable := pg.senderAddressClickables[i]
+		flexChilds = append(flexChilds, layout.Rigid(func(gtx C) D {
+			if clickable.Clicked(gtx) {
+				gtx.Execute(clipboard.WriteCmd{Data: io.NopCloser(strings.NewReader(address))})
+				pg.Toast.Notify(values.String(values.StrTxHashCopied))
+			}
+			lbl := pg.Theme.Label(values.TextSize14, ellipsizeMiddle(address, 24))
+			lbl.Color = pg.Theme.Color.Primary
+			return clickable.Layout(gtx, lbl.Layout)
+		}))
+		if i < len(addrs)-1 {
+			flexChilds = append(flexChilds, layout.Rigid(layout.Spacer{Height: values.MarginPadding5}.Layout))
+		}
+	}
+	return layout.Flex{Axis: layout.Vertical}.Layout(gtx, flexChilds...)
+}
+
+// ellipsizeMiddle returns s if it already fits in maxLen runes, otherwise
+// returns a "head…tail" version where head+tail together fit. We don't try
+// to be perfectly precise about width — Decred mainnet/testnet P2PKH
+// addresses are a fixed 35 chars, so maxLen=24 yields a stable
+// "Tsxxxxxxxxxxx…xxxxxxxxxx" shape that fits the details header on the
+// usual desktop window without wrapping. The full address still lives in
+// the click-to-copy payload and in the inputs section below.
+func ellipsizeMiddle(s string, maxLen int) string {
+	r := []rune(s)
+	if len(r) <= maxLen || maxLen < 4 {
+		return s
+	}
+	keep := maxLen - 1 // 1 rune for the ellipsis
+	head := keep / 2
+	tail := keep - head
+	return string(r[:head]) + "…" + string(r[len(r)-tail:])
 }

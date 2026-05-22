@@ -318,6 +318,17 @@ type Transaction struct {
 	Inputs    []*TxInput  `json:"inputs"`
 	Outputs   []*TxOutput `json:"outputs"`
 
+	// AmountAtoms / FeeAtoms carry the full-precision atom counts as decimal
+	// strings; populated only for SKA transactions where the value can
+	// exceed int64 (a single SKA UTXO can hold > 9.22 SKA, which already
+	// overflows int64 atoms at 1e18/coin). VAR txs leave these empty and
+	// the existing int64 fields above are exact. When non-empty, display
+	// code MUST prefer these over Amount/Fee — otherwise the wallet shows
+	// the clamped 9.223372036854775807 SKA1 row even for txs that moved
+	// billions of SKA atoms.
+	AmountAtoms string `json:"amount_atoms,omitempty"`
+	FeeAtoms    string `json:"fee_atoms,omitempty"`
+
 	// CoinType identifies which Monetarium asset moved in this transaction.
 	// 0 = VAR; 1..255 = SKAn. All outputs share the same CoinType so this is
 	// the asset of the transaction as a whole. Older databases that pre-date
@@ -330,7 +341,18 @@ type Transaction struct {
 	LastBlockValid     bool   `json:"last_block_valid,omitempty"`
 	VoteBits           string `json:"vote_bits,omitempty"`
 	VoteReward         int64  `json:"vote_reward,omitempty"`
-	TicketSpentHash    string `storm:"unique" json:"ticket_spent_hash,omitempty"`
+	// TicketSpentHash is the hash of the ticket-purchase tx this vote /
+	// revocation refers to (empty for non-stake txs). The upstream tag was
+	// `storm:"unique"` — that's a foot-gun: Storm v1 treats the empty
+	// string as a value, so the SECOND tx with TicketSpentHash="" failed
+	// the unique constraint and Storm fell back to writing a row that
+	// contains nothing but the Hash. Net effect: every non-stake tx
+	// beyond the first was lost from the Recent / Transactions list
+	// (the row existed but had zero direction / amount / type, so it
+	// was indistinguishable from a stub). Switched to `storm:"index"`
+	// since the only callers (TicketHasVotedOrRevoked, TicketSpender in
+	// transactions.go) use FindOne which works on plain indexes.
+	TicketSpentHash    string `storm:"index" json:"ticket_spent_hash,omitempty"`
 	DaysToVoteOrRevoke int32  `json:"days_to_vote_revoke,omitempty"`
 }
 
@@ -340,6 +362,18 @@ type TxInput struct {
 	PreviousOutpoint         string `json:"previous_outpoint"`
 	Amount                   int64  `json:"amount"`
 	AccountNumber            int32  `json:"account_number"`
+	// SenderAddress is the P2PKH address whose pubkey signed this input,
+	// derived from the sigScript at decode time. Used to populate the
+	// "From" panel on received transactions where no other source of the
+	// sender's address is available (SPV wallets don't store other users'
+	// prior outputs). Empty string when the sigScript isn't a standard
+	// P2PKH push pair (multisig, OP_RETURN spends, etc.).
+	SenderAddress string `json:"sender_address,omitempty"`
+	// AmountAtoms is the full-precision big.Int atom count as a decimal
+	// string; populated only for SKA inputs whose value exceeds int64 or
+	// for any SKA input when we want lossless display. Display code MUST
+	// prefer it over Amount when present.
+	AmountAtoms string `json:"amount_atoms,omitempty"`
 }
 
 type TxOutput struct {
@@ -354,6 +388,8 @@ type TxOutput struct {
 	// 0 = VAR; 1..255 = SKAn. All outputs in a single tx share the same
 	// CoinType, so the tx-level CoinType is also derivable from outputs[0].
 	CoinType uint8 `json:"coin_type,omitempty"`
+	// AmountAtoms: see TxInput.AmountAtoms — same role for outputs.
+	AmountAtoms string `json:"amount_atoms,omitempty"`
 }
 
 // TxInfoFromWallet contains tx data that relates to the querying wallet.
@@ -392,6 +428,15 @@ type TransactionDestination struct {
 	Address    string
 	SendMax    bool
 	UnitAmount int64
+
+	// UnitAmountBig optionally carries the lossless atom count as a
+	// decimal string for SKA flows where the destination amount exceeds
+	// int64 (e.g. > ~9.22 SKA per output). Empty for VAR and for SKA
+	// amounts that fit in int64 — those still use UnitAmount and the
+	// existing fast paths. When non-empty, consumers MUST prefer it
+	// over UnitAmount; the int64 channel above is left for backward
+	// compat with legacy call sites that don't know about big.Int.
+	UnitAmountBig string
 }
 
 type TransactionOverview struct {

@@ -5,17 +5,21 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"os"
+	"path/filepath"
 	"sort"
 	"sync"
 	"time"
 
+	"github.com/monetarium/monetarium-node/addrmgr"
+	"github.com/monetarium/monetarium-node/chaincfg"
+	"github.com/monetarium/monetarium-node/wire"
 	"github.com/monetarium/monetarium-wallet/errors"
 	"github.com/monetarium/monetarium-wallet/p2p"
 	"github.com/monetarium/monetarium-wallet/spv"
 	w "github.com/monetarium/monetarium-wallet/wallet"
 	sharedW "github.com/monetarium/skarb-wallet/libwallet/assets/wallet"
 	"github.com/monetarium/skarb-wallet/libwallet/utils"
-	"github.com/monetarium/monetarium-node/addrmgr"
 )
 
 // reading/writing of properties of this struct are protected by mutex.x
@@ -190,6 +194,26 @@ func (asset *Asset) RemovePeers() {
 	_ = asset.RestartSpvSync()
 }
 
+// bootstrapPeerForNet returns a hardcoded fallback peer for the given chain
+// params when the user has not configured one and the upstream chaincfg ships
+// with empty DNSSeeds. monetarium-node v1.1.0 disables DNSSeeds and tells
+// callers to "--addpeer=176.113.164.216:9108", but the live P2P port on the
+// genesis node is actually 9508 (verified: the comment in mainnetparams.go is
+// stale). Once monetarium-node ships proper DNS seeders, this function can
+// return "" and the regular SPV bootstrap path takes over.
+func bootstrapPeerForNet(params *chaincfg.Params) string {
+	if len(params.DNSSeeds) > 0 {
+		return ""
+	}
+	switch params.Net {
+	case wire.MainNet:
+		return "176.113.164.216:9508"
+	case wire.TestNet3:
+		return "176.9.28.21:19508"
+	}
+	return ""
+}
+
 func (asset *Asset) SpvSync() error {
 	// prevent an attempt to sync when the previous syncing has not been canceled
 	if asset.IsSyncing() || asset.IsSynced() {
@@ -197,6 +221,12 @@ func (asset *Asset) SpvSync() error {
 	}
 
 	peerAddresses := asset.ReadStringConfigValueForKey(sharedW.SpvPersistentPeerAddressesConfigKey, "")
+	if peerAddresses == "" {
+		if fallback := bootstrapPeerForNet(asset.chainParams); fallback != "" {
+			log.Infof("No user peer configured and DNSSeeds empty; using bootstrap peer %s", fallback)
+			peerAddresses = fallback
+		}
+	}
 	validPeerAddresses, errs := sharedW.ParseWalletPeers(peerAddresses, asset.chainParams.DefaultPort)
 	for _, err := range errs { // Log errors if any
 		log.Error(err)
@@ -212,6 +242,17 @@ func (asset *Asset) SpvSync() error {
 
 	asset.waitingForHeaders = true
 	asset.syncing = true
+
+	// Drop a stale peers.json before constructing the addrmgr. The on-disk
+	// format moved between dcrd versions; older caches deserialise as
+	// "unsupported IP type 0" and the addrmgr starts empty anyway. Removing
+	// the file removes an [ERR] line per launch and shaves a couple of
+	// seconds off bootstrap when the cache was the only seed.
+	if peersJSON := filepath.Join(asset.DataDir(), "peers.json"); peersJSON != "" {
+		if err := os.Remove(peersJSON); err != nil && !os.IsNotExist(err) {
+			log.Debugf("Could not remove stale peers.json: %v", err)
+		}
+	}
 
 	addr := &net.TCPAddr{IP: net.ParseIP("::1"), Port: 0}
 	addrManager := addrmgr.New(asset.DataDir()) // TODO: be mindful of tor
@@ -248,6 +289,12 @@ func (asset *Asset) SpvSync() error {
 	// losing connection to all persistent peers.
 	go func() {
 		syncError := syncer.Run(ctx)
+		// Log every exit reason so diagnosing "sync flips off" reports
+		// doesn't depend on stashed UI state. nil here means "errgroup.Wait
+		// returned without error" — usually a teardown via NoPeers that
+		// swallows the real cause. Keep an INF line so the timeline is
+		// reconstructable from the rotated log alone.
+		log.Infof("syncer.Run returned for wallet=%s: err=%v", asset.GetWalletName(), syncError)
 		// sync has ended or errored
 		if syncError != nil {
 			if syncError == context.DeadlineExceeded {

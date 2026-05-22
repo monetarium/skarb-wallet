@@ -4,7 +4,7 @@ go 1.25.0
 
 require (
 	decred.org/dcrdex v1.0.6
-	gioui.org v0.7.0
+	gioui.org v0.10.0
 	git.wow.st/gmp/jni v0.0.0-20210610011705-34026c7e22d0
 	github.com/JohannesKaufmann/html-to-markdown v1.2.1
 	github.com/PuerkitoBio/goquery v1.6.1
@@ -27,18 +27,18 @@ require (
 	github.com/ltcsuite/ltcd v0.23.6
 	github.com/ltcsuite/ltcd/ltcutil v1.1.4-0.20250505084124-c37ac1524e04
 	github.com/monetarium/monetarium-explorer v0.0.0-20260420121235-777c59db0ae4
-	github.com/monetarium/monetarium-node/addrmgr v1.1.0
-	github.com/monetarium/monetarium-node/blockchain/stake v1.1.0
-	github.com/monetarium/monetarium-node/chaincfg v1.1.0
-	github.com/monetarium/monetarium-node/chaincfg/chainhash v1.1.0
-	github.com/monetarium/monetarium-node/cointype v1.1.0
-	github.com/monetarium/monetarium-node/connmgr v1.1.0
-	github.com/monetarium/monetarium-node/dcrec/secp256k1 v1.1.0
-	github.com/monetarium/monetarium-node/dcrutil v1.1.0
-	github.com/monetarium/monetarium-node/hdkeychain v1.1.0
-	github.com/monetarium/monetarium-node/txscript v1.1.0
-	github.com/monetarium/monetarium-node/wire v1.1.0
-	github.com/monetarium/monetarium-wallet v1.1.0
+	github.com/monetarium/monetarium-node/addrmgr v1.3.6
+	github.com/monetarium/monetarium-node/blockchain/stake v1.3.6
+	github.com/monetarium/monetarium-node/chaincfg v1.3.6
+	github.com/monetarium/monetarium-node/chaincfg/chainhash v1.3.6
+	github.com/monetarium/monetarium-node/cointype v1.3.6
+	github.com/monetarium/monetarium-node/connmgr v1.3.6
+	github.com/monetarium/monetarium-node/dcrec/secp256k1 v1.3.6
+	github.com/monetarium/monetarium-node/dcrutil v1.3.6
+	github.com/monetarium/monetarium-node/hdkeychain v1.3.6
+	github.com/monetarium/monetarium-node/txscript v1.3.6
+	github.com/monetarium/monetarium-node/wire v1.3.6
+	github.com/monetarium/monetarium-wallet v1.3.10
 	github.com/nxadm/tail v1.4.8
 	github.com/onsi/ginkgo v1.16.5
 	github.com/onsi/gomega v1.27.1
@@ -46,12 +46,12 @@ require (
 	github.com/tyler-smith/go-bip39 v1.1.0
 	github.com/yeqown/go-qrcode v1.5.1
 	go.etcd.io/bbolt v1.3.12
-	golang.org/x/crypto v0.45.0
-	golang.org/x/exp/shiny v0.0.0-20220827204233-334a2380cb91
-	golang.org/x/image v0.10.0
-	golang.org/x/sync v0.18.0
-	golang.org/x/sys v0.38.0
-	golang.org/x/text v0.31.0
+	golang.org/x/crypto v0.46.0
+	golang.org/x/exp/shiny v0.0.0-20250408133849-7e4ce0ab07d0
+	golang.org/x/image v0.26.0
+	golang.org/x/sync v0.19.0
+	golang.org/x/sys v0.39.0
+	golang.org/x/text v0.32.0
 )
 
 require (
@@ -118,7 +118,7 @@ require (
 	github.com/getsentry/sentry-go v0.27.0 // indirect
 	github.com/go-chi/chi/v5 v5.0.1 // indirect
 	github.com/go-ole/go-ole v1.3.0 // indirect
-	github.com/go-text/typesetting v0.1.1 // indirect
+	github.com/go-text/typesetting v0.3.4 // indirect
 	github.com/go-toast/toast v0.0.0-20190211030409-01e6764cf0a4 // indirect
 	github.com/godbus/dbus/v5 v5.1.0 // indirect
 	github.com/gofrs/flock v0.8.1 // indirect
@@ -159,19 +159,19 @@ require (
 	github.com/mattn/go-runewidth v0.0.13 // indirect
 	github.com/matttproud/golang_protobuf_extensions v1.0.4 // indirect
 	github.com/mmcloughlin/addchain v0.4.0 // indirect
-	github.com/monetarium/monetarium-node/blockchain/standalone v1.1.0 // indirect
-	github.com/monetarium/monetarium-node/certgen v1.1.0 // indirect
-	github.com/monetarium/monetarium-node/container/lru v1.1.0 // indirect
-	github.com/monetarium/monetarium-node/crypto/blake256 v1.1.0 // indirect
-	github.com/monetarium/monetarium-node/crypto/rand v1.1.0 // indirect
-	github.com/monetarium/monetarium-node/crypto/ripemd160 v1.1.0 // indirect
-	github.com/monetarium/monetarium-node/database v1.1.0 // indirect
-	github.com/monetarium/monetarium-node/dcrec v1.1.0 // indirect
-	github.com/monetarium/monetarium-node/dcrec/edwards v1.1.0 // indirect
-	github.com/monetarium/monetarium-node/dcrjson v1.1.0 // indirect
-	github.com/monetarium/monetarium-node/gcs v1.1.0 // indirect
-	github.com/monetarium/monetarium-node/mixing v1.1.0 // indirect
-	github.com/monetarium/monetarium-node/rpc/jsonrpc/types v1.1.0 // indirect
+	github.com/monetarium/monetarium-node/blockchain/standalone v1.3.6 // indirect
+	github.com/monetarium/monetarium-node/certgen v1.3.6 // indirect
+	github.com/monetarium/monetarium-node/container/lru v1.3.6 // indirect
+	github.com/monetarium/monetarium-node/crypto/blake256 v1.3.6 // indirect
+	github.com/monetarium/monetarium-node/crypto/rand v1.3.6 // indirect
+	github.com/monetarium/monetarium-node/crypto/ripemd160 v1.3.6 // indirect
+	github.com/monetarium/monetarium-node/database v1.3.6 // indirect
+	github.com/monetarium/monetarium-node/dcrec v1.3.6 // indirect
+	github.com/monetarium/monetarium-node/dcrec/edwards v1.3.6 // indirect
+	github.com/monetarium/monetarium-node/dcrjson v1.3.6 // indirect
+	github.com/monetarium/monetarium-node/gcs v1.3.6 // indirect
+	github.com/monetarium/monetarium-node/mixing v1.3.6 // indirect
+	github.com/monetarium/monetarium-node/rpc/jsonrpc/types v1.3.6 // indirect
 	github.com/nu7hatch/gouuid v0.0.0-20131221200532-179d4d0c4d8d // indirect
 	github.com/olekukonko/tablewriter v0.0.5 // indirect
 	github.com/pkg/errors v0.9.1 // indirect
@@ -191,9 +191,9 @@ require (
 	github.com/tklauser/numcpus v0.6.1 // indirect
 	github.com/yeqown/reedsolomon v1.0.0 // indirect
 	github.com/zquestz/grab v0.0.0-20190224022517-abcee96e61b1 // indirect
-	golang.org/x/exp v0.0.0-20231110203233-9a3e6036ecaa // indirect
-	golang.org/x/net v0.47.0 // indirect
-	golang.org/x/term v0.37.0 // indirect
+	golang.org/x/exp v0.0.0-20250408133849-7e4ce0ab07d0 // indirect
+	golang.org/x/net v0.48.0 // indirect
+	golang.org/x/term v0.38.0 // indirect
 	golang.org/x/time v0.9.0 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260420184626-e10c466a9529 // indirect
 	google.golang.org/grpc v1.76.0 // indirect
@@ -211,5 +211,12 @@ require (
 // the android OS using gomobile. This replace can be removed once any
 // of those projects update their github.com/lib/pq dependency.
 replace github.com/lib/pq => github.com/lib/pq v1.10.4
+
+// Local patch of monetarium-wallet@v1.3.10: receivedTx tolerates duplicate
+// MsgTx (silently drops repeats within an LRU window) instead of treating
+// every duplicate as a "received unrequested tx" protocol violation. Needed
+// because monetarium-node pushes SKAn txs a second time outside the
+// standard inv→getdata→tx exchange. See _vendored/monetarium-wallet/p2p/peering.go.
+replace github.com/monetarium/monetarium-wallet => ./_vendored/monetarium-wallet
 
 // https://github.com/ukane-philemon/dcrdex/tree/btc-node

@@ -144,15 +144,15 @@ func (pg *TransactionsPage) initCoinTypeDropdown() {
 	items := []cryptomaterial.DropDownItem{{Text: "All assets"}}
 	if dcrAsset, ok := pg.selectedWallet.(*dcr.Asset); ok {
 		for _, ct := range dcrAsset.ActiveCoinTypes() {
-			items = append(items, cryptomaterial.DropDownItem{Text: ct.String()})
+			items = append(items, cryptomaterial.DropDownItem{Text: dcr.CoinSymbol(ct)})
 		}
 	} else {
 		// Multi-wallet view (no specific wallet selected) — fall back to a
-		// minimal list with VAR + SKA-1 which is what is active on testnet
-		// and mainnet at the moment. Refresh once a wallet is picked.
+		// minimal list with VAR + SKA1 which is what is active on testnet and
+		// mainnet at the moment. Refresh once a wallet is picked.
 		items = append(items,
-			cryptomaterial.DropDownItem{Text: cointype.CoinTypeVAR.String()},
-			cryptomaterial.DropDownItem{Text: cointype.CoinType(1).String()},
+			cryptomaterial.DropDownItem{Text: dcr.CoinSymbol(cointype.CoinTypeVAR)},
+			cryptomaterial.DropDownItem{Text: dcr.CoinSymbol(cointype.CoinType(1))},
 		)
 	}
 	pg.coinTypeDropDown = pg.Theme.DropdownWithCustomPos(items, values.CoinTypeDropdownGroup, 2, 0, false)
@@ -343,7 +343,7 @@ func (pg *TransactionsPage) filterByCoinType(in []*multiWalletTx) []*multiWallet
 		if mw.Transaction == nil {
 			continue
 		}
-		if cointype.CoinType(mw.CoinType).String() == picked {
+		if dcr.CoinSymbol(cointype.CoinType(mw.CoinType)) == picked {
 			out = append(out, mw)
 		}
 	}
@@ -800,8 +800,10 @@ func exportTxs(assets []sharedW.Asset, fileName string) error {
 				tx.Hash,
 				tx.Type,
 				txhelper.TxDirectionString(tx.Direction),
-				a.ToAmount(tx.Fee).String(),
-				a.ToAmount(tx.Amount).String(),
+				// CSV row formatted under the tx's actual CoinType so SKA exports
+				// don't silently rebrand to "X.XX VAR" via dcrutil.Amount.String().
+				dcr.FormatTxAmount(tx.Fee, tx.CoinType),
+				dcr.FormatTxAmount(tx.Amount, tx.CoinType),
 			})
 			if err != nil {
 				return fmt.Errorf("csv.Writer.Write error: %v", err)

@@ -3,6 +3,7 @@ package dcr
 import (
 	"context"
 	"fmt"
+	"math/big"
 
 	"github.com/monetarium/monetarium-node/cointype"
 	"github.com/monetarium/monetarium-node/dcrutil"
@@ -117,7 +118,71 @@ func FormatCoinAmount(bal dcrW.CoinBalance) string {
 	// 1e18 for every active SKA today; switch to a Params-driven lookup when
 	// that changes.
 	atomsStr := bal.SKATotal.ToDecimalString(cointype.AtomsPerSKACoin)
-	return atomsStr + " " + bal.CoinType.String()
+	return atomsStr + " " + CoinSymbol(bal.CoinType)
+}
+
+// FormatTxAmount renders a transaction-side int64 atom value with the correct
+// scale and unit suffix for the given coin type. Use this anywhere we display
+// a tx amount (history list, tx details, notification text) so an SKA tx
+// stops being labeled "X.XXXXXXXX VAR" by the legacy dcrutil.Amount.String().
+//
+// VAR amounts go through dcrutil.Amount.String() unchanged (1e8 atoms/coin).
+// SKA amounts use big.Int math against AtomsPerSKACoin (1e18 by default).
+//
+// Use FormatTxAmountBig when the atom value may exceed int64 — the int64
+// channel here gets clamped at decode time and the row would display the
+// MaxInt64 / 1e18 = 9.223... SKA1 ceiling forever.
+//
+// coinType is a uint8 because sharedW.Transaction.CoinType is uint8 to stay
+// stable across the storm-DB schema; we coerce to cointype.CoinType inside.
+func FormatTxAmount(atoms int64, coinType uint8) string {
+	ct := cointype.CoinType(coinType)
+	if !ct.IsValid() || ct.IsVAR() {
+		return dcrutil.Amount(atoms).String()
+	}
+	amt := cointype.NewSKAAmount(big.NewInt(atoms))
+	return amt.ToDecimalString(cointype.AtomsPerSKACoin) + " " + CoinSymbol(ct)
+}
+
+// FormatTxAmountBig is the lossless variant for SKA amounts that exceed
+// int64. Pass the decimal-string atoms field from TxInput / TxOutput /
+// Transaction.AmountAtoms (populated by the tx decoder when the big.Int
+// value would otherwise be clamped to MaxInt64). When the string is empty,
+// it falls back to the int64 path so callers can write a single dispatch:
+//
+//	FormatTxAmountBig(in.AmountAtoms, in.Amount, tx.CoinType)
+//
+// VAR coin type ignores the big-int path entirely (VAR fits in int64 by
+// definition of its 21M*1e8 supply cap); for SKA we render the big.Int
+// directly. Returns "X.YZ Unit" — same suffix grammar as FormatTxAmount.
+func FormatTxAmountBig(atomsStr string, atomsInt int64, coinType uint8) string {
+	ct := cointype.CoinType(coinType)
+	if !ct.IsValid() || ct.IsVAR() || atomsStr == "" {
+		return FormatTxAmount(atomsInt, coinType)
+	}
+	atoms, ok := new(big.Int).SetString(atomsStr, 10)
+	if !ok {
+		return FormatTxAmount(atomsInt, coinType)
+	}
+	amt := cointype.NewSKAAmount(atoms)
+	return amt.ToDecimalString(cointype.AtomsPerSKACoin) + " " + CoinSymbol(ct)
+}
+
+// CoinSymbol returns the user-facing symbol for a coin type. Wraps
+// cointype.CoinType.String() to drop the hyphen — upstream renders SKA tokens
+// as "SKA-1" / "SKA-2" / …, but the product brand format is "SKA1" / "SKA2".
+// VAR is unchanged.
+func CoinSymbol(ct cointype.CoinType) string {
+	if ct.IsVAR() {
+		return ct.String()
+	}
+	// "SKA-1" -> "SKA1". Fast path that avoids the strings package import in
+	// hot UI render paths.
+	s := ct.String()
+	if len(s) >= 5 && s[:4] == "SKA-" {
+		return s[:3] + s[4:]
+	}
+	return s
 }
 
 // IsCoinTypeActive reports whether the given coin type is active on the

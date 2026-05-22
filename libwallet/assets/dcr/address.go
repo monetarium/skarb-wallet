@@ -131,7 +131,11 @@ func (asset *Asset) AddressPubKey(address string) (string, error) {
 
 	switch known := known.(type) {
 	case w.PubKeyHashAddress:
-		pubKeyAddr, err := stdaddr.NewAddressPubKeyEcdsaSecp256k1V0Raw(known.PubKey(), asset.chainParams)
+		pubKey, err := known.PubKey()
+		if err != nil {
+			return "", err
+		}
+		pubKeyAddr, err := stdaddr.NewAddressPubKeyEcdsaSecp256k1V0Raw(pubKey, asset.chainParams)
 		if err != nil {
 			return "", err
 		}

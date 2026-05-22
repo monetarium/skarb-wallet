@@ -30,17 +30,30 @@ type OverviewPage struct {
 	*load.Load
 
 	showNavigationFunc func()
+	onWalletClicked    func(sharedW.Asset)
 	walletsList        layout.List
+
+	// Per-wallet clickable, keyed by wallet ID. Refreshed on every Layout
+	// call so wallets that come and go (added/removed) get fresh state, and
+	// existing entries reuse their Clickable so click events aren't dropped.
+	walletClicks map[int]*cryptomaterial.Clickable
 }
 
-// NewOverviewPage returns the overview page.
-func NewOverviewPage(l *load.Load, showNavigationFunc func()) *OverviewPage {
-	return &OverviewPage{
+// NewOverviewPage returns the overview page. onWalletClicked is invoked when
+// the user clicks a wallet card; HomePage uses this to swap in the per-wallet
+// detail subpage.
+func NewOverviewPage(l *load.Load, showNavigationFunc func(), onWalletClicked ...func(sharedW.Asset)) *OverviewPage {
+	op := &OverviewPage{
 		MasterPage:         app.NewMasterPage(OverviewPageID),
 		Load:               l,
 		showNavigationFunc: showNavigationFunc,
 		walletsList:        layout.List{Axis: layout.Vertical},
+		walletClicks:       make(map[int]*cryptomaterial.Clickable),
 	}
+	if len(onWalletClicked) > 0 {
+		op.onWalletClicked = onWalletClicked[0]
+	}
+	return op
 }
 
 // ID returns the page ID.
@@ -52,8 +65,21 @@ func (op *OverviewPage) OnNavigatedTo() {}
 // OnNavigatedFrom is a no-op.
 func (op *OverviewPage) OnNavigatedFrom() {}
 
-// HandleUserInteractions has nothing to do for now — the page is read-only.
-func (op *OverviewPage) HandleUserInteractions(_ layout.Context) {}
+// HandleUserInteractions checks each wallet card's Clickable and invokes the
+// onWalletClicked callback when one fires. Empty-callback case (the
+// HomePage-less call sites that pass only showNavigationFunc) is a no-op.
+func (op *OverviewPage) HandleUserInteractions(gtx layout.Context) {
+	if op.onWalletClicked == nil {
+		return
+	}
+	for _, w := range op.AssetsManager.AllWallets() {
+		click := op.walletClicks[w.GetWalletID()]
+		if click != nil && click.Clicked(gtx) {
+			op.onWalletClicked(w)
+			return
+		}
+	}
+}
 
 // ListenForNewTx is kept as a stub so existing call-sites in HomePage compile.
 // Re-implement with a tx notification listener once HomePage is rewired.
@@ -154,11 +180,29 @@ func (op *OverviewPage) layoutWalletCard(gtx layout.Context, w sharedW.Asset) la
 	for _, ct := range cts {
 		bal := balancesByCoin[ct]
 		bal.CoinType = ct // ensure FormatCoinAmount picks the right branch
-		row := op.layoutBalanceRow(ct.String(), dcr.FormatCoinAmount(bal))
+		row := op.layoutBalanceRow(dcr.CoinSymbol(ct), dcr.FormatCoinAmount(bal))
 		coinChildren = append(coinChildren, layout.Rigid(row))
 	}
 
-	return op.cardWrap(gtx, coinChildren...)
+	// Wrap the whole card in a Clickable so clicking anywhere on it opens
+	// the wallet detail page. Reuse an existing Clickable per wallet ID so
+	// gioui's event tracking stays continuous between Layout calls.
+	id := w.GetWalletID()
+	click, ok := op.walletClicks[id]
+	if !ok || click == nil {
+		click = op.Theme.NewClickable(true)
+		op.walletClicks[id] = click
+	}
+	return cryptomaterial.LinearLayout{
+		Width:       cryptomaterial.MatchParent,
+		Height:      cryptomaterial.WrapContent,
+		Background:  op.Theme.Color.Surface,
+		Border:      cryptomaterial.Border{Radius: cryptomaterial.Radius(8)},
+		Padding:     layout.UniformInset(unit.Dp(12)),
+		Margin:      layout.Inset{Bottom: unit.Dp(8)},
+		Orientation: layout.Vertical,
+		Clickable:   click,
+	}.Layout(gtx, coinChildren...)
 }
 
 func (op *OverviewPage) layoutBalanceRow(coin, amount string) layout.Widget {

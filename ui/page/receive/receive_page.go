@@ -286,14 +286,11 @@ func (pg *Page) contentLayout(gtx C) D {
 								return D{}
 							}
 							return layout.Inset{Top: values.MarginPadding12}.Layout(gtx, func(gtx C) D {
-								return pg.coinTypeDropdown.Layout(gtx, "Expected asset")
+								return pg.coinTypeDropdown.Layout(gtx, values.String(values.StrExpectedAsset))
 							})
 						}),
 						layout.Rigid(func(gtx C) D {
-							hint := pg.Theme.Caption(fmt.Sprintf(
-								"Same address receives any active asset. Tell the sender to deposit %s.",
-								pg.expectedCoinType,
-							))
+							hint := pg.Theme.Caption(values.StringF(values.StrSameAddressReceivesHint, dcr.CoinSymbol(pg.expectedCoinType)))
 							hint.Color = pg.Theme.Color.GrayText2
 							return layout.Inset{Top: values.MarginPadding6}.Layout(gtx, hint.Layout)
 						}),

@@ -12,8 +12,20 @@ import (
 	"github.com/monetarium/skarb-wallet/ui/cryptomaterial"
 	"github.com/monetarium/skarb-wallet/ui/utils"
 	"github.com/monetarium/skarb-wallet/ui/values"
+	"github.com/monetarium/monetarium-node/cointype"
 	"github.com/monetarium/monetarium-node/dcrutil"
 )
+
+// unitLabel returns the user-facing coin symbol ("VAR" or "SKA1"…"SKA255")
+// for the selected coin type. The legacy hint string used
+// fmt.Sprintf("Сума (%s)", string(assetType)) which baked in the WALLET
+// type ("DCR") regardless of the selected coin. dcr.CoinSymbol already
+// covers VAR — keep this one-liner so callers don't have to import the
+// dcr package for a tiny dispatch, and so future translations can hook
+// in here without touching every callsite.
+func unitLabel(ct cointype.CoinType) string {
+	return dcr.CoinSymbol(ct)
+}
 
 type sendAmount struct {
 	theme *cryptomaterial.Theme
@@ -21,6 +33,12 @@ type sendAmount struct {
 	assetType       libUtil.AssetType
 	amountEditor    cryptomaterial.Editor
 	usdAmountEditor cryptomaterial.Editor
+
+	// coinType is the in-progress tx's coin type (VAR / SKA-n). It controls
+	// the float→atoms scale: VAR uses 1e8 (dcrutil.NewAmount), SKA uses 1e18.
+	// Defaults to VAR; updated via setCoinType when the user picks a
+	// different asset in the page-level CoinType dropdown.
+	coinType cointype.CoinType
 
 	SendMax               bool
 	sendMaxChangeEvent    bool
@@ -37,9 +55,12 @@ func newSendAmount(theme *cryptomaterial.Theme, assetType libUtil.AssetType) *se
 		theme:        theme,
 		exchangeRate: -1,
 		assetType:    assetType,
+		coinType:     cointype.CoinTypeVAR,
 	}
 
-	hit := fmt.Sprintf("%s (%s)", values.String(values.StrAmount), string(assetType))
+	// Initial placeholder defaults to VAR; setCoinType refreshes the hint
+	// when the user picks a SKAn token via the page-level dropdown.
+	hit := fmt.Sprintf("%s (%s)", values.String(values.StrAmount), unitLabel(sa.coinType))
 	sa.amountEditor = theme.Editor(new(widget.Editor), hit)
 	sa.amountEditor.Editor.SetText("")
 	sa.amountEditor.HasCustomButton = true
@@ -89,6 +110,25 @@ func (sa *sendAmount) setAmount(amount int64) {
 	// TODO: this workaround ignores the change events from the
 	// amount input to avoid construct tx cycle.
 	sa.sendMaxChangeEvent = sa.SendMax
+
+	// Convert int64 atoms back to a coin-shaped float for display. VAR has
+	// 1e8 atoms/coin (dcrutil.Amount.ToCoin), SKA has 1e18 — pick the right
+	// divisor for the current coin type. The editor format string also
+	// widens for SKA: 8 decimals would silently truncate sub-millicoin SKA
+	// values, so we use 18 (the full atoms/coin resolution) and let the
+	// editor display whatever non-zero suffix the user actually has.
+	if sa.coinType.IsSKA() {
+		const skaAtomsPerCoin = 1e18
+		amountSet := float64(amount) / skaAtomsPerCoin
+		sa.amountEditor.Editor.SetText(fmt.Sprintf("%.18f", amountSet))
+		if sa.exchangeRate != -1 {
+			usdAmount := utils.CryptoToUSD(sa.exchangeRate, amountSet)
+			sa.usdSendMaxChangeEvent = true
+			sa.usdAmountEditor.Editor.SetText(fmt.Sprintf("%.2f", usdAmount))
+		}
+		return
+	}
+
 	amountSet := dcrutil.Amount(amount).ToCoin()
 	sa.amountEditor.Editor.SetText(fmt.Sprintf("%.8f", amountSet))
 
@@ -111,16 +151,49 @@ func (sa *sendAmount) amountIsValid() bool {
 }
 
 func (sa *sendAmount) validAmount() (int64, bool, error) {
+	atoms, _, sendMax, err := sa.validAmountBig()
+	return atoms, sendMax, err
+}
+
+// validAmountBig is the lossless companion: returns the int64 atoms (clamped
+// for SKA overflow), the big.Int atoms as a decimal string (empty for VAR
+// and for SKA amounts that fit in int64), and the SendMax flag. UI callers
+// that author SKA sends > ~9.22 SKA must use the big-string and pass it to
+// AddSendDestinationBig.
+func (sa *sendAmount) validAmountBig() (int64, string, bool, error) {
 	if sa.SendMax {
-		return 0, sa.SendMax, nil
+		return 0, "", sa.SendMax, nil
 	}
 
 	amount, err := strconv.ParseFloat(sa.amountEditor.Editor.Text(), 64)
 	if err != nil {
-		return -1, sa.SendMax, err
+		return -1, "", sa.SendMax, err
 	}
 
-	return dcr.AmountAtom(amount), sa.SendMax, nil
+	// VAR: int64 channel is exact (1e8 atoms/coin caps at ~92 PB VAR).
+	if !sa.coinType.IsSKA() {
+		atoms := dcr.AmountAtomForCoinType(amount, sa.coinType)
+		if atoms < 0 {
+			return -1, "", sa.SendMax, fmt.Errorf("amount %v is out of range for %s", amount, sa.coinType)
+		}
+		return atoms, "", sa.SendMax, nil
+	}
+	// SKA: compute both. int64 clamps at MaxInt64 (informational for
+	// balance-after-send math); big.Int is lossless and is what the
+	// authoring path reads when present.
+	atomsBig := dcr.AmountAtomForCoinTypeBig(amount, sa.coinType)
+	if atomsBig == nil || atomsBig.Sign() <= 0 {
+		return -1, "", sa.SendMax, fmt.Errorf("amount %v is out of range for %s", amount, sa.coinType)
+	}
+	atoms := dcr.AmountAtomForCoinType(amount, sa.coinType) // clamped MaxInt64 above the threshold
+	// Only emit the big-string when it actually exceeds int64; below the
+	// threshold the int64 channel is exact and the legacy code path is
+	// faster.
+	bigStr := ""
+	if !atomsBig.IsInt64() {
+		bigStr = atomsBig.String()
+	}
+	return atoms, bigStr, sa.SendMax, nil
 }
 
 func (sa *sendAmount) validateAmount() {
@@ -254,4 +327,14 @@ func (sa *sendAmount) IsMaxClicked(gtx C) bool {
 
 func (sa *sendAmount) setAssetType(assetType libUtil.AssetType) {
 	sa.assetType = assetType
+}
+
+// setCoinType updates the coin type used by validAmount to convert the
+// user-typed float into integer atoms, and refreshes the editor placeholder
+// hint so it matches the selected coin's symbol. Called by
+// recipient.setCoinType, which is in turn driven by the page's CoinType
+// dropdown.
+func (sa *sendAmount) setCoinType(ct cointype.CoinType) {
+	sa.coinType = ct
+	sa.amountEditor.Hint = fmt.Sprintf("%s (%s)", values.String(values.StrAmount), unitLabel(ct))
 }

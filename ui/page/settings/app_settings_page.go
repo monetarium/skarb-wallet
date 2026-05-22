@@ -3,6 +3,7 @@ package settings
 import (
 	"image/color"
 	"io"
+	"os"
 	"regexp"
 	"strings"
 	"time"
@@ -64,6 +65,7 @@ type AppSettingsPage struct {
 	networkInfoButton       cryptomaterial.IconButton
 	logLevel                *cryptomaterial.Clickable
 	viewLog                 *cryptomaterial.Clickable
+	wipeNetState            *cryptomaterial.Clickable
 	deleteDEX               *cryptomaterial.Clickable
 	backupDEX               *cryptomaterial.Clickable
 	copyDEXSeed             cryptomaterial.Button
@@ -106,6 +108,7 @@ func NewAppSettingsPage(l *load.Load) *AppSettingsPage {
 		appearanceMode:    l.Theme.NewClickable(false),
 		logLevel:          l.Theme.NewClickable(false),
 		viewLog:           l.Theme.NewClickable(false),
+		wipeNetState:      l.Theme.NewClickable(false),
 		deleteDEX:         l.Theme.NewClickable(false),
 		backupDEX:         l.Theme.NewClickable(false),
 		copyDEXSeed:       l.Theme.Button(values.String(values.StrCopy)),
@@ -211,6 +214,7 @@ func (pg *AppSettingsPage) pageContentLayout(gtx C) D {
 		pg.security(),
 		pg.info(),
 		pg.debug(),
+		pg.dangerZone(),
 	}
 	gtx.Constraints.Min.X = gtx.Constraints.Max.X
 	return layout.Center.Layout(gtx, func(gtx C) D {
@@ -470,6 +474,65 @@ func (pg *AppSettingsPage) debug() layout.Widget {
 	}
 }
 
+// dangerZone groups destructive operations the user can perform on the
+// current network's local state. Today it has one action: wipe the entire
+// network datadir (testnet-bdb / mainnet-bdb) so SPV starts from genesis on
+// next launch. The use case is recovering from a network reset (testnet was
+// truncated upstream → stored headers no longer match peer's chain → SPV
+// returns 0 peers because dcrwallet thinks it's on a longer/foreign fork).
+// Wallets in the active network are wiped along with their state — user is
+// expected to back up seeds before pressing.
+func (pg *AppSettingsPage) dangerZone() layout.Widget {
+	return func(gtx C) D {
+		return pg.wrapSection(gtx, values.String(values.StrDangerZone), func(gtx C) D {
+			return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
+				layout.Rigid(func(gtx C) D {
+					r := row{
+						title:     values.String(values.StrWipeNetworkState),
+						clickable: pg.wipeNetState,
+						label:     pg.Theme.Body2(string(pg.AssetsManager.NetType())),
+					}
+					return pg.clickableRow(gtx, r)
+				}),
+			)
+		})
+	}
+}
+
+func (pg *AppSettingsPage) confirmWipeNetworkState() {
+	netLabel := string(pg.AssetsManager.NetType())
+	confirm := modal.NewCustomModal(pg.Load).
+		Title(values.String(values.StrWipeNetworkState)).
+		Body(values.StringF(values.StrWipeNetworkStateBody, netLabel)).
+		SetNegativeButtonText(values.String(values.StrCancel)).
+		SetPositiveButtonText(values.String(values.StrConfirm)).
+		SetPositiveButtonCallback(func(_ bool, im *modal.InfoModal) bool {
+			im.Dismiss()
+			pg.performWipeNetworkState()
+			return true
+		})
+	pg.ParentWindow().ShowModal(confirm)
+}
+
+// performWipeNetworkState shuts AssetsManager down, deletes the active
+// network's datadir + logs, then exits the process. The user is expected to
+// relaunch Skarb manually — the gioui app loop is not built to bootstrap a
+// fresh AssetsManager mid-process.
+func (pg *AppSettingsPage) performWipeNetworkState() {
+	rootDir := pg.AssetsManager.RootDir()
+	logDir := pg.AssetsManager.ParamLogDir()
+	netType := pg.AssetsManager.NetType()
+	log.Warnf("Wiping %s network state at %s (and logs at %s) on user request", netType, rootDir, logDir)
+	if err := pg.AssetsManager.RemoveRootDir(); err != nil {
+		log.Errorf("RemoveRootDir failed: %v", err)
+		// Even on failure we still exit — partial deletion is recoverable on
+		// next launch, but staying running with a half-wiped datadir would
+		// produce confusing UI.
+	}
+	pg.AssetsManager.Shutdown()
+	os.Exit(0)
+}
+
 func (pg *AppSettingsPage) subSection(gtx C, title string, body layout.Widget) D {
 	return layout.Inset{Top: values.MarginPadding5, Bottom: values.MarginPadding15}.Layout(gtx, func(gtx C) D {
 		return layout.Flex{}.Layout(gtx,
@@ -536,6 +599,10 @@ func (pg *AppSettingsPage) HandleUserInteractions(gtx C) {
 
 	if pg.backButton.Button.Clicked(gtx) {
 		pg.ParentNavigator().CloseCurrentPage()
+	}
+
+	if pg.wipeNetState.Clicked(gtx) {
+		pg.confirmWipeNetworkState()
 	}
 
 	if pg.currency.Clicked(gtx) {

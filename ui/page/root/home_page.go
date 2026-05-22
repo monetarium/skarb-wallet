@@ -23,6 +23,7 @@ import (
 	sharedW "github.com/monetarium/skarb-wallet/libwallet/assets/wallet"
 	"github.com/monetarium/skarb-wallet/ui/cryptomaterial"
 	"github.com/monetarium/skarb-wallet/ui/load"
+	"github.com/monetarium/skarb-wallet/ui/modal"
 	"github.com/monetarium/skarb-wallet/ui/page/settings"
 	walletpage "github.com/monetarium/skarb-wallet/ui/page/wallet"
 	"github.com/monetarium/skarb-wallet/ui/values"
@@ -65,6 +66,10 @@ func NewHomePage(l *load.Load) *HomePage {
 func (hp *HomePage) ID() string { return HomePageID }
 
 // OnNavigatedTo seeds the sidebar from AssetsManager and pushes Overview.
+// Also kicks off SPV for any wallet that has the AutoSync flag turned on
+// (set in start_page.go when the user opts into "recommended" setup) so the
+// user lands on a syncing wallet rather than having to click "Start sync"
+// every launch.
 func (hp *HomePage) OnNavigatedTo() {
 	hp.refreshWalletList()
 	if hp.Load.ToggleSync == nil {
@@ -73,13 +78,45 @@ func (hp *HomePage) OnNavigatedTo() {
 	if hp.CurrentPage() == nil {
 		hp.showOverview()
 	}
+	hp.maybeAutoSync()
+}
+
+// maybeAutoSync scans every loaded wallet and starts SPV in the background
+// for those that asked for it via AutoSyncConfigKey. Locked wallets are
+// skipped (we'd need a password modal — done on demand from the Start sync
+// button instead).
+func (hp *HomePage) maybeAutoSync() {
+	for _, w := range hp.AssetsManager.AllWallets() {
+		if !w.ReadBoolConfigValueForKey(sharedW.AutoSyncConfigKey, false) {
+			continue
+		}
+		if w.IsConnectedToNetwork() {
+			continue
+		}
+		if w.IsLocked() && !w.IsWatchingOnlyWallet() && !w.ContainsDiscoveredAccounts() {
+			// Need an explicit unlock — skip silently rather than ambush the
+			// user with a password modal during page entry. They'll see the
+			// inactive sync indicator and can click Start sync to unlock.
+			continue
+		}
+		hp.startSpv(w)
+	}
 }
 
 // showOverview pushes the per-asset Overview page onto the body. Wired into
 // the wallet-detail subpage as its "back" callback so the top-left arrow on
 // each wallet sub-screen returns the user to the dashboard.
 func (hp *HomePage) showOverview() {
-	hp.Display(NewOverviewPage(hp.Load, func() {}))
+	// Hand the OverviewPage a callback so clicking a wallet card jumps
+	// straight into its detail page — same target as a sidebar entry click.
+	hp.Display(NewOverviewPage(hp.Load, func() {}, hp.openWallet))
+}
+
+// openWallet swaps the body subpage to a per-wallet detail page. Shared
+// between sidebar entries and Overview cards so both paths land on the same
+// place.
+func (hp *HomePage) openWallet(w sharedW.Asset) {
+	hp.Display(walletpage.NewSingleWalletMasterPage(hp.Load, w, hp.showOverview))
 }
 
 // toggleWalletSync is the v1 Monetarium ToggleSync implementation. It runs SPV
@@ -103,15 +140,53 @@ func (hp *HomePage) toggleWalletSync(wallet sharedW.Asset, unlock load.NeedUnloc
 		return
 	}
 	if !wallet.ContainsDiscoveredAccounts() && wallet.IsLocked() && !wallet.IsWatchingOnlyWallet() {
-		log.Warn("Wallet is locked — unlock it before starting sync (password modal not yet wired in v1).")
-		if unlock != nil {
-			unlock(false)
-		}
+		// Fresh wallet with a spending password and no discovered accounts.
+		// SPV needs the wallet unlocked so it can derive addresses while
+		// scanning. Prompt for the password, unlock, then start SPV.
+		hp.promptUnlockAndSync(wallet, unlock)
 		return
 	}
 	if unlock != nil {
 		unlock(true)
 	}
+	hp.startSpv(wallet)
+}
+
+// promptUnlockAndSync shows a password modal, unlocks the wallet on success
+// and kicks off SPV sync. Replaces the older silent log.Warn that left the
+// "Start sync" button visibly inert for any wallet protected by a spending
+// password.
+func (hp *HomePage) promptUnlockAndSync(wallet sharedW.Asset, unlock load.NeedUnlockRestore) {
+	if unlock != nil {
+		unlock(false)
+	}
+	pwModal := modal.NewCreatePasswordModal(hp.Load).
+		EnableName(false).
+		EnableConfirmPassword(false).
+		Title(values.String(values.StrUnlockWithPassword)).
+		PasswordHint(values.String(values.StrSpendingPassword)).
+		SetCancelable(true).
+		SetNegativeButtonText(values.String(values.StrCancel)).
+		SetPositiveButtonText(values.String(values.StrUnlock)).
+		SetPositiveButtonCallback(func(_, password string, m *modal.CreatePasswordModal) bool {
+			if err := wallet.UnlockWallet(password); err != nil {
+				m.SetError(err.Error())
+				return false
+			}
+			m.Dismiss()
+			if unlock != nil {
+				unlock(true)
+			}
+			hp.startSpv(wallet)
+			return true
+		})
+	hp.ParentWindow().ShowModal(pwModal)
+}
+
+// startSpv launches SPV in the background and routes any error through the
+// log. Centralised so both the locked-then-unlocked and the already-unlocked
+// paths use identical lifecycle handling.
+func (hp *HomePage) startSpv(wallet sharedW.Asset) {
 	go func() {
 		if err := wallet.SpvSync(); err != nil {
 			log.Errorf("SpvSync(%s): %v", wallet.GetWalletName(), err)
@@ -139,7 +214,7 @@ func (hp *HomePage) HandleUserInteractions(gtx layout.Context) {
 	}
 	for _, entry := range hp.walletEntries {
 		if entry.click != nil && entry.click.Clicked(gtx) {
-			hp.Display(walletpage.NewSingleWalletMasterPage(hp.Load, entry.wallet, hp.showOverview))
+			hp.openWallet(entry.wallet)
 		}
 	}
 	if cur := hp.CurrentPage(); cur != nil {

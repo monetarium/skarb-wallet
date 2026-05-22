@@ -6,13 +6,15 @@
 package dcr
 
 import (
-	"github.com/monetarium/skarb-wallet/libwallet/internal/loader"
 	"github.com/decred/slog"
+	"github.com/monetarium/skarb-wallet/libwallet/internal/loader"
 )
 
 var log = slog.Disabled
 
-// UseLogger sets the subsystem logs to use the provided loggers.
+// UseLogger sets the subsystem logs to use the provided loggers. The other
+// subsystems (spv/p2p/wallet/udb) are wired individually from cmd-root
+// log.go so each one gets its own subsystem tag in the rotated file.
 func UseLogger(logger slog.Logger) {
 	log = logger
 	loader.UseLogger(logger)

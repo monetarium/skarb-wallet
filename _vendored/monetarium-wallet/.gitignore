@@ -1,0 +1,37 @@
+cmd/movefunds/movefunds
+cmd/repaircfilters/repaircfilters
+cmd/sweepaccount/sweepaccount
+cmd/treasurykey/treasurykey
+
+/monwallet
+vendor
+*~
+.vscode
+.idea
+rpc/tools/bin/
+*.sw*
+*.key
+rpc/grpc_example/grpc_example
+rpc/grpc_example/*.pem
+rpc/rpc_example/rpc_example
+
+# Temporary database files created by tests.
+wallet/udb/*.kv
+
+# Compiled test binaries
+*.test
+
+# Prevent binary files in RPC directories
+internal/rpc/*/monwallet
+
+# Binaries
+monetarium-wallet
+/movefunds
+/sweepaccount
+
+# Internal
+go.work
+go.work.sum
+WALLET_MAINNET_SETUP.md
+monwallet.sample.conf
+mainnet-wallet.conf
