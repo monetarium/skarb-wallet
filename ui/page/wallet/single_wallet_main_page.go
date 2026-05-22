@@ -234,7 +234,16 @@ func (swmp *SingleWalletMasterPage) initTabOptions() {
 	// CoinShuffle++ mixing UI. Re-introduce these blocks when those features
 	// are added back.
 
-	swmp.PageNavigationTab = swmp.Theme.SegmentedControl(commonTabs, cryptomaterial.SegmentTypeSplit)
+	// SegmentTypeGroupMax distributes width evenly across all tabs
+	// instead of laying them out in a horizontal scroller. Split mode
+	// (the previous setting) padded each tab with 32px LR + a chevron
+	// nav on either side, so the 6 Ukrainian-localised tabs
+	// (Інформація / Надіслати / Отримати / Транзакції / Акаунти /
+	// Налаштування) didn't fit on a typical desktop width and the
+	// user had to scroll the strip horizontally. GroupMax computes
+	// per-tab Width = (layoutSize − 8) / len(tabs) — every tab gets
+	// an equal slice, no overflow, no scroll buttons.
+	swmp.PageNavigationTab = swmp.Theme.SegmentedControl(commonTabs, cryptomaterial.SegmentTypeGroupMax)
 	swmp.PageNavigationTab.SetEnableSwipe(false)
 	dp5 := values.MarginPadding5
 	swmp.PageNavigationTab.ContentPadding = layout.Inset{
