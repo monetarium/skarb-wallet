@@ -33,45 +33,82 @@ func PkScriptAddresses(params *chaincfg.Params, pkScript []byte) []string {
 	return encodedAddresses
 }
 
-// SigScriptSenderAddress derives the P2PKH address that signed a P2PKH
-// transaction input from its signature script. Used to surface a "From"
-// address on received transactions: the input's sigScript necessarily reveals
-// the spender's pubkey (the signer of the prior UTXO), and the prior UTXO's
-// address is hash160(pubkey) — which is precisely the sender of the inbound
-// transfer from the recipient's point of view.
+// SigScriptSenderAddress derives the ECDSA-secp256k1 P2PKH address that
+// signed a P2PKH transaction input from its signature script. Used to
+// surface a "From" address on received transactions: the input's sigScript
+// reveals the spender's pubkey, and hash160(pubkey) is the P2PKH address
+// that owned the previous output — the sender of the inbound transfer from
+// the recipient's POV.
 //
-// Format for a standard P2PKH input on Decred is two pushes:
+// Standard P2PKH-ECDSA input on Decred is exactly two data pushes:
 //
-//	PUSH(<DER-encoded signature + sighash byte>)
-//	PUSH(<compressed (33B) or uncompressed (65B) secp256k1 pubkey>)
+//	OP_DATA_N   <DER-encoded ECDSA signature + 1-byte sighash flag>
+//	OP_DATA_M   <compressed (33B) or uncompressed (65B) secp256k1 pubkey>
 //
-// We walk the tokenized script and take the LAST data push as the pubkey, so
-// any future sigScript shapes that prepend extra opaque pushes (e.g. for
-// custom signers) still resolve as long as the trailing push is the pubkey.
-// Returns "" without an error when the script is not a standard P2PKH input
-// (multisig P2SH, OP_RETURN-spending edge cases, malformed scripts) — those
-// cases simply aren't surfaceable as a single sender address.
+// We validate this exact shape (two pushes, nothing else) before deriving.
+// Any other shape returns ("", nil) — addresses derived from non-P2PKH-ECDSA
+// scripts would be wrong:
+//
+//   - P2SH-multisig: trailing push is the redeem script, not a pubkey;
+//     hash160 of it has no relation to the spender's address.
+//   - Schnorr-secp256k1 P2PKH (Decred STSchnorrSecp256k1): same 33-byte
+//     pubkey shape, but the on-chain address class uses a different
+//     hash algorithm — emitting an ECDSA P2PKH would lie about who signed.
+//   - Ed25519 P2PKH: 32-byte pubkey, won't match the 33/65 length check
+//     anyway, but the shape check above catches it earlier.
+//   - Coinbase inputs: caller must skip via PreviousOutPoint check before
+//     calling us; we accept them as "not standard P2PKH" and return "".
 func SigScriptSenderAddress(sigScript []byte, params *chaincfg.Params) (string, error) {
 	if len(sigScript) == 0 {
 		return "", nil
 	}
 	tokenizer := txscript.MakeScriptTokenizer(scriptVersion, sigScript)
-	var lastPush []byte
+	pushes := make([][]byte, 0, 2)
 	for tokenizer.Next() {
-		if data := tokenizer.Data(); len(data) > 0 {
-			lastPush = data
+		// Any non-data opcode disqualifies (e.g. OP_0, OP_1, anything
+		// that would suggest multisig / redeem-script-encoded P2SH).
+		if tokenizer.Opcode() > txscript.OP_PUSHDATA4 {
+			return "", nil
+		}
+		data := tokenizer.Data()
+		if len(data) == 0 {
+			// Empty push (OP_0) — not part of canonical P2PKH-ECDSA.
+			return "", nil
+		}
+		pushes = append(pushes, data)
+		if len(pushes) > 2 {
+			// More than two pushes — definitely not standard P2PKH.
+			return "", nil
 		}
 	}
 	if err := tokenizer.Err(); err != nil {
 		return "", fmt.Errorf("tokenize sigScript: %w", err)
 	}
-	// Only secp256k1 pubkey shapes (33 / 65 bytes) are recognized here.
-	// Schnorr / Ed25519 pubkeys travel with a different sigScript shape;
-	// they aren't on the Monetarium P2PKH receive path today.
-	if len(lastPush) != 33 && len(lastPush) != 65 {
+	if len(pushes) != 2 {
 		return "", nil
 	}
-	pkHash := dcrutil.Hash160(lastPush)
+	sig, pubKey := pushes[0], pushes[1]
+	// Sanity-check signature shape: DER signatures are 71-72 bytes
+	// typically (sometimes 70 or 73 for edge-case r/s lengths). Anything
+	// outside [64, 73] with a leading 0x30 is suspect for ECDSA-DER.
+	if len(sig) < 64 || len(sig) > 73 || sig[0] != 0x30 {
+		return "", nil
+	}
+	// Pubkey shape: compressed (33 bytes, 0x02/0x03 prefix) or
+	// uncompressed (65 bytes, 0x04 prefix).
+	switch len(pubKey) {
+	case 33:
+		if pubKey[0] != 0x02 && pubKey[0] != 0x03 {
+			return "", nil
+		}
+	case 65:
+		if pubKey[0] != 0x04 {
+			return "", nil
+		}
+	default:
+		return "", nil
+	}
+	pkHash := dcrutil.Hash160(pubKey)
 	addr, err := stdaddr.NewAddressPubKeyHashEcdsaSecp256k1V0(pkHash, params)
 	if err != nil {
 		return "", fmt.Errorf("derive P2PKH from pubkey hash: %w", err)

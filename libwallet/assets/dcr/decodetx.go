@@ -10,6 +10,7 @@ import (
 	"github.com/monetarium/skarb-wallet/libwallet/txhelper"
 	"github.com/monetarium/monetarium-node/blockchain/stake"
 	"github.com/monetarium/monetarium-node/chaincfg"
+	"github.com/monetarium/monetarium-node/chaincfg/chainhash"
 	"github.com/monetarium/monetarium-node/dcrutil"
 	"github.com/monetarium/monetarium-node/txscript/stdscript"
 	"github.com/monetarium/monetarium-node/wire"
@@ -176,14 +177,26 @@ func (asset *Asset) decodeTxInputs(mtx *wire.MsgTx, netParams *chaincfg.Params, 
 		// reveals the spender's pubkey for P2PKH); it gives us a real
 		// "From" address to show in the UI for received transactions
 		// even though SPV mode never stores the sender's prior
-		// outputs. Empty string for non-P2PKH inputs (coinbase, OP_RETURN
-		// spend, multisig P2SH); the UI must handle the empty case.
+		// outputs. Empty string for non-P2PKH-ECDSA inputs (coinbase,
+		// OP_RETURN spend, multisig P2SH, Schnorr-secp256k1, Ed25519);
+		// the UI must handle the empty case.
+		//
+		// Coinbase inputs have a synthetic outpoint hash of all-zero
+		// and index 0xffffffff — their sigScript is arbitrary
+		// miner-chosen data and may coincidentally tokenize to two
+		// pushes that pass shape validation. Skip them explicitly so
+		// we never claim a coinbase "came from" some bogus P2PKH
+		// hash160 of miner extra-nonce bytes.
 		var senderAddress string
-		if addr, err := addresshelper.SigScriptSenderAddress(txIn.SignatureScript, netParams); err != nil {
-			log.Debugf("SigScriptSenderAddress(tx=%s input=%d): %v",
-				mtx.TxHash(), i, err)
-		} else {
-			senderAddress = addr
+		zeroHash := chainhash.Hash{}
+		isCoinbase := txIn.PreviousOutPoint.Hash == zeroHash && txIn.PreviousOutPoint.Index == 0xffffffff
+		if !isCoinbase {
+			if addr, err := addresshelper.SigScriptSenderAddress(txIn.SignatureScript, netParams); err != nil {
+				log.Debugf("SigScriptSenderAddress(tx=%s input=%d): %v",
+					mtx.TxHash(), i, err)
+			} else {
+				senderAddress = addr
+			}
 		}
 		// Carry the lossless atom count too. Only set for SKA inputs; VAR
 		// inputs already fit in Amount (int64). Display reads AmountAtoms

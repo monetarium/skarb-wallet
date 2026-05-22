@@ -16,16 +16,14 @@ import (
 	"github.com/monetarium/monetarium-node/dcrutil"
 )
 
-// unitLabel returns the user-facing coin symbol for the selected coin
-// type ("VAR", "SKA1"…"SKA255"). The legacy hint string used
+// unitLabel returns the user-facing coin symbol ("VAR" or "SKA1"…"SKA255")
+// for the selected coin type. The legacy hint string used
 // fmt.Sprintf("Сума (%s)", string(assetType)) which baked in the WALLET
-// type ("DCR") regardless of the selected coin — wrong in the multi-coin
-// world. Skarb only ever serves one asset (the dcr-derived monetarium
-// wallet), so we just dispatch on coin type.
+// type ("DCR") regardless of the selected coin. dcr.CoinSymbol already
+// covers VAR — keep this one-liner so callers don't have to import the
+// dcr package for a tiny dispatch, and so future translations can hook
+// in here without touching every callsite.
 func unitLabel(ct cointype.CoinType) string {
-	if ct.IsVAR() {
-		return "VAR"
-	}
 	return dcr.CoinSymbol(ct)
 }
 

@@ -546,25 +546,41 @@ func (pg *Page) addSendDestination() (sharedW.AssetAmount, sharedW.AssetAmount, 
 	}
 	feeAtom := feeAndSize.Fee.UnitValue
 	spendableAmount := sourceAccount.Balance.Spendable.ToInt()
-	// VAR-only sourceAccount.Balance was the pre-multi-coin behaviour;
-	// for SKAn sends we look up the per-coin balance so "balance after
-	// send" math (and SendMax bookkeeping) doesn't underflow because the
-	// VAR account balance is zero. This also matches what the AccountDropdown
-	// now displays after SetCoinType propagation.
+	// spendableBig holds the lossless big.Int spendable (atoms) for the
+	// active coin. Used to compute balanceAfterSend without int64
+	// clamping, and to detect the case where the user has > int64 atoms
+	// available and SendMax would otherwise silently send only ~9.22 SKA.
+	var spendableBig *big.Int
 	if pg.coinTypeDropdown != nil && pg.coinTypeDropdown.Selected().IsSKA() {
 		if dcrAsset, ok := pg.selectedWallet.(*dcr.Asset); ok {
 			if bal, err := dcrAsset.GetCoinBalance(sourceAccount.Number, pg.coinTypeDropdown.Selected()); err == nil {
-				// CoinBalance carries int64 (clamped) Spendable for SKA;
-				// good enough as long as the user's balance fits in int64
-				// (phase-1 ceiling ~9.22 SKA per total — see
-				// AmountAtomForCoinType). Larger balances need a big.Int
-				// path here.
-				spendableAmount = int64(bal.Spendable)
+				// SKAAmount is a value type; BigInt() returns the
+				// underlying *big.Int (never nil for a real balance).
+				// Fall back to the int64-clamped Spendable if the
+				// SKA accessor somehow yields a nil internal — shouldn't
+				// happen for active balances but defensive.
+				spendableBig = bal.SKASpendable.BigInt()
+				if spendableBig == nil {
+					spendableBig = big.NewInt(int64(bal.Spendable))
+				}
+				// Mirror the big-int spendable into the int64 channel so
+				// VAR-style arithmetic below behaves sanely for SKA
+				// balances that fit. For balances that overflow int64
+				// we clamp here, but the SendMax path below detects this
+				// and refuses to silently truncate the request — the
+				// authoring path is still int64-capped in phase 1
+				// (see MakeCoinTypeTxOutput).
+				if spendableBig.IsInt64() {
+					spendableAmount = spendableBig.Int64()
+				} else {
+					spendableAmount = int64(bal.Spendable) // already clamped to MaxInt64 upstream
+				}
 			}
 		}
 	}
 	if len(selectedUTXOs) > 0 {
 		spendableAmount = pg.selectedUTXOs.totalUTXOsAmount
+		spendableBig = big.NewInt(spendableAmount)
 	}
 
 	wal := pg.selectedWallet
@@ -584,6 +600,20 @@ func (pg *Page) addSendDestination() (sharedW.AssetAmount, sharedW.AssetAmount, 
 		}
 
 		if SendMax {
+			// SendMax with an SKA balance whose true atom count exceeds
+			// int64 (a wallet holding > ~9.22 SKA) would silently send
+			// only the clamped 9.22 SKA and strand the rest. Refuse to
+			// pretend that's "max" — the authoring path is int64-capped
+			// in phase 1 (see MakeCoinTypeTxOutput) so we can't honour
+			// SendMax losslessly here. Surface a clear error instead of
+			// burning the user's funds.
+			if spendableBig != nil && !spendableBig.IsInt64() {
+				recipient.amountValidationError(values.String(values.StrInvalidAmount))
+				log.Warnf("SendMax refused: %s balance %s atoms exceeds int64; phase-1 author can only emit up to ~9.22 SKA in one tx",
+					pg.coinTypeDropdown.Selected(), spendableBig.String())
+				pg.clearEstimates()
+				continue
+			}
 			amountAtom = spendableAmount - feeAtom
 			recipient.setAmount(amountAtom)
 		}
@@ -591,7 +621,24 @@ func (pg *Page) addSendDestination() (sharedW.AssetAmount, sharedW.AssetAmount, 
 		cost := amountAtom + feeAtom
 		totalCost += cost
 	}
-	balanceAfterSend := wal.ToAmount(spendableAmount - totalCost)
+	// For SKA balances larger than int64 we compute balance-after in
+	// big.Int so the displayed remainder is accurate even though the
+	// tx itself can only drain up to int64-worth in one shot. VAR and
+	// in-range SKA still go through the int64 path.
+	var balanceAfterSend sharedW.AssetAmount
+	if spendableBig != nil && !spendableBig.IsInt64() {
+		remainBig := new(big.Int).Sub(spendableBig, big.NewInt(totalCost))
+		// Wrap as wallet AssetAmount for the upstream display API; the
+		// caller reformats it via dcr.FormatTxAmountBig anyway so the
+		// int64 part is only used for the VAR-fallback path.
+		clamp := remainBig
+		if !clamp.IsInt64() {
+			clamp = big.NewInt(int64(^uint64(0) >> 1)) // MaxInt64
+		}
+		balanceAfterSend = wal.ToAmount(clamp.Int64())
+	} else {
+		balanceAfterSend = wal.ToAmount(spendableAmount - totalCost)
+	}
 	return wal.ToAmount(totalCost), balanceAfterSend, totalSendAmount, nil
 
 }

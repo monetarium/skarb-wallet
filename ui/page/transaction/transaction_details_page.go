@@ -139,16 +139,10 @@ func NewTransactionDetailsPage(l *load.Load, wallet sharedW.Asset, transaction *
 		txDestinationAddresses: make([]string, 0),
 	}
 
-	// Materialize one stable Clickable per unique sender address so click
-	// events accumulate across layout passes. Source addresses come from
-	// TxInput.SenderAddress (derived from each P2PKH input's sigScript at
-	// decode time). De-duplicated to match what layoutSenderAddressList
-	// renders.
-	pg.senderAddresses = uniqueSenderAddresses(transaction.Inputs)
-	pg.senderAddressClickables = make([]*cryptomaterial.Clickable, len(pg.senderAddresses))
-	for i := range pg.senderAddressClickables {
-		pg.senderAddressClickables[i] = l.Theme.NewClickable(true)
-	}
+	// Materialize sender-address clickables. See refreshSenderClickables
+	// for the rebuild contract — must also fire whenever pg.transaction
+	// is reassigned (ticket-spender navigation, back-stack).
+	pg.refreshSenderClickables()
 
 	pg.backButton = components.GetBackButton(pg.Load)
 
@@ -336,6 +330,7 @@ func (pg *TxDetailsPage) Layout(gtx C) D {
 				pg.transaction = pg.txBackStack
 				pg.getTXSourceAccountAndDirection()
 				pg.txnWidgets = pg.initTxnWidgets()
+				pg.refreshSenderClickables() // tx reassigned; pool must follow
 				pg.txBackStack = nil
 				pg.ParentWindow().Reload()
 			},
@@ -1028,6 +1023,7 @@ func (pg *TxDetailsPage) HandleUserInteractions(gtx C) {
 			pg.transaction = pg.ticketSpent
 			pg.getTXSourceAccountAndDirection()
 			pg.txnWidgets = pg.initTxnWidgets()
+			pg.refreshSenderClickables() // tx reassigned; pool must follow
 			pg.ParentWindow().Reload()
 		}
 	}
@@ -1102,6 +1098,32 @@ func (pg *TxDetailsPage) OnNavigatedFrom() {}
 
 func timeString(timestamp int64) string {
 	return time.Unix(timestamp, 0).Format("Jan 2, 2006 15:04:05 PM")
+}
+
+// refreshSenderClickables rebuilds pg.senderAddresses + pg.senderAddressClickables
+// against the current pg.transaction.Inputs. Must be called whenever
+// pg.transaction is reassigned (constructor, ticket-spender forward navigation,
+// back-stack unwind), otherwise:
+//   - layoutSenderAddressList copies the wrong address on click, because the
+//     pre-existing slice describes the previous transaction.
+//   - if the new tx has MORE unique senders than the old, the layout indexer
+//     panics with index out of range on pg.senderAddressClickables[i].
+//
+// One stable Clickable per unique sender survives layout passes — Gio routes
+// pointer input to a specific Tag value, so creating fresh Clickables inside
+// the layout callback (as the original ad-hoc implementation did) silently
+// loses every click.
+func (pg *TxDetailsPage) refreshSenderClickables() {
+	if pg.transaction == nil {
+		pg.senderAddresses = nil
+		pg.senderAddressClickables = nil
+		return
+	}
+	pg.senderAddresses = uniqueSenderAddresses(pg.transaction.Inputs)
+	pg.senderAddressClickables = make([]*cryptomaterial.Clickable, len(pg.senderAddresses))
+	for i := range pg.senderAddressClickables {
+		pg.senderAddressClickables[i] = pg.Theme.NewClickable(true)
+	}
 }
 
 // uniqueSenderAddresses returns the de-duplicated, ordered list of

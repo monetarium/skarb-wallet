@@ -99,9 +99,17 @@ func formatBalanceWithHidden(gtx C, l *load.Load, amount string, mainTextSize un
 	if isBalanceHidden {
 		unit := ""
 		if !isUSD {
+			// Same convention as formatBalance: when no unit suffix
+			// was found in the amount string, the whole string is the
+			// value and the trailing slice from stopIndex must be
+			// empty. Original local was named "isUnitExist" but checked
+			// the opposite (stopIndex == -1 = "no unit"), which made
+			// pure-digit inputs render correctly only by accident and
+			// formatted shapes other than "<value> <unit>" sliced the
+			// wrong byte range.
 			stopIndex := getIndexUnit(amount)
-			isUnitExist := stopIndex == -1
-			if isUnitExist {
+			noUnit := stopIndex == -1
+			if noUnit {
 				stopIndex = len(amount)
 			}
 			unit = amount[stopIndex:]

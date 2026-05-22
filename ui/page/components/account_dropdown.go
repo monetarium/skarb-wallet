@@ -162,8 +162,12 @@ func (d *AccountDropdown) getAccountItemLayout(account *sharedW.Account) layout.
 			}
 		}
 		if d.selectedWallet != nil && d.selectedWallet.IsWatchingOnlyWallet() {
-			account.Balance.Spendable = d.selectedWallet.ToAmount(0)
-			spendableLabel = account.Balance.Spendable.String()
+			// Show zero spendable for watching-only wallets WITHOUT
+			// mutating the shared account.Balance — that pointer is
+			// reused by other dropdowns and by the send page's
+			// selectedAccount, so mutating it from a layout callback
+			// poisons every other caller's view of the balance.
+			spendableLabel = d.selectedWallet.ToAmount(0).String()
 		}
 
 		return layout.Flex{Axis: layout.Vertical}.Layout(gtx,

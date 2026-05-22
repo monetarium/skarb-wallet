@@ -149,10 +149,10 @@ func main() {
 	// SKA formatter divides by 1e18 and appends the coin label.
 	oneAndAHalfSKA := new(big.Int).Mul(big.NewInt(15), new(big.Int).Exp(big.NewInt(10), big.NewInt(17), nil))
 	skaBal := dcrW.CoinBalance{CoinType: cointype.CoinType(1), SKATotal: cointype.NewSKAAmount(oneAndAHalfSKA)}
-	checkFormat("SKA-1 1.5e18 atoms", "1.5 SKA-1", dcr.FormatCoinAmount(skaBal))
+	checkFormat("SKA1 1.5e18 atoms", "1.5 SKA1", dcr.FormatCoinAmount(skaBal))
 	// 1 atom should render as the smallest expressible fraction.
 	dustBal := dcrW.CoinBalance{CoinType: cointype.CoinType(1), SKATotal: cointype.SKAAmountFromInt64(1)}
-	checkFormat("SKA-1 1 atom", "0.000000000000000001 SKA-1", dcr.FormatCoinAmount(dustBal))
+	checkFormat("SKA1 1 atom", "0.000000000000000001 SKA1", dcr.FormatCoinAmount(dustBal))
 
 	// --- Tx authoring with CoinType ---------------------------------------
 	fmt.Println("→ NewUnsignedTx + SetTxCoinType round-trip:")
