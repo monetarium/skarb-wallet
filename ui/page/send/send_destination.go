@@ -1,7 +1,7 @@
 package send
 
 import (
-	"fmt"
+	"errors"
 	"strings"
 
 	"gioui.org/widget"
@@ -105,7 +105,9 @@ func (dst *destination) destinationAddress() (string, error) {
 
 	destinationAccount := dst.accountDropdown.SelectedAccount()
 	if destinationAccount == nil {
-		return "", fmt.Errorf(values.String(values.StrInvalidAddress))
+		// errors.New (not fmt.Errorf) because the i18n string may contain
+		// a literal `%` that would otherwise be parsed as a format verb.
+		return "", errors.New(values.String(values.StrInvalidAddress))
 	}
 
 	wal := dst.AssetsManager.WalletWithID(destinationAccount.WalletID)
@@ -127,7 +129,7 @@ func (dst *destination) validateDestinationAddress() (string, error) {
 	address = strings.TrimSpace(address)
 
 	if address == "" {
-		return address, fmt.Errorf(values.String(values.StrDestinationMissing))
+		return address, errors.New(values.String(values.StrDestinationMissing))
 	}
 
 	if dst.walletDropdown != nil && dst.walletDropdown.SelectedWallet() != nil && dst.walletDropdown.SelectedWallet().IsAddressValid(address) {
@@ -135,7 +137,7 @@ func (dst *destination) validateDestinationAddress() (string, error) {
 		return address, nil
 	}
 
-	return address, fmt.Errorf(values.String(values.StrInvalidAddress))
+	return address, errors.New(values.String(values.StrInvalidAddress))
 }
 
 func (dst *destination) validate() bool {
