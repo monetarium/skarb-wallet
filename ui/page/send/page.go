@@ -561,12 +561,18 @@ func (pg *Page) addSendDestination() (sharedW.AssetAmount, sharedW.AssetAmount, 
 		selectedUTXOs = pg.selectedUTXOs.selectedUTXOs
 	}
 
-	feeAndSize, err := pg.selectedWallet.EstimateFeeAndSize()
-	if err != nil {
-		pg.setRecipientsAmountErr(err)
-		return nil, nil, 0, err
-	}
-	feeAtom := feeAndSize.Fee.UnitValue
+	// Note: we no longer call EstimateFeeAndSize up here. The legacy code
+	// did it BEFORE adding the destinations to TxAuthoredInfo, which made
+	// the wallet build an empty tx for the estimate; that worked for VAR
+	// with positive balance but errored for SKA-only accounts (the wallet
+	// falls back to txCoinType=VAR when outputs is empty, then tries
+	// VAR input selection against a zero VAR balance and fails — which
+	// returned a "no spendable VAR" error that clearEstimates+early-return
+	// then wiped to a "- SKA1" placeholder with no diagnostic shown to
+	// the user). The recipient destinations are added first (loop below),
+	// and EstimateFeeAndSize moves to the end so it operates on a real
+	// outputs slice.
+	var feeAtom int64
 	spendableAmount := sourceAccount.Balance.Spendable.ToInt()
 	// spendableBig holds the lossless big.Int spendable (atoms) for the
 	// active coin. Used to compute balanceAfterSend without int64
@@ -607,21 +613,18 @@ func (pg *Page) addSendDestination() (sharedW.AssetAmount, sharedW.AssetAmount, 
 
 	wal := pg.selectedWallet
 	var totalSendAmount int64
-	// Parallel big.Int accumulators for SKA flows where the per-output
-	// or cumulative amount exceeds int64. We always populate them
-	// (initialised to zero); the int64 channel is the source of truth
-	// when totalCostBig stays in-range and the big.Int channel takes
-	// over once it overflows. Keeping both populated is cheaper than
-	// branching every iteration and avoids forking the loop body.
+	// Big.Int accumulators populated alongside the int64 ones; we use the
+	// big channel when totals overflow int64 (SKA balances > 9.22 SKA).
 	totalCostBig := new(big.Int)
 	totalSendAmountBig := new(big.Int)
-	feeBig := big.NewInt(feeAtom)
+
+	// First pass: add destinations so EstimateFeeAndSize below builds the
+	// real tx, not an empty one. Fee defaults to 0 inside this pass
+	// because we don't know the actual fee yet; it gets added to the
+	// totals after the post-loop EstimateFeeAndSize call.
 	for _, recipient := range pg.recipients {
 		destinationAddress := recipient.destinationAddress()
 		amountAtom, amountAtomBig, SendMax := recipient.validAmountBig()
-		// AddSendDestinationBig uses the big.Int string when set,
-		// falls back to amountAtom otherwise. VAR sends and small-SKA
-		// sends naturally pass "" and stay on the legacy fast path.
 		var err error
 		if dcrAsset, ok := pg.selectedWallet.(*dcr.Asset); ok {
 			err = dcrAsset.AddSendDestinationBig(recipient.id, destinationAddress, amountAtom, amountAtomBig, SendMax)
@@ -634,30 +637,10 @@ func (pg *Page) addSendDestination() (sharedW.AssetAmount, sharedW.AssetAmount, 
 			} else {
 				recipient.addressValidationError(err.Error())
 			}
-
 			pg.clearEstimates()
 		}
 
-		if SendMax {
-			// SendMax with an SKA balance whose true atom count exceeds
-			// int64 would silently send only the clamped 9.22 SKA and
-			// strand the rest. Refuse — phase-1 SendMax still goes
-			// through the int64 channel (no sweep API plumbed yet), so
-			// we can't honour SendMax losslessly here. Surface a clear
-			// error instead of burning the user's funds.
-			if spendableBig != nil && !spendableBig.IsInt64() {
-				recipient.amountValidationError(values.String(values.StrInvalidAmount))
-				log.Warnf("SendMax refused: %s balance %s atoms exceeds int64; phase-1 author can only emit up to ~9.22 SKA in one tx",
-					pg.coinTypeDropdown.Selected(), spendableBig.String())
-				pg.clearEstimates()
-				continue
-			}
-			amountAtom = spendableAmount - feeAtom
-			recipient.setAmount(amountAtom)
-		}
-		// Build the recipient's atom contribution as big.Int so multi-SKA
-		// totals don't overflow int64. amountAtomBig (when set) wins;
-		// otherwise we lift amountAtom into big.Int.
+		// Build the recipient's atom contribution as big.Int.
 		var amountBig *big.Int
 		if amountAtomBig != "" {
 			if parsed, ok := new(big.Int).SetString(amountAtomBig, 10); ok {
@@ -669,11 +652,46 @@ func (pg *Page) addSendDestination() (sharedW.AssetAmount, sharedW.AssetAmount, 
 		}
 		totalSendAmountBig.Add(totalSendAmountBig, amountBig)
 		totalCostBig.Add(totalCostBig, amountBig)
-		totalCostBig.Add(totalCostBig, feeBig)
 
 		totalSendAmount += amountAtom
-		cost := amountAtom + feeAtom
-		totalCost += cost
+		totalCost += amountAtom
+	}
+
+	// Now that destinations are in place, ask the wallet for a real
+	// fee+size estimate against the actual outputs. For the SKA path the
+	// wallet picks UTXOs of the matching coin type via
+	// MakeInputSourceWithCoinType — so this works regardless of VAR
+	// balance, which is what the legacy pre-loop call could not handle.
+	feeAndSize, feeErr := pg.selectedWallet.EstimateFeeAndSize()
+	if feeErr != nil {
+		pg.setRecipientsAmountErr(feeErr)
+		return nil, nil, 0, feeErr
+	}
+	feeAtom = feeAndSize.Fee.UnitValue
+	feeBig := big.NewInt(feeAtom)
+	totalCost += feeAtom * int64(len(pg.recipients))
+	for range pg.recipients {
+		totalCostBig.Add(totalCostBig, feeBig)
+	}
+
+	// SendMax pass — runs AFTER fee estimate so we can subtract a real
+	// fee from the spendable. Refuses when SKA balance exceeds int64
+	// because phase-1 authoring still caps single-output SKA at int64
+	// atoms (no sweep API wired yet).
+	for _, recipient := range pg.recipients {
+		_, _, SendMax := recipient.validAmountBig()
+		if !SendMax {
+			continue
+		}
+		if spendableBig != nil && !spendableBig.IsInt64() {
+			recipient.amountValidationError(values.String(values.StrInvalidAmount))
+			log.Warnf("SendMax refused: %s balance %s atoms exceeds int64; phase-1 author can only emit up to ~9.22 SKA in one tx",
+				pg.coinTypeDropdown.Selected(), spendableBig.String())
+			pg.clearEstimates()
+			continue
+		}
+		amountAtom := spendableAmount - feeAtom
+		recipient.setAmount(amountAtom)
 	}
 	// Compute balance-after-send and totals in big.Int when the SKA
 	// balance OR the cumulative cost has overflowed int64. The int64
