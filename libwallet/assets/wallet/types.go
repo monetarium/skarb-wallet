@@ -417,6 +417,15 @@ type TransactionDestination struct {
 	Address    string
 	SendMax    bool
 	UnitAmount int64
+
+	// UnitAmountBig optionally carries the lossless atom count as a
+	// decimal string for SKA flows where the destination amount exceeds
+	// int64 (e.g. > ~9.22 SKA per output). Empty for VAR and for SKA
+	// amounts that fit in int64 — those still use UnitAmount and the
+	// existing fast paths. When non-empty, consumers MUST prefer it
+	// over UnitAmount; the int64 channel above is left for backward
+	// compat with legacy call sites that don't know about big.Int.
+	UnitAmountBig string
 }
 
 type TransactionOverview struct {

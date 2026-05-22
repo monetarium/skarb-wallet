@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
+	"math/big"
 	"time"
 
 	"github.com/monetarium/monetarium-wallet/errors"
@@ -123,20 +124,30 @@ func (asset *Asset) IsUnsignedTxExist() bool {
 }
 
 func (asset *Asset) AddSendDestination(id int, address string, atomAmount int64, sendMax bool) error {
+	return asset.AddSendDestinationBig(id, address, atomAmount, "", sendMax)
+}
+
+// AddSendDestinationBig is the lossless variant: pass atomAmountBig as a
+// decimal-string big.Int when the SKA atom count exceeds int64. Empty
+// string falls back to the int64 atomAmount path for VAR and small-SKA
+// sends. UI callers building an SKA send should always pass the big.Int
+// string when the amount might overflow int64 (i.e. >9.22 SKA per output).
+func (asset *Asset) AddSendDestinationBig(id int, address string, atomAmount int64, atomAmountBig string, sendMax bool) error {
 	_, err := stdaddr.DecodeAddress(address, asset.chainParams)
 	if err != nil {
 		return utils.TranslateError(err)
 	}
 
-	if err := asset.validateSendAmount(sendMax, atomAmount); err != nil {
+	if err := asset.validateSendAmountBig(sendMax, atomAmount, atomAmountBig); err != nil {
 		return err
 	}
 
 	asset.TxAuthoredInfo.destinations[id] = &sharedW.TransactionDestination{
-		ID:         id,
-		Address:    address,
-		UnitAmount: atomAmount,
-		SendMax:    sendMax,
+		ID:            id,
+		Address:       address,
+		UnitAmount:    atomAmount,
+		UnitAmountBig: atomAmountBig,
+		SendMax:       sendMax,
 	}
 	asset.TxAuthoredInfo.needsConstruct = true
 
@@ -414,7 +425,19 @@ func (asset *Asset) constructTransaction() (*txauthor.AuthoredTx, error) {
 			}
 			sendMax = true
 		} else {
-			output, err := txhelper.MakeCoinTypeTxOutput(destination.Address, destination.UnitAmount, asset.TxAuthoredInfo.coinType, asset.chainParams)
+			// Prefer the big.Int companion field when set — that's the
+			// lossless atom count for SKA outputs whose value exceeds
+			// int64. UnitAmount alone caps at MaxInt64 (~9.22 SKA) and
+			// would silently truncate larger sends.
+			var amountBig *big.Int
+			if destination.UnitAmountBig != "" {
+				parsed, ok := new(big.Int).SetString(destination.UnitAmountBig, 10)
+				if !ok {
+					return nil, fmt.Errorf("destination %d: invalid big.Int amount %q", destination.ID, destination.UnitAmountBig)
+				}
+				amountBig = parsed
+			}
+			output, err := txhelper.MakeCoinTypeTxOutputBig(destination.Address, destination.UnitAmount, amountBig, asset.TxAuthoredInfo.coinType, asset.chainParams)
 			if err != nil {
 				log.Errorf("constructTransaction: error preparing tx output: %v", err)
 				return nil, fmt.Errorf("make tx output error: %v", err)
@@ -618,23 +641,45 @@ func (asset *Asset) changeSource(ctx context.Context) (txauthor.ChangeSource, er
 
 // validateSendAmount validates the per-output amount against the in-progress
 // transaction's coin type. For VAR the bound is the 21M-coin supply cap
-// expressed in 1e8-atom units; for SKA we accept anything that fits in int64,
-// because phase-1 atom math is int64-bounded everywhere downstream (1e18
-// atoms/coin caps a single output at ~9.22 SKA, see AmountAtomForCoinType).
-// The per-coin supply cap will gate larger SKA flows once we plumb big.Int
-// end-to-end.
+// expressed in 1e8-atom units; for SKA the int64 channel is unbounded
+// (callers use AddSendDestinationBig with a *big.Int string for amounts
+// above ~9.22 SKA, and validateSendAmountBig is the actual validator there).
 func (asset *Asset) validateSendAmount(sendMax bool, atomAmount int64) error {
+	return asset.validateSendAmountBig(sendMax, atomAmount, "")
+}
+
+// validateSendAmountBig is the big.Int-aware validator. When atomAmountBig
+// is non-empty it parses as a decimal-string *big.Int and is used as the
+// source of truth (must be positive); otherwise we fall back to the int64
+// atomAmount with the legacy bounds. SKA has no supply cap check yet
+// because per-coin SKACoinConfig has the limit only on the node side and
+// re-checking it here would duplicate consensus logic — the wallet will
+// fail loudly at NewUnsignedTransaction time if the amount is out of range.
+func (asset *Asset) validateSendAmountBig(sendMax bool, atomAmount int64, atomAmountBig string) error {
 	if sendMax {
+		return nil
+	}
+	ct := asset.TxCoinType()
+	if atomAmountBig != "" {
+		big, ok := new(big.Int).SetString(atomAmountBig, 10)
+		if !ok {
+			return errors.E(errors.Invalid, "invalid amount")
+		}
+		if big.Sign() <= 0 {
+			return errors.E(errors.Invalid, "invalid amount")
+		}
+		// For SKA there is no per-output supply cap enforced here.
+		// VAR amounts should never need the big.Int path (VAR fits in
+		// int64 by definition); flag if a caller misuses it.
+		if ct.IsVAR() && !big.IsInt64() {
+			return errors.E(errors.Invalid, "VAR amount exceeds int64")
+		}
 		return nil
 	}
 	if atomAmount <= 0 {
 		return errors.E(errors.Invalid, "invalid amount")
 	}
-	ct := asset.TxCoinType()
 	if ct.IsSKA() {
-		// int64 is the only ceiling that matters in phase 1; the
-		// caller (AmountAtomForCoinType) already rejected float→int64
-		// overflow before we got here.
 		return nil
 	}
 	if atomAmount > maxVARAtoms {

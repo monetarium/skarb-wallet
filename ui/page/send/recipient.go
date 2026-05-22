@@ -201,6 +201,20 @@ func (rp *recipient) validAmount() (int64, bool) {
 	return amountAtom, sendMax
 }
 
+// validAmountBig returns (int64 atoms, big.Int decimal-string atoms,
+// sendMax). The big-string is empty when the int64 channel is exact (VAR,
+// or SKA amounts ≤ MaxInt64 atoms). Callers that need lossless authoring
+// of SKA above ~9.22 SKA must pass the big-string through
+// dcr.Asset.AddSendDestinationBig.
+func (rp *recipient) validAmountBig() (int64, string, bool) {
+	atoms, atomsBig, sendMax, err := rp.amount.validAmountBig()
+	if err != nil {
+		rp.amountValidationError(err.Error())
+		return -1, "", false
+	}
+	return atoms, atomsBig, sendMax
+}
+
 func (rp *recipient) setAmount(amount int64) {
 	rp.amount.setAmount(amount)
 }

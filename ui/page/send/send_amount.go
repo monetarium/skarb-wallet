@@ -151,23 +151,49 @@ func (sa *sendAmount) amountIsValid() bool {
 }
 
 func (sa *sendAmount) validAmount() (int64, bool, error) {
+	atoms, _, sendMax, err := sa.validAmountBig()
+	return atoms, sendMax, err
+}
+
+// validAmountBig is the lossless companion: returns the int64 atoms (clamped
+// for SKA overflow), the big.Int atoms as a decimal string (empty for VAR
+// and for SKA amounts that fit in int64), and the SendMax flag. UI callers
+// that author SKA sends > ~9.22 SKA must use the big-string and pass it to
+// AddSendDestinationBig.
+func (sa *sendAmount) validAmountBig() (int64, string, bool, error) {
 	if sa.SendMax {
-		return 0, sa.SendMax, nil
+		return 0, "", sa.SendMax, nil
 	}
 
 	amount, err := strconv.ParseFloat(sa.amountEditor.Editor.Text(), 64)
 	if err != nil {
-		return -1, sa.SendMax, err
+		return -1, "", sa.SendMax, err
 	}
 
-	// AmountAtomForCoinType picks the right atoms/coin scale: 1e8 for VAR,
-	// 1e18 for SKA. For SKA, the int64 result caps per-output sends at
-	// ~9.22 SKA in phase 1 (see AmountAtomForCoinType for the rationale).
-	atoms := dcr.AmountAtomForCoinType(amount, sa.coinType)
-	if atoms < 0 {
-		return -1, sa.SendMax, fmt.Errorf("amount %v is out of range for %s", amount, sa.coinType)
+	// VAR: int64 channel is exact (1e8 atoms/coin caps at ~92 PB VAR).
+	if !sa.coinType.IsSKA() {
+		atoms := dcr.AmountAtomForCoinType(amount, sa.coinType)
+		if atoms < 0 {
+			return -1, "", sa.SendMax, fmt.Errorf("amount %v is out of range for %s", amount, sa.coinType)
+		}
+		return atoms, "", sa.SendMax, nil
 	}
-	return atoms, sa.SendMax, nil
+	// SKA: compute both. int64 clamps at MaxInt64 (informational for
+	// balance-after-send math); big.Int is lossless and is what the
+	// authoring path reads when present.
+	atomsBig := dcr.AmountAtomForCoinTypeBig(amount, sa.coinType)
+	if atomsBig == nil || atomsBig.Sign() <= 0 {
+		return -1, "", sa.SendMax, fmt.Errorf("amount %v is out of range for %s", amount, sa.coinType)
+	}
+	atoms := dcr.AmountAtomForCoinType(amount, sa.coinType) // clamped MaxInt64 above the threshold
+	// Only emit the big-string when it actually exceeds int64; below the
+	// threshold the int64 channel is exact and the legacy code path is
+	// faster.
+	bigStr := ""
+	if !atomsBig.IsInt64() {
+		bigStr = atomsBig.String()
+	}
+	return atoms, bigStr, sa.SendMax, nil
 }
 
 func (sa *sendAmount) validateAmount() {

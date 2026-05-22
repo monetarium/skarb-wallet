@@ -102,6 +102,13 @@ type authoredTxData struct {
 	balanceAfterSendUSD string
 	sendAmount          string
 	sendAmountUSD       string
+	// Big.Int companions for SKA flows whose atom totals overflow int64.
+	// Populated by addSendDestination only when needed; empty string falls
+	// back to the int64 fields above for display. constructTx then chooses
+	// the right channel via dcr.FormatTxAmountBig.
+	totalCostBig        string
+	balanceAfterSendBig string
+	totalSendAmountBig  string
 }
 
 type selectedUTXOsInfo struct {
@@ -475,9 +482,12 @@ func (pg *Page) constructTx() {
 	pg.feeRateSelector.EstSignedSize = fmt.Sprintf("%d Bytes", feeAndSize.EstimatedSignedSize)
 	pg.feeRateSelector.TxFee = pg.txFee
 	pg.feeRateSelector.SetFeerate(feeAndSize.FeeRate)
-	pg.totalCost = dcr.FormatTxAmount(totalCost.ToInt(), displayCoinType)
-	pg.balanceAfterSend = dcr.FormatTxAmount(balanceAfterSend.ToInt(), displayCoinType)
-	pg.sendAmount = dcr.FormatTxAmount(totalAmount, displayCoinType)
+	// Use big.Int strings when populated (SKA flows above int64); else
+	// fall back to the int64 channel. addSendDestination clears the big
+	// fields on the in-range path so this stays a pure dispatch.
+	pg.totalCost = dcr.FormatTxAmountBig(pg.totalCostBig, totalCost.ToInt(), displayCoinType)
+	pg.balanceAfterSend = dcr.FormatTxAmountBig(pg.balanceAfterSendBig, balanceAfterSend.ToInt(), displayCoinType)
+	pg.sendAmount = dcr.FormatTxAmountBig(pg.totalSendAmountBig, totalAmount, displayCoinType)
 	pg.destinationAddress = pg.getDestinationAddresses()
 	pg.destinationAccount = pg.getDestinationAccounts()
 	pg.sourceAccount = sourceAccount
@@ -493,14 +503,14 @@ func (pg *Page) constructTx() {
 		pg.sendAmountUSD = utils.FormatAsUSDString(pg.Printer, usdAmount)
 	}
 
-	pg.checkAssetCoverage(sourceAccount, totalAmount, feeAtom)
+	pg.checkAssetCoverage(sourceAccount, totalAmount, feeAtom, pg.totalSendAmountBig)
 }
 
 // checkAssetCoverage validates that the selected CoinType has enough balance to
 // cover (amount + fee) on the source account. Monetarium pays the fee in the
 // SAME asset as the transfer, so a SKA-1 transfer with no SKA-1 in the wallet
 // fails even when the user has plenty of VAR.
-func (pg *Page) checkAssetCoverage(sourceAccount *sharedW.Account, totalAmount, feeAtom int64) {
+func (pg *Page) checkAssetCoverage(sourceAccount *sharedW.Account, totalAmount, feeAtom int64, totalAmountBigStr string) {
 	dcrAsset, ok := pg.selectedWallet.(*dcr.Asset)
 	if !ok || pg.coinTypeDropdown == nil {
 		return
@@ -516,17 +526,29 @@ func (pg *Page) checkAssetCoverage(sourceAccount *sharedW.Account, totalAmount, 
 		log.Errorf("checkAssetCoverage: GetCoinBalance(%s): %v", ct, err)
 		return
 	}
-	// SKA balances live in big.Int; fee + amount fit in int64 atoms space at
-	// the wire level for sane transactions, so the comparison is well-defined.
-	required := totalAmount + feeAtom
+	// Build the required-atom big.Int from the lossless big-string when the
+	// SKA amount overflowed int64 (constructTx populated totalAmountBigStr
+	// in that case). Otherwise lift the int64 totalAmount + feeAtom.
+	var required *big.Int
+	if totalAmountBigStr != "" {
+		if parsed, ok := new(big.Int).SetString(totalAmountBigStr, 10); ok {
+			required = new(big.Int).Add(parsed, big.NewInt(feeAtom))
+		}
+	}
+	if required == nil {
+		required = big.NewInt(totalAmount + feeAtom)
+	}
 	available := bal.SKASpendable.BigInt()
 	if available == nil {
 		available = new(big.Int)
 	}
-	if available.Cmp(big.NewInt(required)) < 0 {
-		msg := fmt.Sprintf("not enough %s to cover amount + fee (have %s atoms, need %d atoms)",
-			ct, available.String(), required)
-		pg.setRecipientsAmountErr(fmt.Errorf("%s", msg))
+	if available.Cmp(required) < 0 {
+		// Surface as the localized "insufficient funds" so it shows
+		// translated; the detailed atom-by-atom error goes to the log
+		// for diagnosis.
+		log.Warnf("checkAssetCoverage: %s shortfall — have %s atoms, need %s atoms",
+			ct, available.String(), required.String())
+		pg.setRecipientsAmountErr(fmt.Errorf("%s", libUtil.ErrInsufficientBalance))
 	}
 }
 
@@ -585,10 +607,27 @@ func (pg *Page) addSendDestination() (sharedW.AssetAmount, sharedW.AssetAmount, 
 
 	wal := pg.selectedWallet
 	var totalSendAmount int64
+	// Parallel big.Int accumulators for SKA flows where the per-output
+	// or cumulative amount exceeds int64. We always populate them
+	// (initialised to zero); the int64 channel is the source of truth
+	// when totalCostBig stays in-range and the big.Int channel takes
+	// over once it overflows. Keeping both populated is cheaper than
+	// branching every iteration and avoids forking the loop body.
+	totalCostBig := new(big.Int)
+	totalSendAmountBig := new(big.Int)
+	feeBig := big.NewInt(feeAtom)
 	for _, recipient := range pg.recipients {
 		destinationAddress := recipient.destinationAddress()
-		amountAtom, SendMax := recipient.validAmount()
-		err := pg.selectedWallet.AddSendDestination(recipient.id, destinationAddress, amountAtom, SendMax)
+		amountAtom, amountAtomBig, SendMax := recipient.validAmountBig()
+		// AddSendDestinationBig uses the big.Int string when set,
+		// falls back to amountAtom otherwise. VAR sends and small-SKA
+		// sends naturally pass "" and stay on the legacy fast path.
+		var err error
+		if dcrAsset, ok := pg.selectedWallet.(*dcr.Asset); ok {
+			err = dcrAsset.AddSendDestinationBig(recipient.id, destinationAddress, amountAtom, amountAtomBig, SendMax)
+		} else {
+			err = pg.selectedWallet.AddSendDestination(recipient.id, destinationAddress, amountAtom, SendMax)
+		}
 		if err != nil {
 			if strings.Contains(err.Error(), "amount") {
 				recipient.amountValidationError(err.Error())
@@ -601,12 +640,11 @@ func (pg *Page) addSendDestination() (sharedW.AssetAmount, sharedW.AssetAmount, 
 
 		if SendMax {
 			// SendMax with an SKA balance whose true atom count exceeds
-			// int64 (a wallet holding > ~9.22 SKA) would silently send
-			// only the clamped 9.22 SKA and strand the rest. Refuse to
-			// pretend that's "max" — the authoring path is int64-capped
-			// in phase 1 (see MakeCoinTypeTxOutput) so we can't honour
-			// SendMax losslessly here. Surface a clear error instead of
-			// burning the user's funds.
+			// int64 would silently send only the clamped 9.22 SKA and
+			// strand the rest. Refuse — phase-1 SendMax still goes
+			// through the int64 channel (no sweep API plumbed yet), so
+			// we can't honour SendMax losslessly here. Surface a clear
+			// error instead of burning the user's funds.
 			if spendableBig != nil && !spendableBig.IsInt64() {
 				recipient.amountValidationError(values.String(values.StrInvalidAmount))
 				log.Warnf("SendMax refused: %s balance %s atoms exceeds int64; phase-1 author can only emit up to ~9.22 SKA in one tx",
@@ -617,26 +655,50 @@ func (pg *Page) addSendDestination() (sharedW.AssetAmount, sharedW.AssetAmount, 
 			amountAtom = spendableAmount - feeAtom
 			recipient.setAmount(amountAtom)
 		}
+		// Build the recipient's atom contribution as big.Int so multi-SKA
+		// totals don't overflow int64. amountAtomBig (when set) wins;
+		// otherwise we lift amountAtom into big.Int.
+		var amountBig *big.Int
+		if amountAtomBig != "" {
+			if parsed, ok := new(big.Int).SetString(amountAtomBig, 10); ok {
+				amountBig = parsed
+			}
+		}
+		if amountBig == nil {
+			amountBig = big.NewInt(amountAtom)
+		}
+		totalSendAmountBig.Add(totalSendAmountBig, amountBig)
+		totalCostBig.Add(totalCostBig, amountBig)
+		totalCostBig.Add(totalCostBig, feeBig)
+
 		totalSendAmount += amountAtom
 		cost := amountAtom + feeAtom
 		totalCost += cost
 	}
-	// For SKA balances larger than int64 we compute balance-after in
-	// big.Int so the displayed remainder is accurate even though the
-	// tx itself can only drain up to int64-worth in one shot. VAR and
-	// in-range SKA still go through the int64 path.
+	// Compute balance-after-send and totals in big.Int when the SKA
+	// balance OR the cumulative cost has overflowed int64. The int64
+	// channel stays populated for VAR and in-range SKA paths so the
+	// returned AssetAmount value is meaningful when small; the
+	// big.Int companions feed the lossless display formatters.
 	var balanceAfterSend sharedW.AssetAmount
-	if spendableBig != nil && !spendableBig.IsInt64() {
-		remainBig := new(big.Int).Sub(spendableBig, big.NewInt(totalCost))
-		// Wrap as wallet AssetAmount for the upstream display API; the
-		// caller reformats it via dcr.FormatTxAmountBig anyway so the
-		// int64 part is only used for the VAR-fallback path.
+	useBig := (spendableBig != nil && !spendableBig.IsInt64()) || !totalCostBig.IsInt64()
+	if useBig && spendableBig != nil {
+		remainBig := new(big.Int).Sub(spendableBig, totalCostBig)
+		// Stash the big.Int remainder where constructTx can read it for
+		// the display string; the int64 wrapper here is just a
+		// placeholder for the legacy AssetAmount return shape.
+		pg.balanceAfterSendBig = remainBig.String()
+		pg.totalCostBig = totalCostBig.String()
+		pg.totalSendAmountBig = totalSendAmountBig.String()
 		clamp := remainBig
 		if !clamp.IsInt64() {
-			clamp = big.NewInt(int64(^uint64(0) >> 1)) // MaxInt64
+			clamp = big.NewInt(int64(^uint64(0) >> 1)) // MaxInt64 sentinel
 		}
 		balanceAfterSend = wal.ToAmount(clamp.Int64())
 	} else {
+		pg.balanceAfterSendBig = ""
+		pg.totalCostBig = ""
+		pg.totalSendAmountBig = ""
 		balanceAfterSend = wal.ToAmount(spendableAmount - totalCost)
 	}
 	return wal.ToAmount(totalCost), balanceAfterSend, totalSendAmount, nil

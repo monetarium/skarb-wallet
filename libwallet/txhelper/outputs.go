@@ -15,7 +15,27 @@ func MakeTxOutput(address string, amountInAtom int64, net dcrutil.AddressParams)
 	return MakeCoinTypeTxOutput(address, amountInAtom, cointype.CoinTypeVAR, net)
 }
 
-// MakeCoinTypeTxOutput builds a wire.TxOut tagged with the given CoinType.
+// MakeCoinTypeTxOutput builds a wire.TxOut tagged with the given CoinType
+// from an int64 atom count. Convenience wrapper around MakeCoinTypeTxOutputBig
+// for the (VAR, small-SKA) hot paths where int64 is enough — VAR is
+// int64-bounded by definition (21M*1e8 < MaxInt64), and SKA outputs up to
+// ~9.22 SKA per output fit in int64 atoms.
+//
+// For SKA outputs above int64 use MakeCoinTypeTxOutputBig directly with the
+// caller's *big.Int so the value isn't silently truncated.
+func MakeCoinTypeTxOutput(address string, amountInAtom int64, ct cointype.CoinType, net dcrutil.AddressParams) (*wire.TxOut, error) {
+	var amountBig *big.Int
+	if ct.IsSKA() {
+		amountBig = big.NewInt(amountInAtom)
+	}
+	return MakeCoinTypeTxOutputBig(address, amountInAtom, amountBig, ct, net)
+}
+
+// MakeCoinTypeTxOutputBig is the lossless variant. Pass amountBig (non-nil)
+// for SKA outputs whose atom count exceeds int64; amountInAtom is then a
+// don't-care (still set on out.Value to zero per V13 wire format for SKA).
+// For VAR, amountBig is ignored and amountInAtom is used directly.
+//
 // All TxOuts in a single transaction must share the same CoinType — this is
 // enforced by monetarium-node consensus, not by the wallet, but mixing them
 // here will produce a tx that the network will reject.
@@ -26,10 +46,8 @@ func MakeTxOutput(address string, amountInAtom int64, net dcrutil.AddressParams)
 // encoder (writeTxOutV13 ignores Value for SKA coin types and serializes
 // SKAValue.Bytes()) and by monetarium-wallet's validateAuthoredCoinTypes,
 // which loudly fails before the tx ever reaches the network if a SKA
-// output has Value != 0 or SKAValue == nil. Producing a "Value=N,
-// SKAValue=nil" output as the old code did would serialize SKA outputs as
-// zero-value on the wire, and the receiving node would reject the tx.
-func MakeCoinTypeTxOutput(address string, amountInAtom int64, ct cointype.CoinType, net dcrutil.AddressParams) (*wire.TxOut, error) {
+// output has Value != 0 or SKAValue == nil.
+func MakeCoinTypeTxOutputBig(address string, amountInAtom int64, amountBig *big.Int, ct cointype.CoinType, net dcrutil.AddressParams) (*wire.TxOut, error) {
 	pkScript, err := addresshelper.PkScript(address, net)
 	if err != nil {
 		return nil, err
@@ -41,7 +59,12 @@ func MakeCoinTypeTxOutput(address string, amountInAtom int64, ct cointype.CoinTy
 	}
 	if ct.IsSKA() {
 		out.Value = 0
-		out.SKAValue = big.NewInt(amountInAtom)
+		if amountBig != nil {
+			// Copy to avoid downstream mutation of the caller's bigint.
+			out.SKAValue = new(big.Int).Set(amountBig)
+		} else {
+			out.SKAValue = big.NewInt(amountInAtom)
+		}
 	} else {
 		out.Value = amountInAtom
 	}
