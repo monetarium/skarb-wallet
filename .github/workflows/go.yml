@@ -34,22 +34,26 @@ jobs:
       - name: go mod download
         run: go mod download
 
-      - name: go vet (Skarb packages only)
-        # gioui.org's cgo shims (gioui.org/cpu, gioui.org/internal/vk) trigger
-        # a known false-positive in `go vet` on Linux: vet's parser doesn't
-        # fully resolve cgo-generated types so the method definitions in
-        # driver.go / vulkan.go are reported as "cannot define new methods on
-        # non-local type". The actual code compiles fine (build step below
-        # passes); this is a vet limitation, not a real defect, and there is
-        # no upstream fix on the gioui.org v0.7.0 line we depend on.
+      - name: go vet (Skarb packages, cgo off)
+        # gioui.org v0.7.0 ships cgo shims (gioui.org/cpu/driver.go,
+        # gioui.org/internal/vk/vulkan.go) that define Go methods on C-side
+        # struct types. With CGO_ENABLED=1 vet's parser can't resolve the
+        # cgo-generated types and emits "cannot define new methods on
+        # non-local type" for every receiver in those files. The actual
+        # code compiles fine and `go build ./...` (the build step below)
+        # passes — this is a known vet/cgo limitation, not a real defect.
         #
-        # Scope vet to the Skarb-owned packages so the bug-prone gioui
-        # internal pkgs are not pulled into vet's type-checker. We still
-        # vet every file we actually maintain — none of which use cgo.
-        # xargs (instead of `vet $(go list)`) is intentional: it splits
-        # the newline-separated list into one arg per package regardless
-        # of the runner's shell IFS settings.
-        run: go list ./... | grep -v '/_vendored/' | grep -v 'gioui\.org/' | xargs go vet
+        # Fix: vet does NOT need cgo. With CGO_ENABLED=0 the //go:build
+        # cgo (or //go:build linux + cgo) constraints exclude the entire
+        # cgo source files; vet then sees zero files to parse in those
+        # packages and prints a harmless "build constraints exclude all"
+        # note instead of choking on phantom methods. The cgo build for
+        # the real binary happens in the next step with default
+        # CGO_ENABLED=1 so the actual artifact still has working Vulkan
+        # / X11 bindings.
+        env:
+          CGO_ENABLED: "0"
+        run: go list ./... | grep -v '/_vendored/' | xargs go vet
 
       - name: go build ./...
         run: GOFLAGS="-mod=mod -trimpath" go build -trimpath -ldflags "-s -w -buildid=" -buildvcs=false ./...
