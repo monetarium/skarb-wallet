@@ -34,26 +34,9 @@ jobs:
       - name: go mod download
         run: go mod download
 
-      # `go vet` step removed. gioui.org v0.7-0.10 ships cgo shims
-      # (gioui.org/cpu/driver.go, gioui.org/internal/vk/vulkan.go)
-      # whose Go-level method receivers on cgo-generated struct types
-      # confuse vet's parser. Three workarounds were attempted and all
-      # failed in CI:
-      #   1. `go list ./... | grep -v gioui | xargs go vet` — vet still
-      #      type-checks transitive deps when resolving imports.
-      #   2. `CGO_ENABLED=0 go vet ./...` — empties the vk package, so
-      #      gioui/app then fails to resolve its import and vet exits
-      #      with a "build constraints exclude all Go files" error.
-      #   3. `go vet ./libwallet/... ./cmd/...` — libwallet imports
-      #      ui/values for localisation, which pulls gioui too.
-      #
-      # `go build ./...` below performs the full type check vet would
-      # have done — `go build` is a strict superset of vet's
-      # type-checker — and the localisation tests plus the smoke
-      # binary cover the rest. Restore this step as
-      # `go vet ./libwallet/... ./cmd/...` once we untangle the
-      # libwallet→ui/values backreference, or once we migrate off the
-      # gioui v0.7-0.10 cgo path.
+      - name: go vet ./...
+        run: go vet ./...
+
       - name: go build ./...
         run: GOFLAGS="-mod=mod -trimpath" go build -trimpath -ldflags "-s -w -buildid=" -buildvcs=false ./...
 
