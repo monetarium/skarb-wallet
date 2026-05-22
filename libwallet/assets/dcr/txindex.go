@@ -37,7 +37,14 @@ const (
 	//     "0 SKA1" because in - out cancelled. Bump triggers a reindex
 	//     so rows from emission txs and large SKA receives display the
 	//     real numbers.
-	currentTxParserVersion int32 = 4
+	// v5: dropped `storm:"unique"` from Transaction.TicketSpentHash —
+	//     the previous schema saved a Hash-only stub for every non-stake
+	//     tx beyond the first (Storm v1 enforces uniqueness even on
+	//     empty values, so the second "" collided with the first and
+	//     produced a partial write). Bump forces a clean reindex against
+	//     the new (non-unique-indexed) schema so previously-stubbed
+	//     sent txs come back with real data.
+	currentTxParserVersion int32 = 5
 )
 
 func (asset *Asset) IndexTransactions() error {
@@ -125,7 +132,18 @@ func (asset *Asset) IndexTransactions() error {
 
 	endHeight := asset.GetBestBlockHeight()
 
-	startBlock := w.NewBlockIdentifierFromHeight(beginHeight)
+	// When beginHeight == 0 we are running a fresh / migration-driven
+	// reindex; pass -1 instead so monetarium-wallet's RangeTransactions
+	// also iterates the unmined-tx pool. Otherwise sent txs that have
+	// been broadcast but not yet mined never make it into the local
+	// storm DB until the network confirms them (which on a stalled
+	// testnet may be never). The upstream rangeFn handles both
+	// block.Header == nil (unmined) and != nil (mined) cases.
+	startNum := beginHeight
+	if startNum == 0 {
+		startNum = -1
+	}
+	startBlock := w.NewBlockIdentifierFromHeight(startNum)
 	endBlock := w.NewBlockIdentifierFromHeight(endHeight)
 
 	defer func() {

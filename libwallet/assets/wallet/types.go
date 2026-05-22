@@ -341,7 +341,18 @@ type Transaction struct {
 	LastBlockValid     bool   `json:"last_block_valid,omitempty"`
 	VoteBits           string `json:"vote_bits,omitempty"`
 	VoteReward         int64  `json:"vote_reward,omitempty"`
-	TicketSpentHash    string `storm:"unique" json:"ticket_spent_hash,omitempty"`
+	// TicketSpentHash is the hash of the ticket-purchase tx this vote /
+	// revocation refers to (empty for non-stake txs). The upstream tag was
+	// `storm:"unique"` — that's a foot-gun: Storm v1 treats the empty
+	// string as a value, so the SECOND tx with TicketSpentHash="" failed
+	// the unique constraint and Storm fell back to writing a row that
+	// contains nothing but the Hash. Net effect: every non-stake tx
+	// beyond the first was lost from the Recent / Transactions list
+	// (the row existed but had zero direction / amount / type, so it
+	// was indistinguishable from a stub). Switched to `storm:"index"`
+	// since the only callers (TicketHasVotedOrRevoked, TicketSpender in
+	// transactions.go) use FindOne which works on plain indexes.
+	TicketSpentHash    string `storm:"index" json:"ticket_spent_hash,omitempty"`
 	DaysToVoteOrRevoke int32  `json:"days_to_vote_revoke,omitempty"`
 }
 
