@@ -2,6 +2,7 @@ package send
 
 import (
 	"fmt"
+	"math/big"
 
 	"gioui.org/font"
 	"gioui.org/layout"
@@ -219,6 +220,13 @@ func (rp *recipient) setAmount(amount int64) {
 	rp.amount.setAmount(amount)
 }
 
+// setAmountBig is the lossless companion used by the SendMax path. Routes
+// straight to sendAmount.setAmountBig so SKA atoms never round-trip through
+// float64 between the wallet's spendable balance and the editor text.
+func (rp *recipient) setAmountBig(atoms *big.Int) {
+	rp.amount.setAmountBig(atoms)
+}
+
 func (rp *recipient) amountValidationError(err string) {
 	rp.amount.setError(err)
 }
@@ -249,8 +257,12 @@ func (rp *recipient) recipientLayout(index int, showIcon bool) layout.Widget {
 			}),
 			layout.Rigid(func(gtx C) D {
 				layoutBody := func(gtx C) D {
-					txt := fmt.Sprintf("%s %s", values.String(values.StrDestination), values.String(values.StrAddress))
-					return rp.contentWrapper(gtx, txt, rp.sendDestination.destinationAddressEditor.Layout)
+					// Single localised key so Ukrainian gets noun-adjective
+				// order ("Адреса призначення") instead of the literal EN
+				// concat ("Призначення Адреса") that two values.String
+				// calls produce.
+				txt := values.String(values.StrDestinationLabelAddress)
+				return rp.contentWrapper(gtx, txt, rp.sendDestination.destinationAddressEditor.Layout)
 				}
 
 				if !rp.isShowSendToWallet() {
@@ -292,11 +304,11 @@ func (rp *recipient) walletAccountLayout() layout.Widget {
 			Orientation: layout.Vertical,
 		}.Layout(gtx,
 			layout.Rigid(func(gtx C) D {
-				txt := fmt.Sprintf("%s %s", values.String(values.StrDestination), values.String(values.StrWallet))
+				txt := values.String(values.StrDestinationLabelWallet)
 				return rp.sendDestination.walletDropdown.Layout(gtx, txt)
 			}),
 			layout.Rigid(func(gtx C) D {
-				txt := fmt.Sprintf("%s %s", values.String(values.StrDestination), values.String(values.StrAccount))
+				txt := values.String(values.StrDestinationLabelAccount)
 				return layout.Inset{Top: values.MarginPadding32}.Layout(gtx, func(gtx C) D {
 					return rp.sendDestination.accountDropdown.Layout(gtx, txt)
 				})

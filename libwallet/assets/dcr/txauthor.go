@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/hex"
+	stdErrors "errors"
 	"fmt"
 	"math/big"
 	"time"
@@ -34,9 +35,131 @@ type TxAuthor struct {
 	// SetTxCoinType. All outputs in a single tx must share the same CoinType.
 	coinType cointype.CoinType
 
+	// feeRateOverride is a user-specified relay fee per kB. Zero means
+	// "use the wallet default" (RelayFeeForCoinType reads chainparams
+	// MinRelayTxFee). Set via SetFeeRateOverride after validating
+	// against per-coin bounds; cleared by ClearFeeRateOverride. The
+	// EstimateFeeAndSize and constructTransaction paths consult this
+	// before falling back to defaults.
+	feeRateOverride cointype.SKAAmount
+
 	utxos          []*sharedW.UnspentOutput
 	unsignedTx     *txauthor.AuthoredTx
 	needsConstruct bool
+}
+
+// FeeRateBounds returns the (min, max) relay-fee rate (atoms per KB) the
+// user is allowed to set for the active coin type. min comes from
+// chainparams MinRelayTxFee — going below it makes the node reject the
+// tx as below the relay floor. max is min × maxFeeRateMultiplier, a
+// guardrail against fat-finger overpayments (a 100× legitimate rate is
+// already pathological; 1000× = burning coins). For VAR the bounds are
+// expressed in VAR atoms (1e8 atoms/coin); for SKA in SKA atoms
+// (1e18/coin) wrapped as big.Int via SKAAmount.
+//
+// Returns (zero, zero) if no default relay fee is configured for the
+// active coin — caller should disable the custom-fee UI in that case
+// rather than letting the user enter a value that will be rejected.
+const maxFeeRateMultiplier = 1000
+
+// Sentinel errors for fee-rate validation. UI callers detect these via
+// errors.Is and substitute a localised message — the libwallet error
+// text below is the English fallback that's only seen by callers
+// who don't translate.
+// Use std `errors.New` (aliased to stdErrors to avoid clashing with the
+// monetarium-wallet errors package) so that std `errors.Is` works in UI
+// callers — the vendored errors package has its own Is but std-based
+// detection is more idiomatic in UI code.
+var (
+	ErrFeeRateBelowMin     = stdErrors.New("fee rate below network minimum")
+	ErrFeeRateAboveMax     = stdErrors.New("fee rate above safety cap")
+	ErrFeeRateNotSupported = stdErrors.New("custom fee not supported for this coin type")
+)
+
+func (asset *Asset) FeeRateBounds() (min, max cointype.SKAAmount) {
+	if asset.TxAuthoredInfo == nil {
+		return cointype.Zero(), cointype.Zero()
+	}
+	ct := asset.TxAuthoredInfo.coinType
+	if ct.IsVAR() {
+		// VAR's default relay fee is the txrules.DefaultRelayFeePerKb
+		// constant (1e4 atoms/KB = 0.0001 VAR/KB). Lift into SKAAmount-
+		// shape so callers see one unified type, but the numeric value
+		// is VAR atoms; UI must dispatch by coinType when formatting.
+		minAmt := cointype.SKAAmountFromInt64(int64(txrules.DefaultRelayFeePerKb))
+		maxAmt := cointype.SKAAmountFromInt64(int64(txrules.DefaultRelayFeePerKb) * maxFeeRateMultiplier)
+		return minAmt, maxAmt
+	}
+	ctx, _ := asset.ShutdownContextWithCancel()
+	skaMin := asset.Internal().DCR.RelayFeeForCoinType(ctx, ct)
+	if skaMin.IsZero() {
+		return cointype.Zero(), cointype.Zero()
+	}
+	skaMax := skaMin.Mul(maxFeeRateMultiplier)
+	return skaMin, skaMax
+}
+
+// SetFeeRateOverride records a user-specified relay-fee rate (atoms per
+// KB) for the next construct/broadcast cycle. The rate is validated
+// against FeeRateBounds — going below MinRelayTxFee guarantees node
+// rejection; going above 1000× wastes coins. Pass cointype.Zero() to
+// clear the override (equivalent to ClearFeeRateOverride). All future
+// EstimateFeeAndSize and construct cycles will use this rate until
+// cleared or NewUnsignedTx wipes TxAuthoredInfo.
+func (asset *Asset) SetFeeRateOverride(rate cointype.SKAAmount) error {
+	if asset.TxAuthoredInfo == nil {
+		return errors.New("no in-progress transaction")
+	}
+	if rate.IsZero() {
+		asset.TxAuthoredInfo.feeRateOverride = cointype.Zero()
+		asset.TxAuthoredInfo.needsConstruct = true
+		return nil
+	}
+	minAmt, maxAmt := asset.FeeRateBounds()
+	if minAmt.IsZero() {
+		return ErrFeeRateNotSupported
+	}
+	ct := asset.TxAuthoredInfo.coinType
+	if rate.Cmp(minAmt) < 0 {
+		// Wrap a sentinel + a human-readable English message. UI callers
+		// errors.Is(err, ErrFeeRateBelowMin) and substitute their own
+		// localised string with FeeRateBounds-formatted numbers. The
+		// fallback English text uses coin units so even untranslated
+		// callers don't see raw 18-digit atom strings.
+		return fmt.Errorf("%w: rate %s is below network minimum %s per KB",
+			ErrFeeRateBelowMin,
+			FormatTxAmountBig(rate.String(), 0, uint8(ct)),
+			FormatTxAmountBig(minAmt.String(), 0, uint8(ct)))
+	}
+	if rate.Cmp(maxAmt) > 0 {
+		return fmt.Errorf("%w: rate %s exceeds safety cap %s per KB",
+			ErrFeeRateAboveMax,
+			FormatTxAmountBig(rate.String(), 0, uint8(ct)),
+			FormatTxAmountBig(maxAmt.String(), 0, uint8(ct)))
+	}
+	asset.TxAuthoredInfo.feeRateOverride = rate
+	asset.TxAuthoredInfo.needsConstruct = true
+	return nil
+}
+
+// ClearFeeRateOverride drops any user-specified fee rate; subsequent
+// estimates and broadcasts revert to the wallet default
+// (RelayFeeForCoinType for SKA, DefaultRelayFeePerKb for VAR).
+func (asset *Asset) ClearFeeRateOverride() {
+	if asset.TxAuthoredInfo == nil {
+		return
+	}
+	asset.TxAuthoredInfo.feeRateOverride = cointype.Zero()
+	asset.TxAuthoredInfo.needsConstruct = true
+}
+
+// FeeRateOverride returns the current user-specified fee rate, or
+// cointype.Zero() if none is set (default behaviour).
+func (asset *Asset) FeeRateOverride() cointype.SKAAmount {
+	if asset.TxAuthoredInfo == nil {
+		return cointype.Zero()
+	}
+	return asset.TxAuthoredInfo.feeRateOverride
 }
 
 func (asset *Asset) NewUnsignedTx(sourceAccountNumber int32, utxos []*sharedW.UnspentOutput) error {
@@ -220,26 +343,85 @@ func (asset *Asset) EstimateFeeAndSize() (*sharedW.TxFeeAndSize, error) {
 	// into dcrutil.Amount-shaped UnitValue for the UI (SKA losing precision
 	// for display only — actual tx authoring uses the full SKAAmount).
 	txCoinType := asset.TxCoinType()
+	override := asset.FeeRateOverride()
 	var feeToSendTx dcrutil.Amount
 	if txCoinType.IsVAR() {
-		feeToSendTx = txrules.FeeForSerializeSize(
-			txrules.DefaultRelayFeePerKb,
-			unsignedTx.EstimatedSignedSerializeSize,
-		)
+		// VAR fee rate: use user override if set (already validated by
+		// SetFeeRateOverride), else the chain default. Override is
+		// SKAAmount-shaped but for VAR the numeric value is in VAR atoms
+		// (1e8/coin) — int64-extractable for the dcrutil.Amount path.
+		relayRate := txrules.DefaultRelayFeePerKb
+		if !override.IsZero() {
+			if i64, err := override.Int64(); err == nil {
+				relayRate = dcrutil.Amount(i64)
+			} else {
+				log.Warnf("VAR fee-rate override %s overflows int64; falling back to default", override.String())
+			}
+		}
+		feeToSendTx = txrules.FeeForSerializeSize(relayRate, unsignedTx.EstimatedSignedSerializeSize)
 	} else {
-		skaRelayFee := cointype.SKAAmountFromInt64(int64(txrules.DefaultRelayFeePerKb))
+		// Source the relay rate from the wallet's chain-params SKA config
+		// (the same channel the broadcast authoring path consults via
+		// MakeInputSourceWithCoinType → RelayFeeForCoinType). The old code
+		// lifted txrules.DefaultRelayFeePerKb (= 1e4 VAR atoms ≈ 0.0001
+		// VAR/KB) into SKAAmount by reinterpreting the numeric value as SKA
+		// atoms (each = 1e-18 SKA), so the estimate came out 16 orders of
+		// magnitude smaller than the fee the broadcast actually charged —
+		// pre-send "Загальна сума" disagreed with the post-broadcast
+		// tx-details "Transaction Fee" by ~1.864 SKA on a 555 SKA send.
+		// SKA fee rate: prefer user override (already validated against
+		// chainparams MinRelayTxFee), else fall back to the wallet's
+		// default for this coin.
+		skaRelayFee := override
+		if skaRelayFee.IsZero() {
+			ctx, _ := asset.ShutdownContextWithCancel()
+			skaRelayFee = asset.Internal().DCR.RelayFeeForCoinType(ctx, txCoinType)
+		}
+		if skaRelayFee.IsZero() {
+			return nil, errors.E("no relay fee configured for SKA coin type; cannot estimate")
+		}
 		skaFee := txrules.FeeForSerializeSizeSKA(skaRelayFee, unsignedTx.EstimatedSignedSerializeSize)
-		// SKA values can in theory exceed int64. For UI fee display this is a
-		// non-issue (fees are tiny), but log a warning if it ever happens so
-		// we know to introduce a *big.Int-aware fee channel up the stack.
-		// dcrutil.MaxAmount isn't exported (only in tests), so clamp to the
-		// same 21e6 * AtomsPerCoin literal here.
+		// SKA fee CAN exceed int64 once custom-fee rates approach the
+		// 1000× safety cap — a 1-KB tx at 1000× MinRelayTxFee (assume
+		// 4 SKA1/KB MinRelay → 4000 SKA1/KB cap) produces 4000e18 ≈ 4e21
+		// atoms, several orders past 9.22e18 MaxInt64. The previous
+		// "clamp to maxVARAtoms (2.1e15) on overflow" was catastrophic:
+		// a 32 SKA1/KB rate fit int64 and displayed ≈8.9 SKA1 fee, but
+		// 33 SKA1/KB overflowed and dropped to ≈0.0021 SKA1 — the user
+		// saw the displayed total SHRINK as the rate went UP (bug #1
+		// from this batch). Carry the lossless atom count through
+		// Amount.UnitValueBig and clamp the int64 channel to MaxInt64
+		// only as a placeholder so display code that hasn't been
+		// upgraded to read UnitValueBig stays at "max representable"
+		// rather than wrapping or trying to format MaxVAR-sized atoms.
+		// UI display layer (FormatTxAmountBig + addSendDestination
+		// totalCostBig math) routes through the big-string.
+		feeBigStr := skaFee.String()
 		if i64, convErr := skaFee.Int64(); convErr == nil {
 			feeToSendTx = dcrutil.Amount(i64)
 		} else {
-			log.Warnf("SKA fee overflows int64, clamping for UI: %v", skaFee)
-			feeToSendTx = dcrutil.Amount(maxVARAtoms)
+			log.Warnf("SKA fee %s atoms exceeds int64; routing through Amount.UnitValueBig",
+				feeBigStr)
+			feeToSendTx = dcrutil.Amount(int64(^uint64(0) >> 1)) // MaxInt64 placeholder
 		}
+		feeAmount := &sharedW.Amount{
+			UnitValue:    int64(feeToSendTx),
+			CoinValue:    feeToSendTx.ToCoin(),
+			UnitValueBig: feeBigStr,
+		}
+		var change *sharedW.Amount
+		if unsignedTx.ChangeIndex >= 0 {
+			txOut := unsignedTx.Tx.TxOut[unsignedTx.ChangeIndex]
+			change = &sharedW.Amount{
+				UnitValue: txOut.Value,
+				CoinValue: asset.ToAmount(txOut.Value).ToCoin(),
+			}
+		}
+		return &sharedW.TxFeeAndSize{
+			EstimatedSignedSize: unsignedTx.EstimatedSignedSerializeSize,
+			Fee:                 feeAmount,
+			Change:              change,
+		}, nil
 	}
 	feeAmount := &sharedW.Amount{
 		UnitValue: int64(feeToSendTx),
@@ -368,7 +550,64 @@ func (asset *Asset) Broadcast(privatePassphrase, transactionLabel string) (strin
 	if err != nil {
 		return "", utils.TranslateError(err)
 	}
-	return txHash.String(), asset.updateTxLabel(txHash, transactionLabel)
+
+	// Persist the just-broadcast tx into Skarb's storm DB right now
+	// (synchronously), don't wait for NtfnServer.TransactionNotifications
+	// to deliver — that fires asynchronously and the user can sit on the
+	// "Transaction sent!" modal long enough to navigate to the
+	// Transactions tab BEFORE the notification reaches our listener,
+	// which is exactly the window where loadTransactions returns the
+	// list MINUS the new tx (the receiver-side notification arrives via
+	// peer relay and races into storm before the user even sees the
+	// "Transaction sent!" toast, which is why receiver-side mempool txs
+	// appear instantly and sender-side ones don't — different scheduling,
+	// same root cause).
+	//
+	// Errors here are non-fatal: the network publish already succeeded,
+	// the upstream bbolt store has the tx, and the regular notification
+	// listener (txandblocknotifications.go) will SaveOrUpdate it later
+	// when it fires. Log + move on.
+	if storedTx, decodeErr := asset.GetTransactionRaw(txHash.String()); decodeErr == nil && storedTx != nil {
+		if _, saveErr := asset.GetWalletDataDb().SaveOrUpdate(&sharedW.Transaction{}, storedTx); saveErr != nil {
+			log.Warnf("Broadcast: immediate storm-DB save failed for %s (listener will retry): %v",
+				txHash.String(), saveErr)
+		} else {
+			log.Infof("Broadcast: storm-DB save OK for unmined tx %s", txHash.String())
+			// Fire the OnTransaction notification listeners manually so
+			// every mounted UI page (Info widget, TxList) reloads
+			// IMMEDIATELY — without this, the listeners only run when
+			// NtfnServer.TransactionNotifications eventually delivers
+			// the same event asynchronously (observed: 1-3 seconds
+			// delay, sometimes longer if the notification queue is
+			// backed up). The user's expectation is "sent — see it
+			// instantly"; this closes the visible-latency window. The
+			// upstream listener will fire again later with the same
+			// hash and SaveOrUpdate is idempotent.
+			asset.mempoolTransactionNotification(storedTx)
+		}
+	} else if decodeErr != nil {
+		log.Warnf("Broadcast: decode-for-storm-save failed for %s (listener will retry): %v",
+			txHash.String(), decodeErr)
+	}
+
+	// Skip label-save when the user didn't enter one. updateTxLabel ->
+	// walletdata.SaveOrUpdate is destructive when called with a partial
+	// Transaction (Hash + empty Label only): SaveOrUpdate reads the
+	// existing record, deletes it, copies only the Label (which is also
+	// empty here so it stays ""), then saves a near-zero record with
+	// Type="" and Timestamp=0. That breaks two things at once:
+	//   - TxFilterAll selects on Type IN (Regular, Mixed, CoinBase), so
+	//     a Type="" record is invisible to Info / Transactions tabs.
+	//   - Timestamp=0 sinks the row to the bottom of newestFirst order
+	//     even if it WERE matched.
+	// Both effects combined explain the user-visible "sent SKA tx never
+	// appears in the mempool list" bug: the immediate-storm-save above
+	// inserts a complete record, then updateTxLabel with an empty label
+	// silently clobbers it back out a few microseconds later.
+	if transactionLabel != "" {
+		return txHash.String(), asset.updateTxLabel(txHash, transactionLabel)
+	}
+	return txHash.String(), nil
 }
 
 // updateTxLabel saves the tx label in the local instance.
@@ -490,14 +729,28 @@ func (asset *Asset) constructTransaction() (*txauthor.AuthoredTx, error) {
 	// repopulates Value=0/SKAValue=big.Int for SKA. We only have to provide
 	// a P2PKH script via MakeTxChangeSource.
 	txCoinType := asset.TxAuthoredInfo.coinType
+	override := asset.TxAuthoredInfo.feeRateOverride
 	var inputsSourceFunc txauthor.InputSource
 	var relayFee cointype.SKAAmount
 	if txCoinType.IsSKA() {
 		inputsSourceFunc = nil
-		relayFee = cointype.Zero()
+		// Override takes precedence over the wallet's chainparams
+		// default. Zero leaves it for upstream to fill in from
+		// RelayFeeForCoinType — the legacy code path.
+		if !override.IsZero() {
+			relayFee = override
+		} else {
+			relayFee = cointype.Zero()
+		}
 	} else {
 		inputsSourceFunc = asset.makeInputSource(sendMax, unspents)
-		relayFee = cointype.SKAAmountFromInt64(int64(txrules.DefaultRelayFeePerKb))
+		// VAR override path: lift the user-specified rate (in VAR atoms)
+		// back into SKAAmount-shape for the unified upstream API.
+		if !override.IsZero() {
+			relayFee = override
+		} else {
+			relayFee = cointype.SKAAmountFromInt64(int64(txrules.DefaultRelayFeePerKb))
+		}
 	}
 
 	return asset.Internal().DCR.NewUnsignedTransaction(ctx, outputs, relayFee, asset.TxAuthoredInfo.sourceAccountNumber,

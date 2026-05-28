@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"math/big"
 	"sort"
 	"strings"
 
@@ -11,7 +12,9 @@ import (
 	"gioui.org/io/clipboard"
 	"gioui.org/layout"
 	"gioui.org/widget"
+	"github.com/monetarium/monetarium-node/cointype"
 	"github.com/monetarium/skarb-wallet/app"
+	"github.com/monetarium/skarb-wallet/libwallet/assets/dcr"
 	sharedW "github.com/monetarium/skarb-wallet/libwallet/assets/wallet"
 	libutils "github.com/monetarium/skarb-wallet/libwallet/utils"
 	"github.com/monetarium/skarb-wallet/ui/cryptomaterial"
@@ -62,7 +65,14 @@ type ManualCoinSelectionPage struct {
 	totalAmount   cryptomaterial.Label
 
 	selectedUTXOrows []*sharedW.UnspentOutput
-	selectedAmount   float64
+	// selectedAtoms is the running total of the selected UTXOs in atoms,
+	// accumulated as a big.Int so SKA values (1e18 atoms/coin, easily past
+	// the int64 ceiling) stay lossless. The legacy float64 channel divided
+	// by 1e8 via .ToCoin() and silently truncated SKA totals.
+	selectedAtoms *big.Int
+	// coinType is the send page's selected coin (VAR / SKAn); used to format
+	// selectedAtoms with the correct unit and atom scale.
+	coinType cointype.CoinType
 
 	amountLabel        labelCell
 	addressLabel       labelCell
@@ -155,7 +165,20 @@ func NewManualCoinSelectionPage(l *load.Load, sendPage *Page) *ManualCoinSelecti
 	pg.confirmationsClickable = pg.Theme.NewClickable(true)
 	pg.dateClickable = pg.Theme.NewClickable(false)
 
-	pg.strAssetType = sendPage.selectedWallet.GetAssetType().String()
+	// Use the SEND page's selected coin type (VAR / SKAn) for the unit
+	// suffix instead of the wallet's legacy asset type. GetAssetType()
+	// returns "DCR" for Skarb's Decred-fork — a Cryptopower-era brand ID
+	// that's meaningless to a Monetarium user. The coin-type dropdown
+	// on the send page is the source of truth for the active asset
+	// surface; fall back to VAR only if the dropdown isn't initialised
+	// yet (defensive — should never trigger in practice since the
+	// dropdown is set up in NewSendPage before this page can open).
+	ct := cointype.CoinTypeVAR
+	if sendPage.coinTypeDropdown != nil {
+		ct = sendPage.coinTypeDropdown.Selected()
+	}
+	pg.coinType = ct
+	pg.strAssetType = dcr.CoinSymbol(ct)
 	name := fmt.Sprintf("%v(%v)", values.String(values.StrAmount), pg.strAssetType)
 
 	// UTXO table view titles.
@@ -196,11 +219,11 @@ func NewManualCoinSelectionPage(l *load.Load, sendPage *Page) *ManualCoinSelecti
 func (pg *ManualCoinSelectionPage) initializeFields() {
 	pg.lastSortEvent = Lastclicked{clicked: -1}
 	pg.selectedUTXOrows = make([]*sharedW.UnspentOutput, 0)
-	pg.selectedAmount = 0
+	pg.selectedAtoms = new(big.Int)
 
 	pg.selectedUTXOs.Text = "0"
 	pg.txSize.Text = pg.computeUTXOsSize()
-	pg.totalAmount.Text = "0 " + pg.strAssetType
+	pg.totalAmount.Text = dcr.FormatTxAmountBig(pg.selectedAtoms.String(), 0, uint8(pg.coinType))
 }
 
 // OnNavigatedTo is called when the page is about to be displayed and
@@ -227,12 +250,31 @@ func (pg *ManualCoinSelectionPage) fetchAccountsInfo() error {
 		return fmt.Errorf("querying the account (%v) info failed: %v", account.AccountNumber, err)
 	}
 
+	// Filter UTXOs by the send page's currently-selected coin type.
+	// Without this, a SKA send always shows the VAR UTXO list (because
+	// upstream UnspentOutputs returns every UTXO of the account
+	// regardless of coin) — picking one and trying to send fails inside
+	// constructTransaction with "no spendable SKA inputs". CoinTypeVAR
+	// is the default when the send page's dropdown isn't initialised yet
+	// (legacy/restore flows); preserve the old behaviour of showing
+	// every output in that case.
+	if pg.sendPage.coinTypeDropdown != nil {
+		selectedCT := uint8(pg.sendPage.coinTypeDropdown.Selected())
+		filtered := info[:0]
+		for _, utxo := range info {
+			if utxo.CoinType == selectedCT {
+				filtered = append(filtered, utxo)
+			}
+		}
+		info = filtered
+	}
+
 	previousUTXOs := make(map[string]struct{}, 0)
 	// Use the previous Selection of UTXO if same acccount source has been used.
 	if account == pg.sendPage.selectedUTXOs.sourceAccount {
 		for _, utxo := range pg.sendPage.selectedUTXOs.selectedUTXOs {
 			previousUTXOs[utxo.TxID] = struct{}{}
-			pg.selectedAmount += utxo.Amount.ToCoin()
+			pg.selectedAtoms.Add(pg.selectedAtoms, utxoAtoms(utxo))
 		}
 		pg.selectedUTXOrows = pg.sendPage.selectedUTXOs.selectedUTXOs
 	}
@@ -328,7 +370,7 @@ func (pg *ManualCoinSelectionPage) HandleUserInteractions(gtx C) {
 		if record.checkbox.CheckBox.Update(gtx) {
 			if record.checkbox.CheckBox.Value {
 				pg.selectedUTXOrows = append(pg.selectedUTXOrows, record.UnspentOutput)
-				pg.selectedAmount += record.Amount.ToCoin()
+				pg.selectedAtoms.Add(pg.selectedAtoms, utxoAtoms(record.UnspentOutput))
 			} else {
 				for index, item := range pg.selectedUTXOrows {
 					if item.TxID == record.TxID {
@@ -337,7 +379,7 @@ func (pg *ManualCoinSelectionPage) HandleUserInteractions(gtx C) {
 						break
 					}
 				}
-				pg.selectedAmount -= record.Amount.ToCoin()
+				pg.selectedAtoms.Sub(pg.selectedAtoms, utxoAtoms(record.UnspentOutput))
 			}
 
 			pg.updateSummaryInfo()
@@ -348,7 +390,20 @@ func (pg *ManualCoinSelectionPage) HandleUserInteractions(gtx C) {
 func (pg *ManualCoinSelectionPage) updateSummaryInfo() {
 	pg.txSize.Text = pg.computeUTXOsSize()
 	pg.selectedUTXOs.Text = fmt.Sprintf("%d", len(pg.selectedUTXOrows))
-	pg.totalAmount.Text = fmt.Sprintf("%f %s", pg.selectedAmount, pg.strAssetType)
+	pg.totalAmount.Text = dcr.FormatTxAmountBig(pg.selectedAtoms.String(), 0, uint8(pg.coinType))
+}
+
+// utxoAtoms returns the UTXO's value in atoms as a big.Int. For SKA UTXOs the
+// lossless value lives in SKAAmountAtoms (the legacy VAR-shaped Amount field is
+// zero by upstream convention); for VAR it comes from Amount.ToInt(). Using a
+// big.Int keeps SKA totals (1e18 atoms/coin) from overflowing int64.
+func utxoAtoms(utxo *sharedW.UnspentOutput) *big.Int {
+	if utxo.SKAAmountAtoms != "" {
+		if v, ok := new(big.Int).SetString(utxo.SKAAmountAtoms, 10); ok {
+			return v
+		}
+	}
+	return big.NewInt(utxo.Amount.ToInt())
 }
 
 func (pg *ManualCoinSelectionPage) computeUTXOsSize() string {
@@ -573,8 +628,13 @@ func (pg *ManualCoinSelectionPage) accountListItemsSection(gtx C, utxos []*UTXOI
 					return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
 						layout.Rigid(func(gtx C) D {
 							v := utxos[index]
-							checkButton := &v.checkbox                                                            // Component 1
-							amountLabel := pg.generateLabel(v.Amount.ToCoin(), nil)                               // component 2
+							checkButton := &v.checkbox // Component 1
+							// SKA UTXOs ship with Amount.ToCoin()==0 (VAR-shaped int64
+							// is 0 for SKA atoms by upstream convention); render via
+							// FormatTxAmountBig so the SKAAmountAtoms big-string
+							// channel surfaces the actual atom value with the right
+							// "SKA1"/"SKA2"/"VAR" suffix.
+							amountLabel := pg.generateLabel(dcr.FormatTxAmountBig(v.SKAAmountAtoms, v.Amount.ToInt(), v.CoinType), nil) // component 2
 							addresslabel := pg.generateLabel(v.Address, nil)                                      // Component 3
 							confirmationsLabel := pg.generateLabel(v.Confirmations, nil)                          // Component 4
 							dateLabel := pg.generateLabel(libutils.FormatUTCShortTime(v.ReceiveTime.Unix()), nil) // Component 5
@@ -672,10 +732,14 @@ func (pg *ManualCoinSelectionPage) rowItemsSection(gtx C, components ...interfac
 func sortUTXOrows(i, j, pos int, ascendingOrder bool, elems []*UTXOInfo) bool {
 	switch pos {
 	case 0: // component 2 (Amount Component)
+		// Compare in atoms via big.Int so SKA UTXOs (whose VAR-shaped Amount
+		// field is zero) sort by their real value rather than all comparing
+		// equal at 0.
+		cmp := utxoAtoms(elems[i].UnspentOutput).Cmp(utxoAtoms(elems[j].UnspentOutput))
 		if ascendingOrder {
-			return elems[i].Amount.ToInt() > elems[j].Amount.ToInt()
+			return cmp > 0
 		}
-		return elems[i].Amount.ToInt() < elems[j].Amount.ToInt()
+		return cmp < 0
 	case 1: // component 3 (Address Component)
 		addresses := []string{elems[i].Address, elems[j].Address}
 		if ascendingOrder {

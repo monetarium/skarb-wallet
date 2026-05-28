@@ -3,6 +3,7 @@ package txhelper
 import (
 	"fmt"
 	"math"
+	"math/big"
 
 	"github.com/monetarium/monetarium-wallet/wallet"
 	"github.com/monetarium/skarb-wallet/ui/values"
@@ -40,6 +41,59 @@ func TransactionAmountAndDirection(inputTotal, outputTotal, fee int64) (amount i
 	}
 
 	return
+}
+
+// TransactionAmountAndDirectionBig is the lossless companion of
+// TransactionAmountAndDirection: it operates on *big.Int totals so it stays
+// correct for SKA transactions whose wallet-input / wallet-output sums
+// overflow int64 (a single SKA UTXO above ~9.22 SKA). Without this path,
+// the int64 classifier received clamped values and mis-classified large
+// SKA sends as "Received" (because the input clamped at MaxInt64 while
+// the change-only output stayed small and the subtraction inverted).
+//
+// inputTotal, outputTotal: sum of wallet-owned inputs / outputs in atoms.
+// fee: the absolute tx fee. nil arguments are treated as zero so callers
+// can pass *big.Int values straight from an SKA aggregate without
+// special-casing the empty case.
+//
+// Returns a fresh *big.Int amount; the direction matches the int64 path
+// for amounts that fit in int64.
+func TransactionAmountAndDirectionBig(inputTotal, outputTotal, fee *big.Int) (amount *big.Int, direction int32) {
+	in := orZero(inputTotal)
+	out := orZero(outputTotal)
+	f := orZero(fee)
+
+	diff := new(big.Int).Sub(out, in) // out - in
+	switch {
+	case diff.Sign() < 0:
+		absDiff := new(big.Int).Neg(diff)
+		if absDiff.Cmp(f) == 0 {
+			// transferred internally: the only thing that left the wallet was the fee
+			direction = TxDirectionTransferred
+			return new(big.Int).Set(f), direction
+		}
+		direction = TxDirectionSent
+		// sent_external = in - out - fee
+		amt := new(big.Int).Sub(in, out)
+		amt.Sub(amt, f)
+		return amt, direction
+	case diff.Sign() > 0:
+		direction = TxDirectionReceived
+		return new(big.Int).Set(out), direction
+	default:
+		// in == out and != 0 in the normal case → all wallet inputs were
+		// also wallet outputs (rare; e.g. consolidating across accounts).
+		// Match the int64 fallback: classify as Sent with amount = 0.
+		direction = TxDirectionSent
+		return new(big.Int).SetInt64(0), direction
+	}
+}
+
+func orZero(b *big.Int) *big.Int {
+	if b == nil {
+		return new(big.Int)
+	}
+	return b
 }
 
 func FormatTransactionType(txType wallet.TransactionType) string {

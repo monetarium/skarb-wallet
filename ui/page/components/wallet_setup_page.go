@@ -127,12 +127,22 @@ func NewCreateWallet(l *load.Load, walletCreationSuccessCallback func(newWallet 
 }
 
 // NewAssetTypeDropDown creates a new asset type drop down component.
+//
+// The displayed Text for each asset is the user-facing label from
+// AssetType.DisplayName(), NOT the internal asset-type ID
+// (AssetType.String() returns "DCR" — a Decred-fork artefact that
+// confuses Monetarium users who see "VAR & SKA" branding everywhere
+// else). Critical: any code that maps the dropdown's Selected() value
+// back to an AssetType must go through ParseAssetTypeDisplayName, not
+// libutils.AssetType(Selected()) — otherwise it'll get the display
+// label "VAR & SKA" and silently fail any equality check against
+// DCRWalletAsset.
 func NewAssetTypeDropDown(l *load.Load) *cryptomaterial.DropDown {
 	items := []cryptomaterial.DropDownItem{}
 
 	for _, assType := range l.AssetsManager.AllAssetTypes() {
 		item := cryptomaterial.DropDownItem{
-			Text: assType.String(),
+			Text: assType.DisplayName(),
 			Icon: l.Theme.AssetIcon(assType),
 		}
 		items = append(items, item)
@@ -535,7 +545,12 @@ func (pg *CreateWallet) HandleUserInteractions(gtx C) {
 			// todo setup mixer for restored accounts automatically
 			pg.walletCreationSuccessCallback(newWallet)
 		}
-		ast := libutils.AssetType(pg.assetTypeDropdown.Selected())
+		// Dropdown stores the user-facing label ("VAR & SKA") — must
+		// run it through ParseAssetTypeDisplayName to get the internal
+		// AssetType ID; raw libutils.AssetType("VAR & SKA") would be a
+		// non-matching string and silently break downstream equality
+		// against DCRWalletAsset.
+		ast := libutils.ParseAssetTypeDisplayName(pg.assetTypeDropdown.Selected())
 		pg.ParentWindow().Display(NewRestorePage(pg.Load, pg.walletName.Editor.Text(), ast, afterRestore))
 	}
 }

@@ -2,6 +2,8 @@ package send
 
 import (
 	"fmt"
+	"math"
+	"math/big"
 	"strconv"
 
 	"gioui.org/io/key"
@@ -107,33 +109,63 @@ func (sa *sendAmount) setExchangeRate(exchangeRate float64) {
 }
 
 func (sa *sendAmount) setAmount(amount int64) {
-	// TODO: this workaround ignores the change events from the
-	// amount input to avoid construct tx cycle.
+	// int64 callers route through the lossless big.Int path so SKA values
+	// never see a float64 round-trip, even when they fit in int64. A 5 SKA
+	// value (5e18 atoms < MaxInt64) already loses ~3 decimal digits when
+	// rendered via "%.18f" because float64's 53-bit mantissa cannot
+	// represent every 1-atom step at that magnitude — and the editor text
+	// is then re-parsed losslessly by validAmountBig, baking the
+	// truncated value into the broadcast atoms.
+	sa.setAmountBig(big.NewInt(amount))
+}
+
+// setAmountBig writes the editor with the lossless decimal representation
+// of `atoms` — the SendMax precision-safe entry point. SKA uses
+// SKAAmount.ToDecimalString (full 18-decimal precision, no float in the
+// path); VAR uses dcrutil.Amount.ToCoin since 21M VAR * 1e8 = 2.1e15 atoms
+// fits int64 with room to spare and float64 is exact there. The USD
+// mirror, when shown, is still float64-shaped — USD has 2 decimals and is
+// derived from a float exchange rate, so a few-atom drift on the displayed
+// USD value is harmless and not part of the broadcast amount.
+//
+// Nil or non-positive atoms clear both editors. Always sets
+// sendMaxChangeEvent so the handle() path knows to swallow the synthetic
+// Changed event we're about to emit by writing the text.
+func (sa *sendAmount) setAmountBig(atoms *big.Int) {
 	sa.sendMaxChangeEvent = sa.SendMax
 
-	// Convert int64 atoms back to a coin-shaped float for display. VAR has
-	// 1e8 atoms/coin (dcrutil.Amount.ToCoin), SKA has 1e18 — pick the right
-	// divisor for the current coin type. The editor format string also
-	// widens for SKA: 8 decimals would silently truncate sub-millicoin SKA
-	// values, so we use 18 (the full atoms/coin resolution) and let the
-	// editor display whatever non-zero suffix the user actually has.
-	if sa.coinType.IsSKA() {
-		const skaAtomsPerCoin = 1e18
-		amountSet := float64(amount) / skaAtomsPerCoin
-		sa.amountEditor.Editor.SetText(fmt.Sprintf("%.18f", amountSet))
-		if sa.exchangeRate != -1 {
-			usdAmount := utils.CryptoToUSD(sa.exchangeRate, amountSet)
-			sa.usdSendMaxChangeEvent = true
-			sa.usdAmountEditor.Editor.SetText(fmt.Sprintf("%.2f", usdAmount))
-		}
+	if atoms == nil || atoms.Sign() <= 0 {
+		sa.amountEditor.Editor.SetText("")
+		sa.usdAmountEditor.Editor.SetText("")
 		return
 	}
 
-	amountSet := dcrutil.Amount(amount).ToCoin()
-	sa.amountEditor.Editor.SetText(fmt.Sprintf("%.8f", amountSet))
+	var displayText string
+	var coinValue float64
+	if sa.coinType.IsSKA() {
+		displayText = cointype.NewSKAAmount(atoms).ToDecimalString(cointype.AtomsPerSKACoin)
+		// USD display path requires a float — we accept the float drift
+		// here because it never feeds back into the editor text the
+		// authoring code parses. Skip USD entirely when atoms overflow
+		// int64 (a >9.22 SKA SendMax) since the float conversion would
+		// be meaningless.
+		if atoms.IsInt64() {
+			const skaAtomsPerCoin = 1e18
+			coinValue = float64(atoms.Int64()) / skaAtomsPerCoin
+		}
+	} else {
+		// VAR fits int64 by construction (21M * 1e8 = 2.1e15 < float64's
+		// 2^53 ≈ 9.0e15 mantissa exact-integer range), so ToCoin's float
+		// is lossless. Keep the legacy "%.8f" formatting so the editor
+		// looks identical to what the user typed/saw before.
+		amt := dcrutil.Amount(atoms.Int64())
+		coinValue = amt.ToCoin()
+		displayText = fmt.Sprintf("%.8f", coinValue)
+	}
+	sa.amountEditor.Editor.SetText(displayText)
 
-	if sa.exchangeRate != -1 {
-		usdAmount := utils.CryptoToUSD(sa.exchangeRate, amountSet)
+	if sa.exchangeRate != -1 && atoms.IsInt64() {
+		usdAmount := utils.CryptoToUSD(sa.exchangeRate, coinValue)
 		sa.usdSendMaxChangeEvent = true
 		sa.usdAmountEditor.Editor.SetText(fmt.Sprintf("%.2f", usdAmount))
 	}
@@ -160,35 +192,45 @@ func (sa *sendAmount) validAmount() (int64, bool, error) {
 // and for SKA amounts that fit in int64), and the SendMax flag. UI callers
 // that author SKA sends > ~9.22 SKA must use the big-string and pass it to
 // AddSendDestinationBig.
+//
+// The parsing goes through ParseAmountToAtomsBig (string → big.Int)
+// rather than ParseFloat → float64 → 1e18 multiply, because float64's
+// 53-bit mantissa silently drops the last ~3 decimal digits of an
+// 18-decimal SKA amount. With the float path "1.234567890123456789" was
+// truncating to "1.234567890123456700"-ish before being broadcast, which
+// is bug #3 of the v1 bug report ("sent amount doesn't match entered").
 func (sa *sendAmount) validAmountBig() (int64, string, bool, error) {
 	if sa.SendMax {
 		return 0, "", sa.SendMax, nil
 	}
 
-	amount, err := strconv.ParseFloat(sa.amountEditor.Editor.Text(), 64)
+	text := sa.amountEditor.Editor.Text()
+	atomsBig, err := dcr.ParseAmountToAtomsBig(text, sa.coinType)
 	if err != nil {
 		return -1, "", sa.SendMax, err
 	}
+	if atomsBig.Sign() <= 0 {
+		return -1, "", sa.SendMax, fmt.Errorf("amount %q must be greater than zero", text)
+	}
 
-	// VAR: int64 channel is exact (1e8 atoms/coin caps at ~92 PB VAR).
+	// VAR fits in int64 by construction (21M coins × 1e8 atoms = 2.1e15
+	// < MaxInt64 = 9.22e18). Return the exact value via the int64
+	// channel; bigStr stays empty since the legacy path is sufficient.
 	if !sa.coinType.IsSKA() {
-		atoms := dcr.AmountAtomForCoinType(amount, sa.coinType)
-		if atoms < 0 {
-			return -1, "", sa.SendMax, fmt.Errorf("amount %v is out of range for %s", amount, sa.coinType)
+		if !atomsBig.IsInt64() {
+			return -1, "", sa.SendMax, fmt.Errorf("VAR amount overflows int64: %s atoms", atomsBig.String())
 		}
-		return atoms, "", sa.SendMax, nil
+		return atomsBig.Int64(), "", sa.SendMax, nil
 	}
-	// SKA: compute both. int64 clamps at MaxInt64 (informational for
-	// balance-after-send math); big.Int is lossless and is what the
-	// authoring path reads when present.
-	atomsBig := dcr.AmountAtomForCoinTypeBig(amount, sa.coinType)
-	if atomsBig == nil || atomsBig.Sign() <= 0 {
-		return -1, "", sa.SendMax, fmt.Errorf("amount %v is out of range for %s", amount, sa.coinType)
+
+	// SKA: int64 atoms are advisory only above ~9.22 SKA — we clamp so
+	// balance-after-send arithmetic (which is still int64-shaped in
+	// older code paths) doesn't crash, but the authoring path consumes
+	// the big-string and broadcasts the exact atoms the user typed.
+	var atoms int64 = math.MaxInt64
+	if atomsBig.IsInt64() {
+		atoms = atomsBig.Int64()
 	}
-	atoms := dcr.AmountAtomForCoinType(amount, sa.coinType) // clamped MaxInt64 above the threshold
-	// Only emit the big-string when it actually exceeds int64; below the
-	// threshold the int64 channel is exact and the legacy code path is
-	// faster.
 	bigStr := ""
 	if !atomsBig.IsInt64() {
 		bigStr = atomsBig.String()
@@ -199,16 +241,29 @@ func (sa *sendAmount) validAmountBig() (int64, string, bool, error) {
 func (sa *sendAmount) validateAmount() {
 	sa.amountErrorText = ""
 	if sa.inputsNotEmpty(sa.amountEditor.Editor) {
-		amount, err := strconv.ParseFloat(sa.amountEditor.Editor.Text(), 64)
+		// Validate shape via ParseAmountToAtomsBig (lossless): handles
+		// 18-decimal SKA inputs that strconv.ParseFloat would silently
+		// truncate at the 53-bit float64 mantissa. For VAR this still
+		// catches non-numeric input the same way.
+		atomsBig, err := dcr.ParseAmountToAtomsBig(sa.amountEditor.Editor.Text(), sa.coinType)
 		if err != nil {
 			// empty usd input
 			sa.usdAmountEditor.Editor.SetText("")
 			sa.amountErrorText = values.String(values.StrInvalidAmount)
 			return
 		}
-		if sa.exchangeRate != -1 {
-			usdAmount := utils.CryptoToUSD(sa.exchangeRate, amount)
+		// USD live-preview only fires when an exchange rate is set, AND
+		// only for VAR — sa.exchangeRate comes from the wallet's primary
+		// asset type (Decred-fork, == VAR-USD). Applying a VAR-USD rate
+		// to a SKA amount would be a category error: SKA tokens have no
+		// USD pairing in v1. Hide the preview for SKA instead of
+		// emitting a misleading number.
+		if sa.exchangeRate != -1 && !sa.coinType.IsSKA() && atomsBig.IsInt64() {
+			coinValue := dcrutil.Amount(atomsBig.Int64()).ToCoin()
+			usdAmount := utils.CryptoToUSD(sa.exchangeRate, coinValue)
 			sa.usdAmountEditor.Editor.SetText(fmt.Sprintf("%.2f", usdAmount)) // 2 decimal places
+		} else if sa.coinType.IsSKA() {
+			sa.usdAmountEditor.Editor.SetText("")
 		}
 
 		return

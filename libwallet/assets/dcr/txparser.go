@@ -64,9 +64,22 @@ func (asset *Asset) decodeTransactionWithTxSummary(txSummary *w.TransactionSumma
 		// "Received"). Phase 1 keeps the int64 channel: pick whichever
 		// field is set, log loudly if an SKA value overflows int64 (caps
 		// at ~9.22 SKA, see AmountAtomForCoinType in utils.go).
+		// AmountInBig captures the lossless previous SKA atom value (if any)
+		// so DecodeTransaction's big.Int classifier doesn't have to trust
+		// the wire-side msgTx.TxIn[*].SKAValueIn, which lives in witness
+		// data and gets stripped by SPV mempool relay. Without this, the
+		// sender's view of an in-mempool SKA send shows direction=Received
+		// with the change amount until the tx confirms (the bug user
+		// reported as "showed change as own spend in mempool, correct
+		// after confirm"). VAR inputs leave it empty — int64 is enough.
+		var amountInBig string
+		if input.PreviousSKAAmount != nil && input.PreviousSKAAmount.Sign() > 0 {
+			amountInBig = input.PreviousSKAAmount.String()
+		}
 		walletInputs[i] = &sharedW.WInput{
-			Index:    int32(input.Index),
-			AmountIn: skaOrVARAtoms(input.PreviousSKAAmount, int64(input.PreviousAmount), "WInput"),
+			Index:       int32(input.Index),
+			AmountIn:    skaOrVARAtoms(input.PreviousSKAAmount, int64(input.PreviousAmount), "WInput"),
+			AmountInBig: amountInBig,
 			WAccount: &sharedW.WAccount{
 				AccountNumber: accountNumber,
 				AccountName:   accountName,

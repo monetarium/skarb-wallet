@@ -112,10 +112,9 @@ func (pg *StatPage) layoutStats(gtx C) D {
 	bestBlockTime := time.Unix(pg.wallet.GetBestBlockTimeStamp(), 0)
 	secondsSinceBestBlock := int64(time.Since(bestBlockTime).Seconds())
 
-	walletDataSize := "Unknown"
-	v, err := pg.AssetsManager.RootDirFileSizeInBytes(pg.wallet.DataDir())
-	if err != nil {
-		walletDataSize = fmt.Sprintf("%f GB", float64(v)*1e-9)
+	walletDataSize := values.String(values.StrUnknown)
+	if v, err := pg.AssetsManager.RootDirFileSizeInBytes(pg.wallet.DataDir()); err == nil {
+		walletDataSize = fmt.Sprintf("%.2f GB", float64(v)*1e-9)
 	}
 
 	line := pg.Theme.Separator()
@@ -143,7 +142,7 @@ func (pg *StatPage) layoutStats(gtx C) D {
 		line.Layout,
 		item(values.String(values.StrTransactions), fmt.Sprintf("%d", len(pg.txs))),
 		line.Layout,
-		item(values.String(values.StrAccount)+"s", fmt.Sprintf("%d", len(pg.accounts.Accounts))),
+		item(values.String(values.StrAccounts), fmt.Sprintf("%d", len(pg.accounts.Accounts))),
 	}
 
 	return pg.Theme.List(pg.scrollbarList).Layout(gtx, 1, func(gtx C, _ int) D {

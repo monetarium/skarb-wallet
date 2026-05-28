@@ -194,13 +194,24 @@ func (asset *Asset) RemovePeers() {
 	_ = asset.RestartSpvSync()
 }
 
-// bootstrapPeerForNet returns a hardcoded fallback peer for the given chain
-// params when the user has not configured one and the upstream chaincfg ships
-// with empty DNSSeeds. monetarium-node v1.1.0 disables DNSSeeds and tells
-// callers to "--addpeer=176.113.164.216:9108", but the live P2P port on the
-// genesis node is actually 9508 (verified: the comment in mainnetparams.go is
-// stale). Once monetarium-node ships proper DNS seeders, this function can
-// return "" and the regular SPV bootstrap path takes over.
+// bootstrapPeerForNet returns hardcoded fallback peers — semicolon-separated,
+// the shape ParseWalletPeers expects (wallet_utils.go:323 does
+// strings.Split(peerAddresses, ";"), NOT comma) — for the given chain params
+// when the user has not configured one and the upstream chaincfg ships with
+// empty DNSSeeds. monetarium-node v1.1.0 disables DNSSeeds and tells callers
+// to "--addpeer=176.113.164.216:9108", but the live P2P port on the genesis
+// node is actually 9508 (verified: the comment in mainnetparams.go is stale).
+// Testnet's default port is 19508 (monetarium-node@v1.3.6/chaincfg/
+// testnetparams.go:76). Once monetarium-node ships proper DNS seeders, this
+// function can return "" and the regular SPV bootstrap path takes over.
+//
+// Multiple peers per net is intentional: SPV bootstrap is one-shot — if the
+// first IP is unreachable (operator drained the box, NAT churn, firewall),
+// we'd otherwise refuse to sync at all rather than try the next. Listing
+// two adds resilience for the cost of one extra TCP attempt on every
+// fresh-wallet startup. Comma-separated DID NOT work — observed in the log
+// as `Peering attempt failed: lookup 176.9.28.21:19508,134.249.62.108:19508:
+// no such host` (whole string treated as one DNS-resolvable host).
 func bootstrapPeerForNet(params *chaincfg.Params) string {
 	if len(params.DNSSeeds) > 0 {
 		return ""
@@ -209,7 +220,7 @@ func bootstrapPeerForNet(params *chaincfg.Params) string {
 	case wire.MainNet:
 		return "176.113.164.216:9508"
 	case wire.TestNet3:
-		return "176.9.28.21:19508"
+		return "176.9.28.21:19508;134.249.62.108:19508"
 	}
 	return ""
 }

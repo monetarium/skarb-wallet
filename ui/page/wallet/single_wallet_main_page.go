@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"path/filepath"
 	"strconv"
+	"strings"
+	"sync"
 
 	"gioui.org/io/event"
 	"gioui.org/io/key"
@@ -79,6 +81,24 @@ type SingleWalletMasterPage struct {
 	isBalanceHidden        bool
 
 	totalBalanceUSD string
+
+	// skaBalanceLines holds pre-formatted SKA token balance strings
+	// ("1.5 SKA1") for this wallet, aggregated across accounts. The VAR
+	// total above comes from the legacy int64 Balance path, which has no
+	// SKA fields; these lines surface the wallet's real token holdings so a
+	// 0-VAR / SKA-only wallet no longer shows just "0 VAR" in the header.
+	// Guarded by balanceMu (computed off-thread in updateBalance).
+	skaBalanceLines []string
+
+	// balanceMu guards walletBalance + totalBalanceUSD because
+	// updateBalance() is called both from the UI thread (initial load,
+	// language/theme refresh) AND from sync-notification goroutines
+	// (OnSyncCompleted, OnTransaction, OnBlockAttached). Without it the
+	// goroutine writes race with Layout's reads of these fields (lines
+	// ~662, 670, 686, 693). Plain mutex is simpler than the atomic-flag-
+	// drain pattern here because balance updates are infrequent and the
+	// reads are tight — no risk of UI-thread starvation.
+	balanceMu sync.RWMutex
 
 	activeTab         map[string]string
 	PageNavigationMap map[string]string
@@ -234,7 +254,16 @@ func (swmp *SingleWalletMasterPage) initTabOptions() {
 	// CoinShuffle++ mixing UI. Re-introduce these blocks when those features
 	// are added back.
 
-	swmp.PageNavigationTab = swmp.Theme.SegmentedControl(commonTabs, cryptomaterial.SegmentTypeSplit)
+	// SegmentTypeGroupMax distributes width evenly across all tabs
+	// instead of laying them out in a horizontal scroller. Split mode
+	// (the previous setting) padded each tab with 32px LR + a chevron
+	// nav on either side, so the 6 Ukrainian-localised tabs
+	// (Інформація / Надіслати / Отримати / Транзакції / Акаунти /
+	// Налаштування) didn't fit on a typical desktop width and the
+	// user had to scroll the strip horizontally. GroupMax computes
+	// per-tab Width = (layoutSize − 8) / len(tabs) — every tab gets
+	// an equal slice, no overflow, no scroll buttons.
+	swmp.PageNavigationTab = swmp.Theme.SegmentedControl(commonTabs, cryptomaterial.SegmentTypeGroupMax)
 	swmp.PageNavigationTab.SetEnableSwipe(false)
 	dp5 := values.MarginPadding5
 	swmp.PageNavigationTab.ContentPadding = layout.Inset{
@@ -282,14 +311,58 @@ func (swmp *SingleWalletMasterPage) fetchExchangeRate() {
 }
 
 func (swmp *SingleWalletMasterPage) updateBalance() {
+	// Heavy work (RPC + USD math) runs lock-free, the final swap into
+	// the cached fields is the only critical section. This minimises
+	// the Layout-thread RLock wait window when a tx-notification or
+	// sync-completed callback fires under load.
 	totalBalance, err := components.CalculateTotalWalletsBalance(swmp.selectedWallet)
 	if err != nil {
 		log.Error(err)
 		return
 	}
-	swmp.walletBalance = totalBalance.Total
 	balanceInUSD := totalBalance.Total.MulF64(swmp.usdExchangeRate).ToCoin()
-	swmp.totalBalanceUSD = utils.FormatAsUSDString(swmp.Printer, balanceInUSD)
+	usdStr := utils.FormatAsUSDString(swmp.Printer, balanceInUSD)
+
+	// Compute SKA token balances off-thread too, so the header can show
+	// them alongside the VAR total. Done before the critical section to
+	// keep the lock window tight.
+	skaLines := swmp.computeSKABalanceLines()
+
+	swmp.balanceMu.Lock()
+	swmp.walletBalance = totalBalance.Total
+	swmp.totalBalanceUSD = usdStr
+	swmp.skaBalanceLines = skaLines
+	swmp.balanceMu.Unlock()
+}
+
+// computeSKABalanceLines aggregates this wallet's SKA token balances across
+// accounts and returns one pre-formatted "amount SYMBOL" string per coin
+// with a non-zero balance. VAR is shown via the int64 total elsewhere; this
+// fills the SKA gap the legacy Balance struct leaves. Safe to call from a
+// notification goroutine (no UI-thread state touched).
+func (swmp *SingleWalletMasterPage) computeSKABalanceLines() []string {
+	dcrAsset, ok := swmp.selectedWallet.(*dcr.Asset)
+	if !ok {
+		return nil
+	}
+	balances, err := dcrAsset.GetWalletCoinBalances()
+	if err != nil {
+		log.Errorf("single-wallet: GetWalletCoinBalances: %v", err)
+		return nil
+	}
+	var lines []string
+	for _, ct := range dcrAsset.DisplayableCoinTypes() {
+		if !ct.IsSKA() {
+			continue
+		}
+		bal, ok := balances[ct]
+		if !ok {
+			continue
+		}
+		bal.CoinType = ct // ensure FormatCoinAmount picks the SKA branch
+		lines = append(lines, dcr.FormatCoinAmount(bal))
+	}
+	return lines
 }
 
 // OnDarkModeChanged is triggered whenever the dark mode setting is changed
@@ -573,18 +646,27 @@ func (swmp *SingleWalletMasterPage) LayoutTopBar(gtx C) D {
 											if swmp.IsMobileView() {
 												orientation = layout.Vertical
 											}
-											return cryptomaterial.LinearLayout{
-												Width:       cryptomaterial.WrapContent,
-												Height:      cryptomaterial.WrapContent,
-												Orientation: orientation,
-											}.Layout(gtx,
-												layout.Rigid(swmp.totalAssetBalance),
+											// VAR total + USD on the top row; SKA token
+											// balances stacked beneath so a multi-coin
+											// (or 0-VAR / SKA-only) wallet shows all
+											// its holdings, not just the VAR figure.
+											return layout.Flex{Axis: layout.Vertical, Alignment: layout.End}.Layout(gtx,
 												layout.Rigid(func(gtx C) D {
-													if !swmp.isBalanceHidden {
-														return swmp.LayoutUSDBalance(gtx)
-													}
-													return D{}
+													return cryptomaterial.LinearLayout{
+														Width:       cryptomaterial.WrapContent,
+														Height:      cryptomaterial.WrapContent,
+														Orientation: orientation,
+													}.Layout(gtx,
+														layout.Rigid(swmp.totalAssetBalance),
+														layout.Rigid(func(gtx C) D {
+															if !swmp.isBalanceHidden {
+																return swmp.LayoutUSDBalance(gtx)
+															}
+															return D{}
+														}),
+													)
 												}),
+												layout.Rigid(swmp.skaBalancesLayout),
 											)
 										}),
 									)
@@ -631,6 +713,11 @@ func (swmp *SingleWalletMasterPage) LayoutUSDBalance(gtx C) D {
 	if !swmp.usdExchangeSet {
 		return D{}
 	}
+	// Snapshot the USD string under RLock so a concurrent updateBalance()
+	// goroutine can't tear the read mid-frame.
+	swmp.balanceMu.RLock()
+	totalBalanceUSD := swmp.totalBalanceUSD
+	swmp.balanceMu.RUnlock()
 	switch {
 	case swmp.isFetchingExchangeRate && swmp.usdExchangeRate == 0:
 		gtx.Constraints.Max.Y = gtx.Dp(values.MarginPadding18)
@@ -649,15 +736,15 @@ func (swmp *SingleWalletMasterPage) LayoutUSDBalance(gtx C) D {
 		}.Layout(gtx, func(gtx C) D {
 			return swmp.refreshExchangeRateBtn.Layout(gtx, swmp.Theme.NewIcon(swmp.Theme.Icons.NavigationRefresh).Layout16dp)
 		})
-	case len(swmp.totalBalanceUSD) > 0:
+	case len(totalBalanceUSD) > 0:
 		textSize := values.TextSize20
 		if swmp.Load.IsMobileView() {
 			textSize = values.TextSize16
 		}
-		lbl := swmp.Theme.Label(textSize, fmt.Sprintf("/ %s", swmp.totalBalanceUSD))
+		lbl := swmp.Theme.Label(textSize, fmt.Sprintf("/ %s", totalBalanceUSD))
 		marginLeft := values.MarginPadding8
 		if swmp.IsMobileView() {
-			lbl = swmp.Theme.Label(textSize, swmp.totalBalanceUSD)
+			lbl = swmp.Theme.Label(textSize, totalBalanceUSD)
 			marginLeft = 0
 		}
 		lbl.Color = swmp.Theme.Color.PageNavText
@@ -673,14 +760,49 @@ func (swmp *SingleWalletMasterPage) totalAssetBalance(gtx C) D {
 	if swmp.Load.IsMobileView() {
 		textSize = values.TextSize16
 	}
-	if swmp.isBalanceHidden || swmp.walletBalance == nil {
+	// Snapshot under RLock — same reason as LayoutUSDBalance above:
+	// updateBalance() can swap walletBalance from a sync-notification
+	// goroutine while Layout reads it here.
+	swmp.balanceMu.RLock()
+	walletBalance := swmp.walletBalance
+	swmp.balanceMu.RUnlock()
+	if swmp.isBalanceHidden || walletBalance == nil {
 		hiddenBalanceText := swmp.Theme.Label(textSize*0.8, "****************")
 		return layout.Inset{Bottom: values.MarginPadding0, Top: values.MarginPadding5}.Layout(gtx, func(gtx C) D {
 			hiddenBalanceText.Color = swmp.Theme.Color.PageNavText
 			return hiddenBalanceText.Layout(gtx)
 		})
 	}
-	return components.LayoutBalanceWithUnitSize(gtx, swmp.Load, swmp.walletBalance.String(), textSize)
+	return components.LayoutBalanceWithUnitSize(gtx, swmp.Load, walletBalance.String(), textSize)
+}
+
+// skaBalancesLayout renders the wallet's SKA token balances (one per line)
+// beneath the VAR total in the header. Hidden when the balance-privacy
+// toggle is on, and a no-op when the wallet holds no SKA tokens.
+func (swmp *SingleWalletMasterPage) skaBalancesLayout(gtx C) D {
+	if swmp.isBalanceHidden {
+		return D{}
+	}
+	swmp.balanceMu.RLock()
+	lines := swmp.skaBalanceLines
+	swmp.balanceMu.RUnlock()
+	if len(lines) == 0 {
+		return D{}
+	}
+	textSize := values.TextSize16
+	if swmp.Load.IsMobileView() {
+		textSize = values.TextSize14
+	}
+	children := make([]layout.FlexChild, 0, len(lines))
+	for _, line := range lines {
+		line := line
+		children = append(children, layout.Rigid(func(gtx C) D {
+			lbl := swmp.Theme.Label(textSize, line)
+			lbl.Color = swmp.Theme.Color.PageNavText
+			return layout.E.Layout(gtx, lbl.Layout)
+		}))
+	}
+	return layout.Flex{Axis: layout.Vertical}.Layout(gtx, children...)
 }
 
 func (swmp *SingleWalletMasterPage) postTransactionNotification(t *sharedW.Transaction) {
@@ -691,14 +813,22 @@ func (swmp *SingleWalletMasterPage) postTransactionNotification(t *sharedW.Trans
 		if t.Direction != dcr.TxDirectionReceived {
 			return
 		}
-		// remove trailing zeros from amount and convert to string
-		amount := strconv.FormatFloat(wal.ToAmount(t.Amount).ToCoin(), 'f', -1, 64)
-		// Monetarium tx notifications need to name the actual asset (VAR or
-		// SKAn) the user just received, not a fixed "DCR" suffix as upstream
-		// hardcoded. The coin symbol comes from the wallet's primary asset
-		// type — refine to per-tx CoinType once the notification path threads
-		// it through.
-		notification = values.StringF(values.StrAmountReceived, amount, wal.GetAssetType())
+		// Render the received amount via the lossless big-string channel
+		// when present (SKA tx > ~9.22 SKA hits int64 clamp on t.Amount;
+		// the AmountAtoms string carries the real value). FormatTxAmountBig
+		// returns "X.YZ SYMBOL" — the translation key StrAmountReceived
+		// expects amount and symbol as separate %s args ("Отримано %s %s"),
+		// so split on the last space. Falls through to "<formatted>" + ""
+		// if the symbol is somehow missing — still better than the legacy
+		// strconv.FormatFloat(ToCoin()) which clamped SKA to MaxInt64/1e8
+		// and emitted a garbage VAR-coin number.
+		formatted := dcr.FormatTxAmountBig(t.AmountAtoms, t.Amount, t.CoinType)
+		amountStr, symbolStr := formatted, ""
+		if idx := strings.LastIndex(formatted, " "); idx >= 0 {
+			amountStr = formatted[:idx]
+			symbolStr = formatted[idx+1:]
+		}
+		notification = values.StringF(values.StrAmountReceived, amountStr, symbolStr)
 	case dcr.TxTypeVote:
 		reward := strconv.FormatFloat(wal.ToAmount(t.VoteReward).ToCoin(), 'f', -1, 64)
 		notification = values.StringF(values.StrTicketVoted, reward)

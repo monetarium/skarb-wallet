@@ -167,7 +167,13 @@ func (d *AccountDropdown) getAccountItemLayout(account *sharedW.Account) layout.
 			// reused by other dropdowns and by the send page's
 			// selectedAccount, so mutating it from a layout callback
 			// poisons every other caller's view of the balance.
-			spendableLabel = d.selectedWallet.ToAmount(0).String()
+			//
+			// Render the zero in the *selected coin's* unit, not always
+			// VAR. wal.ToAmount() is the legacy VAR-only formatter; for
+			// a watch-only SKA1 dropdown it would lie "0 VAR" while the
+			// rest of the row is talking about SKA1. dcr.FormatTxAmount
+			// dispatches on coin type and emits the right suffix.
+			spendableLabel = dcr.FormatTxAmount(0, uint8(d.coinType))
 		}
 
 		return layout.Flex{Axis: layout.Vertical}.Layout(gtx,

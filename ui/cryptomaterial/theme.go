@@ -57,6 +57,14 @@ type Theme struct {
 func NewTheme(fontCollection []text.FontFace, decredIcons map[string]image.Image, isDarkModeOn bool) *Theme {
 	base := material.NewTheme()
 	base.Shaper = text.NewShaper(text.WithCollection(fontCollection))
+	// Tell every material widget to ask the Shaper for our registered
+	// "Go" typeface (assets.FontCollection sets Typeface="Go" for each
+	// face). Without this, v0.10's material.NewTheme leaves base.Face at
+	// "" → widgets request the empty typeface → Shaper falls back to its
+	// system default which on macOS/Linux ships without full Cyrillic
+	// coverage. Result of the missing line: all Ukrainian text rendered
+	// as boxes/squares after the v0.10 bump.
+	base.Face = "Go"
 
 	t := &Theme{
 		Base:             base,

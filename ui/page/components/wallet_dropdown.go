@@ -97,6 +97,13 @@ func (d *WalletDropdown) walletBalance(wal sharedW.Asset) (totalBalance, spendab
 		log.Errorf("Error getting accounts: %s", err)
 		return 0, 0
 	}
+	// VAR-only aggregation. account.Balance.Total / .Spendable are int64
+	// VAR atoms (1e8/coin); per-wallet sum is bounded by VAR's
+	// 21M × 1e8 = 2.1e15-atom supply cap (well under int64). The
+	// dropdown shows ONLY the wallet's primary-coin (VAR) total — SKA
+	// balances are not included here. If they were, the int64 sum
+	// would need to move to big.Int because SKA atoms are 1e18/coin
+	// and a single UTXO can exceed int64.
 	var tBal, sBal int64
 	for _, account := range accountsResult.Accounts {
 		// If the wallet is watching-only, the spendable balance is zero.

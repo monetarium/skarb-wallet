@@ -43,14 +43,31 @@ func NewCoinTypeDropdown(l *load.Load) *CoinTypeDropdown {
 	return d
 }
 
-// Setup populates the dropdown from Asset.ActiveCoinTypes(). The first option
-// (VAR) is selected by default. Pass an explicit `selected` value to override.
+// Setup populates the dropdown from Asset.ActiveCoinTypes(). On the very
+// first call the default selection is VAR; on subsequent calls (e.g. the
+// wallet-dropdown re-Setup we fire on every new block, see
+// WalletDropdown.ListenForTxNotifications) the *current* user selection
+// is preserved. Pass an explicit `selected` value to override either
+// default.
+//
+// Preserving the current selection across rebuilds matters because
+// otherwise an SKA1 send-in-progress flips back to VAR every time a new
+// block arrives — the user types an amount, ~10s pass, OnBlockAttached
+// fires, walletChangedCallback rebuilds this dropdown, target=VAR
+// silently wins, and the in-flight tx is now denominated in the wrong
+// coin. That's bug #2 in the v1 bug report ("SKA randomly switches to
+// VAR while typing").
 func (d *CoinTypeDropdown) Setup(w *dcr.Asset, selected ...cointype.CoinType) *CoinTypeDropdown {
 	if w == nil {
 		return d
 	}
 	d.wallet = w
-	d.coinTypes = w.ActiveCoinTypes()
+	// Use DisplayableCoinTypes (filtered by wallet activity) so users
+	// don't see SKA-n options for coins they've never received — bug #7
+	// in the v1 bug report. ActiveCoinTypes returns every chain-active
+	// coin type which is useful for backend validation but clutters
+	// user-facing selectors.
+	d.coinTypes = w.DisplayableCoinTypes()
 
 	items := make([]cryptomaterial.DropDownItem, 0, len(d.coinTypes))
 	for _, ct := range d.coinTypes {
@@ -61,7 +78,8 @@ func (d *CoinTypeDropdown) Setup(w *dcr.Asset, selected ...cointype.CoinType) *C
 	}
 	d.dropdown.SetItems(items)
 
-	target := cointype.CoinTypeVAR
+	// target priority: explicit arg > preserved selection > VAR.
+	target := d.selected
 	if len(selected) > 0 {
 		target = selected[0]
 	}
@@ -72,7 +90,9 @@ func (d *CoinTypeDropdown) Setup(w *dcr.Asset, selected ...cointype.CoinType) *C
 			return d
 		}
 	}
-	// Selected coin type isn't active on this chain — fall back to VAR.
+	// Target coin type isn't active on this chain — fall back to VAR.
+	// This is the only path that should ever silently change the
+	// user-visible selection; everything else preserves d.selected.
 	d.selected = cointype.CoinTypeVAR
 	d.dropdown.SetSelectedValue(dcr.CoinSymbol(cointype.CoinTypeVAR))
 	return d

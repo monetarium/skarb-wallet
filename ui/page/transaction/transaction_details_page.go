@@ -11,8 +11,6 @@ import (
 	"gioui.org/layout"
 	"gioui.org/op"
 	"gioui.org/widget"
-	"golang.org/x/text/cases"
-	"golang.org/x/text/language"
 
 	"github.com/monetarium/skarb-wallet/app"
 	"github.com/monetarium/skarb-wallet/libwallet/assets/dcr"
@@ -158,12 +156,20 @@ func (pg *TxDetailsPage) getTXSourceAccountAndDirection() {
 	// find source account
 	for _, input := range pg.transaction.Inputs {
 		if input.AccountNumber != -1 {
-			accountName, err := pg.wallet.AccountName(input.AccountNumber)
-			if err != nil {
+			// One line, one wallet. The legacy code showed
+			// `accountName` (literally "default" for any
+			// freshly-created wallet) which was meaningless. A previous
+			// attempt rendered "WalletName\nAccountName" on two lines
+			// but the account name is noise — multi-account wallets
+			// are not a v1 feature and the default-named account just
+			// duplicates information. Showing the wallet name alone is
+			// what the user actually wants ("from this wallet").
+			// AccountNumber is still consulted to verify we picked an
+			// input the wallet owns; we just don't surface the name.
+			if _, err := pg.wallet.AccountName(input.AccountNumber); err != nil {
 				log.Error(err)
-			} else {
-				pg.txSourceAccount = accountName
 			}
+			pg.txSourceAccount = pg.wallet.GetWalletName()
 			break
 		}
 	}
@@ -209,22 +215,21 @@ destinationAddrLoop:
 			}
 		case txhelper.TxDirectionReceived:
 			if output.AccountNumber != -1 {
-				accountName, err := pg.wallet.AccountName(output.AccountNumber)
-				if err != nil {
+				// Wallet name only — same rationale as txSourceAccount.
+				// "default" account name is noise; one line, one wallet.
+				if _, err := pg.wallet.AccountName(output.AccountNumber); err != nil {
 					log.Error(err)
-				} else {
-					pg.txDestinationAddresses = append(pg.txDestinationAddresses, accountName)
 				}
+				pg.txDestinationAddresses = append(pg.txDestinationAddresses, pg.wallet.GetWalletName())
 				break destinationAddrLoop
 			}
 		case txhelper.TxDirectionTransferred:
 			if output.AccountNumber != -1 {
-				accountName, err := pg.wallet.AccountName(output.AccountNumber)
-				if err != nil {
+				// Wallet name only — see txSourceAccount comment.
+				if _, err := pg.wallet.AccountName(output.AccountNumber); err != nil {
 					log.Error(err)
-				} else {
-					pg.txDestinationAccount = accountName
 				}
+				pg.txDestinationAccount = pg.wallet.GetWalletName()
 				break destinationAddrLoop
 			}
 		}
@@ -236,6 +241,12 @@ destinationAddrLoop:
 // the page is displayed.
 // Part of the load.Page interface.
 func (pg *TxDetailsPage) OnNavigatedTo() {
+	// Hook block-attached notifications so the "Confirmation Status"
+	// row (rendered via txConfirmations() = bestBlock - tx.BlockHeight)
+	// refreshes every time the wallet's tip advances, without the user
+	// having to navigate away and back. Detached in OnNavigatedFrom.
+	pg.wireBlockListener()
+
 	if dcrImp, ok := pg.wallet.(*dcr.Asset); ok {
 		// this tx is a vote transaction
 		if pg.transaction.TicketSpentHash != "" {
@@ -440,9 +451,9 @@ func (pg *TxDetailsPage) txDetailsHeader(gtx C) D {
 									return components.LayoutBalanceWithUnit(gtx, pg.Load, title)
 								}),
 								layout.Rigid(func(gtx C) D {
-									date := time.Unix(pg.transaction.Timestamp, 0).Format("Jan 2, 2006")
-									timeSplit := time.Unix(pg.transaction.Timestamp, 0).Format("03:04:05 PM")
-									dateTime := fmt.Sprintf("%v at %v", date, timeSplit)
+									date := time.Unix(pg.transaction.Timestamp, 0).Format("2006-01-02")
+									timeSplit := time.Unix(pg.transaction.Timestamp, 0).Format("15:04:05")
+									dateTime := values.StringF(values.StrDateAtTime, date, timeSplit)
 
 									lbl := pg.Theme.Label(values.TextSize16, dateTime)
 									lbl.Color = col
@@ -751,16 +762,21 @@ func (pg *TxDetailsPage) txnTypeAndID(gtx C) D {
 						return layout.Inset{Right: values.MarginPadding4}.Layout(gtx, pg.txnWidgets.confirmationIcons.Layout12dp)
 					}),
 					layout.Rigid(func(gtx C) D {
-						caser := cases.Title(language.Und)
+						// Title-casing the localised "%d з %d підтверджень"
+						// string turns "з" (Cyrillic Zhe) into "З", which
+						// reads as digit 3 next to the number — "1 З 2"
+						// looks like "1 3 2". Render the localised string
+						// as-is; localisations choose their own casing
+						// upstream in localizable/{uk,en,…}.go.
 						txt := pg.Theme.Body2("")
 						if pg.txConfirmations() == 0 {
-							txt.Text = caser.String(values.String(values.StrUnconfirmedTx))
+							txt.Text = values.String(values.StrUnconfirmedTx)
 							txt.Color = pg.Theme.Color.GrayText2
 						} else if pg.txConfirmations() >= reqConf {
-							txt.Text = caser.String(values.String(values.StrConfirmed))
+							txt.Text = values.String(values.StrConfirmed)
 							txt.Color = pg.Theme.Color.Success
 						} else {
-							txt.Text = caser.String(values.StringF(values.StrTxStatusPending, pg.txConfirmations(), reqConf))
+							txt.Text = values.StringF(values.StrTxStatusPending, pg.txConfirmations(), reqConf)
 							txt.Color = pg.Theme.Color.GrayText2
 						}
 						return txt.Layout(gtx)
@@ -889,15 +905,29 @@ func (pg *TxDetailsPage) txnOutputs(gtx C) D {
 }
 
 func (pg *TxDetailsPage) txnIORow(gtx C, amount int64, amountAtoms string, acctNum int32, address string, i int) D {
-	accountName := values.String(values.StrExternal)
-	if acctNum != -1 {
+	// accountLabel is the trailing `(...)` annotation next to each I/O row's
+	// amount. We show it ONLY when it carries information: an external
+	// counterparty (acctNum == -1 → "External") or a non-default named
+	// account. For the v1 single-account-per-wallet setup the wallet's
+	// account is always literally "default" — the user just told us
+	// "1 рядок — 1 гаманець" and stripped "default" from the tx-details
+	// header (From / To). Showing "(default)" next to every input and
+	// output here reintroduces the same noise inside the collapsible
+	// I/O accordions. Hide it; the wallet identity is already in the
+	// header rows.
+	var accountLabel string
+	switch {
+	case acctNum == -1:
+		accountLabel = fmt.Sprintf("(%s)", values.String(values.StrExternal))
+	default:
 		name, err := pg.wallet.AccountName(acctNum)
-		if err == nil {
-			accountName = name
+		if err == nil && name != "" && name != "default" {
+			accountLabel = fmt.Sprintf("(%s)", name)
 		}
+		// else: leave empty — "default" account is the implicit one and
+		// adding "(default)" is pure noise.
 	}
 
-	accountName = fmt.Sprintf("(%s)", accountName)
 	// Per-input/output row amount also follows the tx's CoinType. All inputs
 	// AND outputs of a single Monetarium tx share one CoinType (consensus
 	// enforced), so it's safe to take the tx-level value. amountAtoms (the
@@ -916,11 +946,14 @@ func (pg *TxDetailsPage) txnIORow(gtx C, amount int64, amountAtoms string, acctN
 						return layout.Flex{}.Layout(gtx,
 							layout.Rigid(pg.Theme.Label(values.TextSize14, amt).Layout),
 							layout.Rigid(func(gtx C) D {
+								if accountLabel == "" {
+									return D{}
+								}
 								m := values.MarginPadding5
 								return layout.Inset{
 									Left:  m,
 									Right: m,
-								}.Layout(gtx, pg.Theme.Label(values.TextSize14, accountName).Layout)
+								}.Layout(gtx, pg.Theme.Label(values.TextSize14, accountLabel).Layout)
 							}),
 						)
 					}),
@@ -1094,10 +1127,31 @@ func (pg *TxDetailsPage) initTxnWidgets() transactionWdg {
 // OnNavigatedTo() will be called again. This method should not destroy UI
 // components unless they'll be recreated in the OnNavigatedTo() method.
 // Part of the load.Page interface.
-func (pg *TxDetailsPage) OnNavigatedFrom() {}
+func (pg *TxDetailsPage) OnNavigatedFrom() {
+	pg.wallet.RemoveTxAndBlockNotificationListener(TransactionDetailsPageID)
+}
+
+// wireBlockListener registers a TxAndBlockNotificationListener that fires
+// the page's Reload on every new block while the tx-details page is on
+// screen. The Confirmation Status row's only data dependency is the
+// wallet best-block height (subtracted from tx.BlockHeight); without
+// this listener the row only refreshes when the user triggers a
+// re-layout some other way (typing into a search box, switching tabs).
+// AddTxAndBlockNotificationListener returns an error if a listener with
+// the same key is already registered — log and continue, the existing
+// listener is a re-mount of this page and still fires Reload.
+func (pg *TxDetailsPage) wireBlockListener() {
+	listener := &sharedW.TxAndBlockNotificationListener{
+		OnBlockAttached:        func(_ int, _ int32) { pg.ParentWindow().Reload() },
+		OnTransactionConfirmed: func(_ int, _ string, _ int32) { pg.ParentWindow().Reload() },
+	}
+	if err := pg.wallet.AddTxAndBlockNotificationListener(listener, TransactionDetailsPageID); err != nil {
+		log.Errorf("TxDetailsPage: add block listener: %v", err)
+	}
+}
 
 func timeString(timestamp int64) string {
-	return time.Unix(timestamp, 0).Format("Jan 2, 2006 15:04:05 PM")
+	return time.Unix(timestamp, 0).Format("2006-01-02 15:04:05")
 }
 
 // refreshSenderClickables rebuilds pg.senderAddresses + pg.senderAddressClickables
@@ -1150,38 +1204,33 @@ func uniqueSenderAddresses(inputs []*sharedW.TxInput) []string {
 }
 
 // layoutSenderAddressList renders the "From" panel content for a received
-// transaction: one click-to-copy address row per unique sender address.
-// Reads the address list + clickables from struct fields populated once in
-// NewTransactionDetailsPage — creating a fresh Clickable inside the layout
-// callback (the first attempt at this helper) loses click state across
-// frames because Gio routes input events to a Tag that gets reallocated
-// every layout pass. Styled to match the "To" panel for sent transactions
-// (primary color, click-to-copy on tap, same toast text).
+// transaction as a SINGLE address row — the first unique sender address.
 //
-// Long addresses (Decred-style ~34 chars) are middle-truncated so each row
-// fits on one line in the narrow right-column area of the details header;
-// the full address is what gets copied to the clipboard, and the full
-// address is also visible verbatim in the "Inputs consumed" section below.
+// A sender wallet that funds a tx with multiple of its own UTXOs spends
+// from multiple of its own addresses; the chain has no way to attribute
+// those back to one logical wallet identity, so we used to render them
+// all as a vertical list. That broke the "one row, one sender" mental
+// model users actually have ("who sent this?"), and produced an
+// unwieldy multi-line block when the sender just happened to consolidate
+// a few small UTXOs. We now show the first sender address only —
+// representative enough for at-a-glance "who paid me", with the full
+// input list still verbatim in the "Inputs consumed" section below for
+// users who need the audit trail.
+//
+// Click-to-copy and ellipsisation behave the same as before.
 func layoutSenderAddressList(gtx C, pg *TxDetailsPage) D {
-	addrs := pg.senderAddresses
-	flexChilds := make([]layout.FlexChild, 0, len(addrs)*2)
-	for i := range addrs {
-		address := addrs[i]
-		clickable := pg.senderAddressClickables[i]
-		flexChilds = append(flexChilds, layout.Rigid(func(gtx C) D {
-			if clickable.Clicked(gtx) {
-				gtx.Execute(clipboard.WriteCmd{Data: io.NopCloser(strings.NewReader(address))})
-				pg.Toast.Notify(values.String(values.StrTxHashCopied))
-			}
-			lbl := pg.Theme.Label(values.TextSize14, ellipsizeMiddle(address, 24))
-			lbl.Color = pg.Theme.Color.Primary
-			return clickable.Layout(gtx, lbl.Layout)
-		}))
-		if i < len(addrs)-1 {
-			flexChilds = append(flexChilds, layout.Rigid(layout.Spacer{Height: values.MarginPadding5}.Layout))
-		}
+	if len(pg.senderAddresses) == 0 || len(pg.senderAddressClickables) == 0 {
+		return D{}
 	}
-	return layout.Flex{Axis: layout.Vertical}.Layout(gtx, flexChilds...)
+	address := pg.senderAddresses[0]
+	clickable := pg.senderAddressClickables[0]
+	if clickable.Clicked(gtx) {
+		gtx.Execute(clipboard.WriteCmd{Data: io.NopCloser(strings.NewReader(address))})
+		pg.Toast.Notify(values.String(values.StrTxHashCopied))
+	}
+	lbl := pg.Theme.Label(values.TextSize14, ellipsizeMiddle(address, 24))
+	lbl.Color = pg.Theme.Color.Primary
+	return clickable.Layout(gtx, lbl.Layout)
 }
 
 // ellipsizeMiddle returns s if it already fits in maxLen runes, otherwise

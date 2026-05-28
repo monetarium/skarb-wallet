@@ -1,12 +1,15 @@
 package send
 
 import (
+	"errors"
 	"fmt"
 	"math/big"
 	"strings"
+	"sync/atomic"
 
 	"gioui.org/io/event"
 	"gioui.org/io/key"
+	"gioui.org/layout"
 	"gioui.org/widget"
 
 	"github.com/monetarium/skarb-wallet/app"
@@ -80,6 +83,43 @@ type Page struct {
 	selectedUTXOs      selectedUTXOsInfo
 	navigateToSyncBtn  cryptomaterial.Button
 	currentIDRecipient int
+
+	// pendingBroadcastReset flips to 1 from the broadcast goroutine the
+	// instant Broadcast() returns success. The next HandleUserInteractions
+	// frame (woken via ParentWindow().Invalidate()) drains the flag and
+	// runs resetRecipientsFields + clearEstimates + autoDefaultCoinType-
+	// FromBalance on the UI thread, so the editors / display strings get
+	// mutated under their normal single-goroutine invariant. Without this
+	// indirection the form behind the "Transaction sent!" success modal
+	// keeps the typed amount, re-validates against the now-zero balance,
+	// and flashes "Недостатньо коштів" + "- SKA1" under the green check.
+	pendingBroadcastReset atomic.Bool
+
+	// Custom fee override (user-typed relay-fee rate in atoms/KB). The
+	// backend hooks (SetFeeRateOverride / ClearFeeRateOverride) live on
+	// the DCR asset and validate against per-coin chainparams MinRelayTxFee.
+	// UI flow: user toggles the section open, types a rate in the editor,
+	// clicks "Застосувати" → the rate is parsed via dcr.ParseAmountToAtomsBig
+	// (coin-aware big.Int parser — SKA atoms are 1e18/coin, way over int64),
+	// validated against FeeRateBounds, and pushed to the asset. "Скинути"
+	// clears the override and the next construct cycle reverts to the
+	// chainparams default. customFeeStatus carries the last result message
+	// (success or validation error) to render under the editor.
+	customFeeEditor      cryptomaterial.Editor
+	customFeeApplyBtn    cryptomaterial.Button
+	customFeeClearBtn    cryptomaterial.Button
+	customFeeStatus      string
+	customFeeStatusIsErr bool
+
+	// feeRateOverride holds the user's applied custom fee at the PAGE
+	// level. Each constructTx cycle calls NewUnsignedTx which mints a
+	// fresh TxAuthoredInfo and wipes the asset-side override — without
+	// this page-level mirror, every keystroke (which re-runs constructTx)
+	// resets the user's choice back to the chainparams default. After
+	// every NewUnsignedTx + SetTxCoinType in constructTx we re-apply
+	// this via SetFeeRateOverride so the next EstimateFeeAndSize sees
+	// the override.
+	feeRateOverride cointype.SKAAmount
 }
 
 type getPageFields func() pageFields
@@ -156,6 +196,15 @@ func NewSendPage(l *load.Load, wallet sharedW.Asset) *Page {
 	if dcrAsset, ok := pg.selectedWallet.(*dcr.Asset); ok {
 		pg.coinTypeDropdown.Setup(dcrAsset)
 	}
+	pg.customFeeEditor = l.Theme.Editor(new(widget.Editor), values.String(values.StrFeeRatePerKbHint))
+	pg.customFeeEditor.Editor.SingleLine = true
+	pg.customFeeApplyBtn = l.Theme.Button(values.String(values.StrApply))
+	pg.customFeeApplyBtn.TextSize = values.TextSize14
+	pg.customFeeApplyBtn.Inset = layout.UniformInset(values.MarginPadding8)
+	pg.customFeeClearBtn = l.Theme.OutlineButton(values.String(values.StrReset))
+	pg.customFeeClearBtn.TextSize = values.TextSize14
+	pg.customFeeClearBtn.Inset = layout.UniformInset(values.MarginPadding8)
+
 	pg.addRecipient()
 	pg.initLayoutWidgets()
 	pg.setAssetTypeForRecipients()
@@ -177,6 +226,18 @@ func (pg *Page) applyCoinType(ct cointype.CoinType) {
 			log.Errorf("SetTxCoinType(%s): %v", ct, err)
 		}
 	}
+	// Drop any user-set fee-rate override on coin switch. The override is
+	// in the previous coin's atoms (e.g. 33 SKA1 = 3.3e19 SKA atoms);
+	// re-applying it under the new coin's bounds (VAR max ≈ 1e7 atoms)
+	// always fails validation and emits a misleading "0.00 VAR exceeds
+	// safety cap 0.10 VAR" message because the SKA-atoms value doesn't
+	// fit int64 for VAR display. Clear here AND in the asset so the next
+	// construct cycle uses the new coin's chainparams default.
+	pg.feeRateOverride = cointype.Zero()
+	dcrAsset.ClearFeeRateOverride()
+	pg.customFeeEditor.Editor.SetText("")
+	pg.customFeeStatus = ""
+	pg.customFeeStatusIsErr = false
 	for _, rc := range pg.recipients {
 		rc.setCoinType(ct)
 	}
@@ -188,6 +249,63 @@ func (pg *Page) applyCoinType(ct cointype.CoinType) {
 		pg.accountDropdown.SetCoinType(ct)
 	}
 	pg.validateAndConstructTx()
+}
+
+// autoDefaultCoinTypeFromBalance picks a coin type that actually has a
+// spendable balance on the current source account, so a wallet with 0 VAR
+// + some SKA isn't stuck on a VAR-default dropdown that immediately errors.
+//
+// Decision tree:
+//   • selected coin has spendable atoms → keep it (no-op);
+//   • otherwise iterate DisplayableCoinTypes (already filtered by activity
+//     on this wallet) and pick the first with spendable > 0;
+//   • if no coin has any spendable, leave the selection alone — the user
+//     genuinely has nothing to send, and downstream messaging will say so.
+//
+// Propagation goes through applyCoinType so SetTxCoinType, the recipient
+// amount editors, and the account-dropdown's coin filter all stay in sync —
+// otherwise we'd flip the dropdown label but leave TxAuthoredInfo.coinType
+// at VAR and reproduce the very bug we're trying to avoid.
+func (pg *Page) autoDefaultCoinTypeFromBalance() {
+	if pg.coinTypeDropdown == nil || pg.accountDropdown == nil {
+		return
+	}
+	dcrAsset, ok := pg.selectedWallet.(*dcr.Asset)
+	if !ok {
+		return
+	}
+	sourceAccount := pg.accountDropdown.SelectedAccount()
+	if sourceAccount == nil {
+		return
+	}
+
+	hasSpendable := func(ct cointype.CoinType) bool {
+		bal, err := dcrAsset.GetCoinBalance(sourceAccount.Number, ct)
+		if err != nil {
+			return false
+		}
+		if ct.IsVAR() {
+			return bal.Spendable > 0
+		}
+		return bal.SKASpendable.Sign() > 0
+	}
+
+	if hasSpendable(pg.coinTypeDropdown.Selected()) {
+		return
+	}
+	for _, ct := range dcrAsset.DisplayableCoinTypes() {
+		if ct == pg.coinTypeDropdown.Selected() {
+			continue
+		}
+		if hasSpendable(ct) {
+			// Re-Setup with explicit override flips both the visible
+			// dropdown label and d.selected; applyCoinType then mirrors
+			// the change to the rest of the form.
+			pg.coinTypeDropdown.Setup(dcrAsset, ct)
+			pg.applyCoinType(ct)
+			return
+		}
+	}
 }
 
 func (pg *Page) addRecipient() {
@@ -338,6 +456,16 @@ func (pg *Page) OnNavigatedTo() {
 
 	pg.walletDropdown.ListenForTxNotifications(pg.ParentWindow()) // listener is stopped in OnNavigatedFrom()
 
+	// Auto-default the asset dropdown to a coin type that has a spendable
+	// balance on the chosen source account. Without this, a wallet holding
+	// only SKA-n (zero VAR) lands on the Send tab with the dropdown stuck
+	// on VAR (its constructor default), and the first character typed into
+	// "Сума" returns "no spendable VAR in this account" — the form refuses
+	// to author against the wrong coin type even though SKA UTXOs are
+	// right there. Picks the first coin with positive spendable atoms,
+	// preserving the current selection when it's already usable.
+	pg.autoDefaultCoinTypeFromBalance()
+
 	pg.usdExchangeSet = false
 	if pg.AssetsManager.ExchangeRateFetchingEnabled() {
 		pg.usdExchangeSet = pg.AssetsManager.RateSource.Ready()
@@ -448,6 +576,27 @@ func (pg *Page) constructTx() {
 		for _, rc := range pg.recipients {
 			rc.setCoinType(ct)
 		}
+		// Re-apply the user's custom fee override (if any) AFTER
+		// NewUnsignedTx wiped TxAuthoredInfo and SetTxCoinType reset
+		// its coin. The page-level pg.feeRateOverride is the source of
+		// truth across construct cycles; this line is what makes the
+		// "Apply" button stick beyond the very next keystroke.
+		// SetFeeRateOverride re-validates against the (potentially
+		// just-switched) coin's bounds — if the user changed coin
+		// after applying a SKA1 rate to e.g. VAR, the validator will
+		// reject it and the construct falls back to default. Errors
+		// here are status-bar noise, not fatal; log + carry on so the
+		// rest of the send flow still works.
+		if !pg.feeRateOverride.IsZero() {
+			if err := dcrAsset.SetFeeRateOverride(pg.feeRateOverride); err != nil {
+				log.Warnf("constructTx: re-apply fee override failed (coin=%s): %v — falling back to default", ct, err)
+				// Drop the override so subsequent cycles don't keep
+				// trying to apply an invalid rate.
+				pg.feeRateOverride = cointype.Zero()
+				pg.customFeeStatus = err.Error()
+				pg.customFeeStatusIsErr = true
+			}
+		}
 	}
 
 	totalCost, balanceAfterSend, totalAmount, err := pg.addSendDestination()
@@ -477,7 +626,10 @@ func (pg *Page) constructTx() {
 	}
 
 	// populate display data
-	pg.txFee = dcr.FormatTxAmount(feeAtom, displayCoinType)
+	// Route fee through FormatTxAmountBig with feeAndSize.Fee.UnitValueBig
+	// so a SKA fee that exceeds int64 (large custom-fee rates) renders
+	// with full atom precision instead of the clamped MaxInt64 placeholder.
+	pg.txFee = dcr.FormatTxAmountBig(feeAndSize.Fee.UnitValueBig, feeAtom, displayCoinType)
 
 	pg.feeRateSelector.EstSignedSize = fmt.Sprintf("%d Bytes", feeAndSize.EstimatedSignedSize)
 	pg.feeRateSelector.TxFee = pg.txFee
@@ -668,30 +820,77 @@ func (pg *Page) addSendDestination() (sharedW.AssetAmount, sharedW.AssetAmount, 
 		return nil, nil, 0, feeErr
 	}
 	feeAtom = feeAndSize.Fee.UnitValue
-	feeBig := big.NewInt(feeAtom)
+	// Prefer the lossless big-string when EstimateFeeAndSize populated it
+	// (SKA fees can exceed int64 once custom-fee rates approach the
+	// 1000× cap — see txauthor.go comment). big.NewInt(feeAtom) on the
+	// clamped int64 value would wrap the totalCostBig math back into
+	// "fee == MaxInt64 atoms ≈ 9.22 SKA1" no matter what the real rate
+	// computed, exactly the symptom from bug #1 of this batch where
+	// 33 SKA1/KB displayed ~0.002 SKA1 fee.
+	var feeBig *big.Int
+	if s := feeAndSize.Fee.UnitValueBig; s != "" {
+		if parsed, ok := new(big.Int).SetString(s, 10); ok {
+			feeBig = parsed
+		}
+	}
+	if feeBig == nil {
+		feeBig = big.NewInt(feeAtom)
+	}
 	totalCost += feeAtom * int64(len(pg.recipients))
 	for range pg.recipients {
 		totalCostBig.Add(totalCostBig, feeBig)
 	}
 
 	// SendMax pass — runs AFTER fee estimate so we can subtract a real
-	// fee from the spendable. Refuses when SKA balance exceeds int64
-	// because phase-1 authoring still caps single-output SKA at int64
-	// atoms (no sweep API wired yet).
+	// fee from the spendable. Two correctness traps it has to thread:
+	//
+	//  1. Float round-trip. Editor text is the broadcast source of truth
+	//     (validAmountBig re-parses it via the lossless decimal parser).
+	//     A SKA send that goes via int64 → float64 / 1e18 → "%.18f" drops
+	//     the last ~3 decimal digits at any magnitude (float64 mantissa
+	//     is 53 bits) — a 5 SKA Max click broadcasts 4.999…567 atoms,
+	//     leaving dust. Compute max in big.Int and write the editor with
+	//     ToDecimalString so the user's "send everything" actually sends
+	//     everything.
+	//
+	//  2. Underflow when fee > spendable (dust account, paid-down balance).
+	//     The legacy `spendableAmount - feeAtom` int64 subtraction returned
+	//     a negative number that fed into setAmount and silently became a
+	//     bogus editor value. Detect insufficient funds explicitly and
+	//     surface the localized error to the recipient instead of
+	//     proceeding into clearEstimates limbo.
+	//
+	// Phase-1 caveat: AddSendDestinationBig pipes the big amount through
+	// AddSendDestination's int64 channel internally, so a single output
+	// > MaxInt64 atoms (~9.22 SKA) still can't be authored. We refuse
+	// SendMax in that case rather than silently emitting a clamped tx.
 	for _, recipient := range pg.recipients {
 		_, _, SendMax := recipient.validAmountBig()
 		if !SendMax {
 			continue
 		}
-		if spendableBig != nil && !spendableBig.IsInt64() {
-			recipient.amountValidationError(values.String(values.StrInvalidAmount))
-			log.Warnf("SendMax refused: %s balance %s atoms exceeds int64; phase-1 author can only emit up to ~9.22 SKA in one tx",
-				pg.coinTypeDropdown.Selected(), spendableBig.String())
+		// Compute spendable - fee losslessly in big.Int. Fall through to
+		// the int64 path only when no big-int spendable was computed
+		// (defensive — addSendDestination always sets spendableBig).
+		var maxBig *big.Int
+		if spendableBig != nil {
+			maxBig = new(big.Int).Sub(spendableBig, feeBig)
+		} else {
+			maxBig = big.NewInt(spendableAmount - feeAtom)
+		}
+		if maxBig.Sign() <= 0 {
+			recipient.amountValidationError(values.String(values.StrInsufficientFund))
 			pg.clearEstimates()
 			continue
 		}
-		amountAtom := spendableAmount - feeAtom
-		recipient.setAmount(amountAtom)
+		if !maxBig.IsInt64() {
+			recipient.amountValidationError(values.String(values.StrInvalidAmount))
+			log.Warnf("SendMax refused: %s spendable-after-fee %s atoms exceeds int64; phase-1 author can only emit up to ~9.22 SKA in one tx",
+				pg.coinTypeDropdown.Selected(), maxBig.String())
+			pg.clearEstimates()
+			continue
+		}
+		recipient.setAmountBig(maxBig)
 	}
 	// Compute balance-after-send and totals in big.Int when the SKA
 	// balance OR the cumulative cost has overflowed int64. The int64
@@ -761,9 +960,15 @@ func (pg *Page) initAccountsSelectorForRecipients(account *sharedW.Account) {
 }
 
 func (pg *Page) setRecipientsAmountErr(err error) {
+	// Route through TranslateErr so libwallet-side English errors like
+	// "no spendable VAR in this account (need confirmed UTXOs >= 2 blocks
+	// deep)" surface as the localized "Недостатньо коштів" instead of
+	// leaking the raw English + technical confirmation count to the
+	// recipient amount label.
+	msg := values.TranslateErr(err.Error())
 	for i := range pg.recipients {
 		recipient := pg.recipients[i]
-		recipient.amountValidationError(err.Error())
+		recipient.amountValidationError(msg)
 	}
 	pg.clearEstimates()
 }
@@ -861,6 +1066,122 @@ func (pg *Page) clearEstimates() {
 // displayed.
 // Part of the load.Page interface.
 func (pg *Page) HandleUserInteractions(gtx C) {
+	// Drain the broadcast-success flag set from the goroutine. We must
+	// do this on the UI thread (Gio editor SetText is racy with Layout
+	// reads), and we must do it BEFORE per-frame validation runs below —
+	// otherwise validateAllRecipientsAmount sees the stale "1" against
+	// the new zero balance, flips the recipient row into the danger
+	// state, and clearEstimates writes "- SKA1" placeholders. Doing the
+	// reset first means the rest of this frame sees an empty form.
+	if pg.pendingBroadcastReset.CompareAndSwap(true, false) {
+		pg.resetRecipientsFields()
+		pg.clearEstimates()
+		// Re-pick the active coin in case the just-sent tx emptied the
+		// previously-selected coin (e.g. sent the entire SKA1 balance —
+		// next default should slide to the next non-empty coin or back
+		// to VAR if nothing has spendable).
+		pg.autoDefaultCoinTypeFromBalance()
+	}
+
+	// Custom-fee Apply: parse the editor's number with the coin-type-aware
+	// big.Int parser (SKA fees > int64 are pathological but the bounds
+	// allow up to 1000× MinRelayTxFee, which on a 1e18-atoms/coin SKA can
+	// exceed int64 quickly), push through SetFeeRateOverride, and surface
+	// either the localised "applied" string or the validator's error. The
+	// editor itself is left intact so the user can tweak and reapply.
+	if pg.customFeeApplyBtn.Clicked(gtx) {
+		if dcrAsset, ok := pg.selectedWallet.(*dcr.Asset); ok {
+			text := strings.TrimSpace(pg.customFeeEditor.Editor.Text())
+			ct := cointype.CoinTypeVAR
+			if pg.coinTypeDropdown != nil {
+				ct = pg.coinTypeDropdown.Selected()
+			}
+			atomsBig, parseErr := dcr.ParseAmountToAtomsBig(text, ct)
+			if parseErr != nil {
+				pg.customFeeStatus = parseErr.Error()
+				pg.customFeeStatusIsErr = true
+			} else if atomsBig == nil || atomsBig.Sign() <= 0 {
+				pg.customFeeStatus = values.String(values.StrInvalidAmount)
+				pg.customFeeStatusIsErr = true
+			} else {
+				rate := cointype.NewSKAAmount(atomsBig)
+				if err := dcrAsset.SetFeeRateOverride(rate); err != nil {
+					// Map sentinel errors to localised strings + coin-
+					// unit-formatted bounds. The raw err.Error() is
+					// English with raw-atom numbers; substitute a
+					// translation that talks about "X.YZ SKA1 за КБ"
+					// instead of "1000000000000000000 atoms/KB".
+					minR, maxR := dcrAsset.FeeRateBounds()
+					switch {
+					case errors.Is(err, dcr.ErrFeeRateBelowMin):
+						pg.customFeeStatus = values.StringF(values.StrFeeRateBelowMin,
+							dcr.FormatTxAmountBig(atomsBig.String(), 0, uint8(ct)),
+							dcr.FormatTxAmountBig(minR.String(), 0, uint8(ct)))
+					case errors.Is(err, dcr.ErrFeeRateAboveMax):
+						pg.customFeeStatus = values.StringF(values.StrFeeRateAboveMax,
+							dcr.FormatTxAmountBig(atomsBig.String(), 0, uint8(ct)),
+							dcr.FormatTxAmountBig(maxR.String(), 0, uint8(ct)))
+					case errors.Is(err, dcr.ErrFeeRateNotSupported):
+						pg.customFeeStatus = values.String(values.StrFeeRateNotSupported)
+					default:
+						pg.customFeeStatus = err.Error()
+					}
+					pg.customFeeStatusIsErr = true
+				} else {
+					// Persist at the page level so subsequent
+					// constructTx cycles (which wipe TxAuthoredInfo
+					// via NewUnsignedTx) can re-apply.
+					pg.feeRateOverride = rate
+					// Re-estimate FIRST so pg.txFee reflects the new rate,
+					// then build the status string with BOTH the rate the
+					// user typed AND the resulting effective fee. Users
+					// confuse "rate per KB" with "the fee I'll pay" (see
+					// the "1 + 33 = 10?" feedback) — showing both numbers
+					// inline removes the surprise when the broadcast
+					// charges rate × tx_size / 1000 instead of the bare
+					// rate amount.
+					pg.validateAndConstructTx()
+					rateStr := dcr.FormatTxAmountBig(atomsBig.String(), 0, uint8(ct))
+					effective := pg.txFee
+					if effective == "" {
+						// No recipient/amount yet — fee can't be estimated.
+						// Show the rate-only fallback so we don't display
+						// "Орієнтовна комісія: " with an empty tail.
+						pg.customFeeStatus = values.StringF(values.StrCustomFeeApplied,
+							rateStr, "—")
+					} else {
+						pg.customFeeStatus = values.StringF(values.StrCustomFeeApplied,
+							rateStr, effective)
+					}
+					pg.customFeeStatusIsErr = false
+				}
+			}
+		}
+	}
+	if pg.customFeeClearBtn.Clicked(gtx) {
+		if dcrAsset, ok := pg.selectedWallet.(*dcr.Asset); ok {
+			dcrAsset.ClearFeeRateOverride()
+			pg.feeRateOverride = cointype.Zero()
+			pg.customFeeEditor.Editor.SetText("")
+			// Force the editor back to its initial "placeholder only, no
+			// floating label" state. cryptomaterial.Editor.layout swaps
+			// TitleLabel ↔ Hint based on focus + content; if Apply was
+			// clicked while the editor still held the user's number and
+			// then Skinuti fires while the editor is unfocused, the state
+			// machine doesn't run the normalising branch (it skips both
+			// the "Editor.Len()>0 && Hint!=\"\"" path and the "Hint==\"\""
+			// path) so TitleLabel AND Hint both keep the placeholder
+			// string — both rendered, the user sees "Ставка комісії за КБ"
+			// twice. Hard-reset here. The placeholder string is the
+			// localized hint we passed at construction time.
+			pg.customFeeEditor.TitleLabel.Text = ""
+			pg.customFeeEditor.Hint = values.String(values.StrFeeRatePerKbHint)
+			pg.customFeeStatus = values.String(values.StrCustomFeeCleared)
+			pg.customFeeStatusIsErr = false
+			pg.validateAndConstructTx()
+		}
+	}
+
 	pg.walletDropdown.Handle(gtx)
 	pg.accountDropdown.Handle(gtx)
 	if pg.coinTypeDropdown != nil {
@@ -911,9 +1232,21 @@ func (pg *Page) HandleUserInteractions(gtx C) {
 				descriptionText = pg.recipients[0].descriptionText()
 			}
 			pg.confirmTxModal.txLabel = descriptionText
+			// Fires from the broadcast goroutine the moment Broadcast()
+			// succeeds, BEFORE the green-check success modal is shown.
+			// We only flip an atomic flag here — the actual editor /
+			// estimate / coin-type-dropdown mutations must run on the
+			// UI thread (Gio editor buffers are not safe to write from
+			// background goroutines while Layout reads them). The
+			// Invalidate forces a frame so HandleUserInteractions
+			// drains the flag without waiting for user input.
+			pg.confirmTxModal.txBroadcastSuccess = func() {
+				pg.pendingBroadcastReset.Store(true)
+				if pw := pg.ParentWindow(); pw != nil {
+					pw.Reload()
+				}
+			}
 			pg.confirmTxModal.txSent = func() {
-				pg.resetRecipientsFields()
-				pg.clearEstimates()
 				if pg.modalLayout != nil {
 					pg.modalLayout.Dismiss()
 				}

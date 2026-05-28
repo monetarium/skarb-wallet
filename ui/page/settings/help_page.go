@@ -35,10 +35,7 @@ type HelpPage struct {
 	*app.GenericPageModal
 
 	documentation,
-	twitterClickable,
-	matrixClickable,
-	websiteClickable,
-	telegramClickable *cryptomaterial.Clickable
+	websiteClickable *cryptomaterial.Clickable
 	copyRedirectURL *cryptomaterial.Clickable
 	shadowBox       *cryptomaterial.Shadow
 	backButton      cryptomaterial.IconButton
@@ -49,14 +46,11 @@ type HelpPage struct {
 
 func NewHelpPage(l *load.Load) *HelpPage {
 	pg := &HelpPage{
-		Load:              l,
-		GenericPageModal:  app.NewGenericPageModal(HelpPageID),
-		documentation:     l.Theme.NewClickable(true),
-		twitterClickable:  l.Theme.NewClickable(true),
-		matrixClickable:   l.Theme.NewClickable(true),
-		websiteClickable:  l.Theme.NewClickable(true),
-		telegramClickable: l.Theme.NewClickable(true),
-		copyRedirectURL:   l.Theme.NewClickable(false),
+		Load:             l,
+		GenericPageModal: app.NewGenericPageModal(HelpPageID),
+		documentation:    l.Theme.NewClickable(true),
+		websiteClickable: l.Theme.NewClickable(true),
+		copyRedirectURL:  l.Theme.NewClickable(false),
 	}
 
 	pg.shadowBox = l.Theme.Shadow()
@@ -74,36 +68,22 @@ func NewHelpPage(l *load.Load) *HelpPage {
 		Alignment: layout.Middle,
 	}
 
+	// Social channels (Matrix/Twitter/Telegram) were Cryptopower-specific and
+	// have no confirmed Monetarium equivalents yet, so they are omitted rather
+	// than left pointing at unrelated external accounts. Re-add as cardItems
+	// here once official Monetarium handles are known.
 	pg.helpPageCard = []cardItem{
 		{
 			Clickable: pg.documentation,
 			Image:     l.Theme.Icons.DocumentationIcon,
 			Title:     values.String(values.StrDocumentation),
-			Link:      "https://docs.decred.org",
-		},
-		{
-			Clickable: pg.matrixClickable,
-			Image:     l.Theme.Icons.MatrixIcon,
-			Title:     values.String(values.StrMatrix),
-			Link:      "https://matrix.to/#/#cryptopower:decred.org",
-		},
-		{
-			Clickable: pg.twitterClickable,
-			Image:     l.Theme.Icons.TwitterIcon,
-			Title:     values.String(values.StrTwitter),
-			Link:      "https://twitter.com/cryptopowerwlt",
-		},
-		{
-			Clickable: pg.telegramClickable,
-			Image:     l.Theme.Icons.TelegramIcon,
-			Title:     values.String(values.StrTelegram),
-			Link:      "https://t.me/cryptopowerwallet",
+			Link:      "https://monetarium.online",
 		},
 		{
 			Clickable: pg.websiteClickable,
 			Image:     l.Theme.Icons.WebsiteIcon,
 			Title:     values.String(values.StrWebsite),
-			Link:      "https://cryptopower.dev",
+			Link:      "https://monetarium.online",
 		},
 	}
 
@@ -245,9 +225,9 @@ func (pg *HelpPage) pageSections(gtx C, icon *cryptomaterial.Image, action *cryp
 func (pg *HelpPage) HandleUserInteractions(gtx C) {
 	for _, cardItem := range pg.helpPageCard {
 		if cardItem.Clickable.Clicked(gtx) {
-			decredURL := cardItem.Link
+			linkURL := cardItem.Link
 			info := modal.NewCustomModal(pg.Load).
-				Title("View " + cardItem.Title).
+				Title(values.StringF(values.StrViewLink, cardItem.Title)).
 				Body(values.String(values.StrCopyLink)).
 				SetCancelable(true).
 				UseCustomWidget(func(gtx C) D {
@@ -260,12 +240,12 @@ func (pg *HelpPage) HandleUserInteractions(gtx C) {
 								return wrapper.Layout(gtx, func(gtx C) D {
 									return layout.UniformInset(values.MarginPadding10).Layout(gtx, func(gtx C) D {
 										return layout.Flex{}.Layout(gtx,
-											layout.Flexed(0.9, pg.Theme.Body1(decredURL).Layout),
+											layout.Flexed(0.9, pg.Theme.Body1(linkURL).Layout),
 											layout.Flexed(0.1, func(gtx C) D {
 												return layout.E.Layout(gtx, func(gtx C) D {
 													return layout.Inset{Top: values.MarginPadding7}.Layout(gtx, func(gtx C) D {
 														if pg.copyRedirectURL.Clicked(gtx) {
-															gtx.Execute(clipboard.WriteCmd{Data: io.NopCloser(strings.NewReader(decredURL))})
+															gtx.Execute(clipboard.WriteCmd{Data: io.NopCloser(strings.NewReader(linkURL))})
 															pg.Toast.Notify(values.String(values.StrCopied))
 														}
 														return pg.copyRedirectURL.Layout(gtx, pg.Theme.NewIcon(pg.Theme.Icons.CopyIcon).Layout24dp)

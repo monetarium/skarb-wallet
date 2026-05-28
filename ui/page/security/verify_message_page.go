@@ -215,7 +215,7 @@ func (pg *VerifyMessagePage) KeysToHandle() []event.Filter {
 // HandleKeyPress is called when one or more keys are pressed on the current
 // window that match any of the key combinations returned by KeysToHandle().
 // Satisfies the load.KeyEventHandler interface for receiving key events.
-func (pg *VerifyMessagePage) HandleKeyEvent(gtx C, evt *key.Event) {
+func (pg *VerifyMessagePage) HandleKeyPress(gtx C, evt *key.Event) {
 	// Switch editors on tab press.
 	cryptomaterial.SwitchEditors(gtx, evt, pg.addressEditor.Editor, pg.signatureEditor.Editor, pg.messageEditor.Editor)
 }

@@ -208,7 +208,7 @@ func (pg *Page) accountItemLayout(gtx C, account *sharedW.Account) D {
 			if bal.LockedByTickets != nil {
 				locked = pg.wallet.ToAmount(locked.ToInt() + bal.LockedByTickets.ToInt())
 			}
-			return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
+			children := []layout.FlexChild{
 				layout.Rigid(pg.accountBalanceLayout(values.String(values.StrLabelSpendable), bal.Spendable, layout.Horizontal)),
 				layout.Rigid(pg.accountBalanceLayout(values.String(values.StrLocked), locked, layout.Horizontal)),
 				layout.Rigid(func(gtx C) D {
@@ -220,11 +220,78 @@ func (pg *Page) accountItemLayout(gtx C, account *sharedW.Account) D {
 					immature := pg.wallet.ToAmount(bal.ImmatureReward.ToInt() + bal.ImmatureStakeGeneration.ToInt())
 					return pg.accountBalanceLayout(values.String(values.StrImmature), immature, layout.Horizontal)(gtx)
 				}),
-			)
+			}
+			// Append a row per SKA token this account holds. The VAR rows
+			// above come from the legacy int64 Balance struct, which has no
+			// SKA fields; SKA balances are read from the dcr asset's per-coin
+			// big.Int channel so a wallet with 0 VAR + SKA tokens still shows
+			// its real holdings here instead of just "0 VAR".
+			children = append(children, pg.skaBalanceRows(account)...)
+			return layout.Flex{Axis: layout.Vertical}.Layout(gtx, children...)
 		}),
 	)
 }
 
+// skaBalanceRows returns one balance row per SKA coin type the account
+// holds. VAR is rendered through accountBalanceLayout above; this surfaces
+// the SKA token balances the VAR-only Balance struct can't express. Only
+// coins with a non-zero balance in *this* account are listed (mirrors the
+// wallet-wide DisplayableCoinTypes filter so users don't see SKA-n entries
+// they have never received).
+func (pg *Page) skaBalanceRows(account *sharedW.Account) []layout.FlexChild {
+	dcrAsset, ok := pg.wallet.(*dcr.Asset)
+	if !ok {
+		return nil
+	}
+	balances, err := dcrAsset.GetAccountCoinBalances(account.Number)
+	if err != nil {
+		log.Errorf("accounts: GetAccountCoinBalances(%d): %v", account.Number, err)
+		return nil
+	}
+	var rows []layout.FlexChild
+	for _, ct := range dcrAsset.ActiveCoinTypes() {
+		if !ct.IsSKA() {
+			continue
+		}
+		bal, ok := balances[ct]
+		if !ok {
+			continue
+		}
+		if bal.SKATotal.Sign() <= 0 && bal.SKASpendable.Sign() <= 0 && bal.SKAUnconfirmed.Sign() <= 0 {
+			continue
+		}
+		bal.CoinType = ct // ensure FormatCoinAmount picks the SKA branch
+		rows = append(rows, layout.Rigid(pg.skaBalanceRow(dcr.CoinSymbol(ct), dcr.FormatCoinAmount(bal))))
+	}
+	return rows
+}
+
+// skaBalanceRow renders a single SKA token balance as "symbol .... amount".
+func (pg *Page) skaBalanceRow(coinSymbol, amount string) func(gtx C) D {
+	label := pg.Theme.Label(pg.ConvertTextSize(values.TextSize16), coinSymbol)
+	label.Font.Weight = font.SemiBold
+	amountTxt := pg.Theme.Label(pg.ConvertTextSize(values.TextSize16), amount)
+	amountTxt.Font.Weight = font.SemiBold
+	return func(gtx C) D {
+		return layout.Flex{Spacing: layout.SpaceBetween}.Layout(gtx,
+			layout.Rigid(label.Layout),
+			layout.Flexed(1, func(gtx C) D {
+				return layout.E.Layout(gtx, amountTxt.Layout)
+			}),
+		)
+	}
+}
+
+// accountBalanceLayout is VAR-only. `bal` arrives as a sharedW.AssetAmount
+// (the int64 + .ToCoin() channel), which by Monetarium convention carries
+// VAR atoms (1e8/coin). All current call sites in this page pass VAR
+// balances (Total, Spendable, Locked, immature/staking). If a future
+// refactor pipes a SKA AssetAmount through here, the .String() row and
+// the .ToCoin()→USD conversion below will both silently misformat — SKA
+// values > 9.22 hit the int64 clamp upstream and .ToCoin() divides by
+// 1e8 instead of 1e18. SKA balances are surfaced through a different
+// path (GetCoinBalance().SKATotal → FormatTxAmountBig / FormatCoinAmount),
+// not this layout.
 func (pg *Page) accountBalanceLayout(title string, bal sharedW.AssetAmount, balAxis layout.Axis) func(gtx C) D {
 	label := pg.Theme.Label(pg.ConvertTextSize(values.TextSize16), title)
 	label.Font.Weight = font.SemiBold

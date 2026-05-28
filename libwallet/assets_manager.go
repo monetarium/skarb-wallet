@@ -519,17 +519,21 @@ func (mgr *AssetsManager) AllAssetTypes() []utils.AssetType {
 }
 
 // BlockExplorerURLForTx returns a URL for viewing a transaction on the
-// Monetarium block explorer.
+// Monetarium block explorer. The hostnames here are the canonical
+// deployed explorer endpoints — change them in one place rather than
+// per call site. Mainnet at monetarium.online; testnet under the
+// testnet subdomain. Any future net (regtest, simnet) defaults to no
+// URL — the 3-dots menu hides the "view in explorer" item when this
+// returns "".
 func (mgr *AssetsManager) BlockExplorerURLForTx(assetType utils.AssetType, txHash string) string {
 	if assetType != utils.DCRWalletAsset {
 		return ""
 	}
 	switch mgr.NetType() {
 	case utils.Mainnet:
-		// TODO: replace with the real Monetarium explorer once deployed.
-		return "https://explorer.monetarium.io/tx/" + txHash
+		return "https://monetarium.online/tx/" + txHash
 	case utils.Testnet:
-		return "https://testnet.explorer.monetarium.io/tx/" + txHash
+		return "https://testnet.monetarium.online/tx/" + txHash
 	default:
 		return ""
 	}

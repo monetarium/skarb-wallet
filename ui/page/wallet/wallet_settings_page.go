@@ -63,8 +63,7 @@ type SettingsPage struct {
 	backButton cryptomaterial.IconButton
 	infoButton cryptomaterial.IconButton
 
-	spendUnconfirmed  *cryptomaterial.Switch
-	spendUnmixedFunds *cryptomaterial.Switch
+	spendUnconfirmed *cryptomaterial.Switch
 	connectToPeer     *cryptomaterial.Switch
 
 	walletCallbackFunc func()
@@ -93,8 +92,7 @@ func NewSettingsPage(l *load.Load, wallet sharedW.Asset, walletCallbackFunc func
 		signMessage:         l.Theme.NewClickable(false),
 		updateConnectToPeer: l.Theme.NewClickable(false),
 
-		spendUnconfirmed:  l.Theme.Switch(),
-		spendUnmixedFunds: l.Theme.Switch(),
+		spendUnconfirmed: l.Theme.Switch(),
 		connectToPeer:     l.Theme.Switch(),
 
 		pageContainer: &widget.List{
@@ -116,7 +114,6 @@ func NewSettingsPage(l *load.Load, wallet sharedW.Asset, walletCallbackFunc func
 // Part of the load.Page interface.
 func (pg *SettingsPage) OnNavigatedTo() {
 	pg.spendUnconfirmed.SetChecked(pg.readBool(sharedW.SpendUnconfirmedConfigKey))
-	pg.spendUnmixedFunds.SetChecked(pg.readBool(sharedW.SpendUnmixedFundsKey))
 
 	pg.loadPeerAddress()
 
@@ -193,12 +190,6 @@ func (pg *SettingsPage) generalSection() layout.Widget {
 			layout.Rigid(func(gtx C) D {
 				if pg.wallet.GetAssetType() == libutils.DCRWalletAsset {
 					return pg.subSection(gtx, values.String(values.StrUnconfirmedFunds), pg.spendUnconfirmed.Layout)
-				}
-				return D{}
-			}),
-			layout.Rigid(func(gtx C) D {
-				if pg.wallet.GetAssetType() == libutils.DCRWalletAsset {
-					return pg.subSection(gtx, values.String(values.StrAllowSpendingFromUnmixedAccount), pg.spendUnmixedFunds.Layout)
 				}
 				return D{}
 			}),
@@ -734,41 +725,6 @@ func (pg *SettingsPage) HandleUserInteractions(gtx C) {
 
 	if pg.spendUnconfirmed.Changed(gtx) {
 		pg.wallet.SaveUserConfigValue(sharedW.SpendUnconfirmedConfigKey, pg.spendUnconfirmed.IsChecked())
-	}
-
-	if pg.spendUnmixedFunds.Changed(gtx) {
-		if pg.spendUnmixedFunds.IsChecked() {
-			textModal := modal.NewTextInputModal(pg.Load).
-				SetTextWithTemplate(modal.AllowUnmixedSpendingTemplate).
-				// Hint(""). Code not deleted because a proper hint is required.
-				PositiveButtonStyle(pg.Load.Theme.Color.Danger, pg.Load.Theme.Color.InvText).
-				SetPositiveButtonCallback(func(textInput string, tim *modal.TextInputModal) bool {
-					if textInput != values.String(values.StrAwareOfRisk) {
-						tim.SetError(values.String(values.StrConfirmPending))
-					} else {
-						pg.wallet.SetBoolConfigValueForKey(sharedW.SpendUnmixedFundsKey, true)
-						tim.Dismiss()
-					}
-					return false
-				})
-			textModal.Title(values.String(values.StrConfirmUmixedSpending)).
-				SetPositiveButtonText(values.String(values.StrConfirm)).
-				SetNegativeButtonCallback(func() {
-					pg.spendUnmixedFunds.SetChecked(false)
-				})
-			pg.ParentWindow().ShowModal(textModal)
-
-		} else {
-			mixingEnabled := pg.wallet.ReadBoolConfigValueForKey(sharedW.AccountMixerConfigSet, false)
-			if !mixingEnabled {
-				pg.spendUnmixedFunds.SetChecked(true)
-				mixingNotEnabled := values.String(values.StrMixingNotSetUp)
-				info := modal.NewErrorModal(pg.Load, mixingNotEnabled, modal.DefaultClickFunc())
-				pg.ParentWindow().ShowModal(info)
-			} else {
-				pg.wallet.SetBoolConfigValueForKey(sharedW.SpendUnmixedFundsKey, false)
-			}
-		}
 	}
 
 	if pg.connectToPeer.Changed(gtx) && !pg.isPrivacyModeOn() {
