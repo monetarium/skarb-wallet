@@ -63,7 +63,7 @@ GOFLAGS="-mod=mod -trimpath" GOOS=darwin GOARCH=amd64 \
     go build -trimpath -ldflags "-s -w -buildid=" -buildvcs=false -o "$TMP_BIN_AMD" .
 
 lipo -create "$TMP_BIN_ARM" "$TMP_BIN_AMD" -output "${APP_DIR}/Contents/MacOS/${EXEC_NAME}"
-echo "  binary archs: $(lipo -archs ${APP_DIR}/Contents/MacOS/${EXEC_NAME})"
+echo "  binary archs: $(lipo -archs "${APP_DIR}/Contents/MacOS/${EXEC_NAME}")"
 
 echo "→ Generating .icns icon from appicon.png"
 mkdir -p "${APP_DIR}/Contents/Resources"
