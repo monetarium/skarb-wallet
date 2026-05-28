@@ -504,7 +504,7 @@ func (pg *Page) HandleUserInteractions(gtx C) {
 	}
 
 	if pg.infoButton.Button.Clicked(gtx) {
-		textWithUnit := values.String(values.StrReceive) + " " + string(pg.selectedWallet.GetAssetType())
+		textWithUnit := values.String(values.StrReceive) + " " + dcr.CoinSymbol(pg.expectedCoinType)
 		info := modal.NewCustomModal(pg.Load).
 			Title(textWithUnit).
 			Body(values.String(values.StrReceiveInfo)).

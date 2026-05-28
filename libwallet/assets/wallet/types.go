@@ -80,6 +80,15 @@ type Amount struct {
 	// units, converted to a floating point value representing the amount
 	// of said cryptocurrency.
 	CoinValue float64
+	// UnitValueBig is the lossless atom count as a decimal string. Populated
+	// only when the value can or does exceed int64 (SKA fees on tx sizes
+	// driven by big custom fee rates — a 1KB tx at the safety-cap 1000×
+	// MinRelayTxFee for SKA crosses ~9.22e18 atoms easily). When set, UI
+	// callers must prefer this field over UnitValue+CoinValue; the int64
+	// field stays populated for compatibility but is clamped (typically
+	// MaxInt64) and the float64 channel is meaningless past 2^53. Empty
+	// for all VAR amounts and for SKA amounts that fit in int64.
+	UnitValueBig string
 }
 
 type TxFeeAndSize struct {
@@ -406,6 +415,19 @@ type TxInfoFromWallet struct {
 type WInput struct {
 	Index    int32 `json:"index"`
 	AmountIn int64 `json:"amount_in"`
+	// AmountInBig carries the lossless atom count for SKA inputs, sourced
+	// from the wallet's own UTXO record (txSummary.MyInputs[i].
+	// PreviousSKAAmount). The wallet always knows what it spent — even
+	// before confirmation — so this is reliable in mempool. The wire-side
+	// msgTx.TxIn[i].SKAValueIn lives in witness data and SPV relayers
+	// frequently ship mempool txs in no-witness form, leaving SKAValueIn
+	// nil. Without this field the big.Int direction classifier in
+	// DecodeTransaction sees skaTotalWalletIn=0 for the sender, flips
+	// out-in positive, and mis-classifies the outgoing tx as "Received"
+	// of the change amount until the tx confirms and the block delivers
+	// the full-witness form. Empty for VAR inputs and for SKA inputs
+	// where the previous amount is genuinely unknown.
+	AmountInBig string `json:"amount_in_big,omitempty"`
 	*WAccount
 }
 
@@ -476,6 +498,23 @@ type UnspentOutput struct {
 	Spendable     bool
 	ReceiveTime   time.Time
 	Tree          int8
+
+	// CoinType identifies which Monetarium coin this UTXO belongs to
+	// (0 = VAR, 1.. = SKAn). The legacy Amount/AssetAmount field carries
+	// the VAR-shaped int64 atom count and is zero for SKA UTXOs by
+	// upstream convention (TxOut.Value=0 for SKA, value lives in
+	// TxOut.SKAValue *big.Int). Manual-coin-selection MUST filter on
+	// this when the send page's coin-type dropdown is set to a SKA
+	// coin — without it, the UTXO list shows every VAR UTXO regardless
+	// of the asset the user is trying to send, and the SKA UTXOs
+	// silently appear as "0 VAR" rows that can't satisfy the send.
+	CoinType uint8
+
+	// SKAAmountAtoms is the lossless decimal-string atom value for
+	// SKA UTXOs (empty for VAR). Set when CoinType.IsSKA() is true.
+	// FormatTxAmountBig(SKAAmountAtoms, Amount.ToInt(), CoinType)
+	// dispatches correctly between the two channels.
+	SKAAmountAtoms string
 }
 
 type WordSeedType int

@@ -135,8 +135,23 @@ var (
 	TextSize32   = unit.Sp(32)
 	TextSize60   = unit.Sp(60)
 
+	// AppWidth / AppHeight are the *content-width* thresholds used by
+	// UniformPadding / UniformHorizontalPadding to decide when to start
+	// inflating side padding. They are NOT the window's initial size —
+	// for that see DefaultWindowWidth / DefaultWindowHeight below.
 	AppWidth  = unit.Dp(800)
 	AppHeight = unit.Dp(650)
+
+	// DefaultWindowWidth / DefaultWindowHeight set how big the app window
+	// opens on first launch. The previous default of 800×650 matched
+	// AppWidth/AppHeight but was too narrow for the Ukrainian UI — the
+	// six wallet tabs (Інформація / Надіслати / Отримати / Транзакції /
+	// Акаунти / Налаштування) plus sidebar didn't fit, and longer body
+	// strings overflowed cards. 1200×800 gives the sidebar (~240) plus a
+	// comfortable ~960px content column on a typical 1366×768 / 1440×900
+	// laptop without ever exceeding the smallest common screen size.
+	DefaultWindowWidth  = unit.Dp(1200)
+	DefaultWindowHeight = unit.Dp(800)
 
 	// These define the dimensions at which we consider the user to be using a
 	// mobile device. The dimensions specified are the default viewport for

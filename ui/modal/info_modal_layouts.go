@@ -24,7 +24,6 @@ const (
 	SourceModalInfoTemplate        = "SourceModalInfo"
 	TotalValueInfoTemplate         = "TotalValueInfo"
 	BondStrengthInfoTemplate       = "BondStrengthInfo"
-	StakeyImageTemplate            = "StakeyImage"
 )
 
 func verifyMessageInfo(th *cryptomaterial.Theme) []layout.Widget {
@@ -131,12 +130,3 @@ func bondStrengthInfo(th *cryptomaterial.Theme) []layout.Widget {
 	}
 }
 
-func stakeyImage(th *cryptomaterial.Theme) []layout.Widget {
-	return []layout.Widget{
-		func(gtx C) D {
-			return layout.Center.Layout(gtx, func(gtx C) D {
-				return th.Icons.StakeyImage.LayoutSize(gtx, values.MarginPadding200)
-			})
-		},
-	}
-}

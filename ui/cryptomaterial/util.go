@@ -123,14 +123,17 @@ func GenerateRandomNumber() int {
 
 func UniformPaddingWithTopInset(topInset unit.Dp, gtx layout.Context, body layout.Widget, isMobileView ...bool) D {
 	_isMobileView := len(isMobileView) > 0 && isMobileView[0]
-	width := gtx.Constraints.Max.X
 	paddingHorizontal := values.MarginPadding24
 	bottomPadding := values.MarginPadding24
 
-	if (width - 2*gtx.Dp(paddingHorizontal)) > gtx.Dp(values.AppWidth) {
-		paddingValue := float32(width-gtx.Dp(values.AppWidth)) / 4
-		paddingHorizontal = unit.Dp(paddingValue)
-	}
+	// Note: the original Cryptopower implementation grew paddingHorizontal
+	// linearly with window width (gutter = (width − AppWidth) / 4) so the
+	// central column stayed visually centered with whitespace on huge
+	// screens. For the Skarb fork that pattern produced a "doesn't
+	// stretch" feel — on a normal 1200×800 window the gutters were
+	// ~100dp and the block looked stranded in the middle, on full-screen
+	// the gutters ballooned to ~300dp. We use a constant gutter
+	// (MarginPadding24) so the content fills available width.
 
 	if _isMobileView {
 		paddingHorizontal = values.MarginPadding16

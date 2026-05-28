@@ -74,8 +74,13 @@ func CreateWindow(appInfo *load.AppInfo) (*Window, error) {
 	// obvious. Previously mainnet showed just "Skarb" while testnet showed
 	// "Skarb Wallet (testnet)" — that asymmetry confused users.
 	appTitle := giouiApp.Title(values.String(values.StrAppWallet))
-	// appSize overwrites gioui's default app size of 'Size(800, 600)'
-	appSize := giouiApp.Size(values.AppWidth, values.AppHeight)
+	// appSize overwrites gioui's default app size of 'Size(800, 600)'.
+	// We deliberately use DefaultWindowWidth/Height (1200×800), not
+	// AppWidth/AppHeight (800×650): the latter is a content-padding
+	// threshold, the former is the initial window size. Ukrainian
+	// localisation needs more horizontal room — six wallet tabs plus a
+	// sidebar didn't fit at 800px wide.
+	appSize := giouiApp.Size(values.DefaultWindowWidth, values.DefaultWindowHeight)
 	// appMinSize is the minimum size the app.
 	appMinSize := giouiApp.MinSize(values.MobileAppWidth, values.MobileAppHeight)
 	if net := appInfo.AssetsManager.NetType(); net != libutils.Mainnet {

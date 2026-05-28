@@ -227,20 +227,32 @@ func (p *HTMLProvider) render(lbl cryptomaterial.Label) {
 	var isClosingBlock bool
 	var currStyle string
 	var currText string
-	for i := range content {
-		curr := content[i]
+	// Range over RUNES, not bytes. The legacy `for i := range content { curr
+	// := content[i] }` form gave `curr` of type byte — fine for ASCII style
+	// markers ({, @, /, }) but disastrous for non-ASCII body text. Cyrillic
+	// "Б" is 0xD0 0x91 in UTF-8; the byte loop picked up 0xD0 then `string(
+	// 0xD0)` minted the Unicode code point U+00D0 ("Ð") — pure Latin-1
+	// mojibake. Iterating runes captures the full code point per
+	// step; the style-marker checks below stay correct because rune ==
+	// byte comparison works for ASCII (both are int-typed). i remains the
+	// byte index so getNextChar(content, i) and the "end of content" check
+	// `i+1 == len(content)` still mean "byte i+1" — those guards only
+	// trigger on ASCII bytes (style tags, spaces) so the byte arithmetic
+	// is semantically right despite the variable name.
+	for i, r := range content {
+		curr := r
 
-		if curr == openStyleTag[0] && getNextChar(content, i) == openStyleTag[1] {
+		if curr == rune(openStyleTag[0]) && getNextChar(content, i) == openStyleTag[1] {
 			inStyleBlock = true
 			labels = append(labels, p.getLabel(lbl, currText))
 			currText = ""
 		}
 
-		if curr == halfCloseStyleTag[0] && getNextChar(content, i) == halfCloseStyleTag[1] {
+		if curr == rune(halfCloseStyleTag[0]) && getNextChar(content, i) == halfCloseStyleTag[1] {
 			isClosingStyle = true
 		}
 
-		if curr == closeStyleTag[0] && getNextChar(content, i) == closeStyleTag[1] {
+		if curr == rune(closeStyleTag[0]) && getNextChar(content, i) == closeStyleTag[1] {
 			isClosingBlock = true
 		}
 
@@ -254,7 +266,7 @@ func (p *HTMLProvider) render(lbl cryptomaterial.Label) {
 			}
 		}
 
-		if isClosingBlock && curr == closeStyleTag[3] {
+		if isClosingBlock && curr == rune(closeStyleTag[3]) {
 			labels = append(labels, p.getLabel(lbl, currText))
 			currText = ""
 			p.removeLastStyleGroup()
@@ -266,7 +278,7 @@ func (p *HTMLProvider) render(lbl cryptomaterial.Label) {
 			currStyle += string(curr)
 		}
 
-		if isClosingStyle && curr == halfCloseStyleTag[1] {
+		if isClosingStyle && curr == rune(halfCloseStyleTag[1]) {
 			isClosingStyle = false
 			inStyleBlock = false
 			p.addStyleGroup(currStyle)

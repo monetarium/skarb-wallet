@@ -1,7 +1,10 @@
 package info
 
 import (
+	"context"
 	"image/color"
+	"strings"
+	"time"
 
 	"gioui.org/font"
 	"gioui.org/layout"
@@ -55,6 +58,15 @@ type WalletInfo struct {
 
 	materialLoader     material.LoaderStyle
 	showMaterialLoader bool
+
+	// blockAgeTickerCancel stops the goroutine that nudges the page to
+	// re-layout every minute so the "Last block — X minutes ago" line
+	// in WalletSyncInfo refreshes without user interaction. Without
+	// this, the page reads GetBestBlockTimeStamp on every layout but
+	// nothing triggers a layout between block-attached notifications,
+	// so the relative-time string only ticks forward when the user
+	// happens to click or scroll. Cancelled in OnNavigatedFrom.
+	blockAgeTickerCancel context.CancelFunc
 }
 
 func NewInfoPage(l *load.Load, wallet sharedW.Asset, backup func(sharedW.Asset)) *WalletInfo {
@@ -101,6 +113,11 @@ func NewInfoPage(l *load.Load, wallet sharedW.Asset, backup func(sharedW.Asset))
 func (pg *WalletInfo) OnNavigatedTo() {
 	pg.walletSyncInfo.Init()
 	pg.walletSyncInfo.ListenForNotifications() // stopped in OnNavigatedFrom()
+
+	// Prime the block-age cache so first frame shows real "X ago"
+	// instead of empty string — see WalletSyncInfo.blockAgeText().
+	pg.walletSyncInfo.RefreshBlockAge()
+	pg.startBlockAgeTicker()
 
 	go pg.loadTransactions()
 
@@ -331,6 +348,25 @@ func (pg *WalletInfo) loadTransactions() {
 		log.Errorf("error loading transactions: %v", err)
 		return
 	}
+	// Diagnostic log: surfaces what's in storm DB at the moment Info
+	// page (re)mounts. If the user reports "I sent a tx but it doesn't
+	// appear", grep for "InfoPage.loadTransactions" in the wallet log
+	// to see the count + hashes returned. Pairing this with the
+	// "Broadcast: storm-DB save OK" line proves whether storm has the
+	// tx or not.
+	if len(txs) > 0 {
+		hashes := make([]string, 0, len(txs))
+		for _, t := range txs {
+			if len(t.Hash) >= 12 {
+				hashes = append(hashes, t.Hash[:12]+"…")
+			} else {
+				hashes = append(hashes, t.Hash)
+			}
+		}
+		log.Infof("InfoPage.loadTransactions: %d tx(s) returned, hashes=[%s]", len(txs), strings.Join(hashes, ", "))
+	} else {
+		log.Infof("InfoPage.loadTransactions: 0 tx returned")
+	}
 	pg.transactions = txs
 	pg.showMaterialLoader = false
 	pg.ParentWindow().Reload()
@@ -364,7 +400,58 @@ func (pg *WalletInfo) loadStakes() {
 // Part of the load.Page interface.
 func (pg *WalletInfo) OnNavigatedFrom() {
 	pg.walletSyncInfo.StopListeningForNotifications()
+	if pg.blockAgeTickerCancel != nil {
+		pg.blockAgeTickerCancel()
+		pg.blockAgeTickerCancel = nil
+	}
 	if pg.wallet.GetAssetType() == libutils.DCRWalletAsset {
 		pg.wallet.(*dcr.Asset).RemoveAccountMixerNotificationListener(InfoID)
 	}
+}
+
+// startBlockAgeTicker fires a ParentWindow().Reload() periodically so the
+// "Last block — X ago" line in WalletSyncInfo updates without requiring a
+// user click. The 15s cadence is short enough that users see the minute
+// counter tick over without a noticeable lag, long enough that the
+// re-layout isn't a battery drain. TimeFormat() rounds to minutes so
+// finer intervals wouldn't change the display anyway.
+//
+// Defensively cancels any prior ticker first — OnNavigatedTo can fire
+// repeatedly (back/forward navigation, tab switches), and stacking
+// goroutines would otherwise leak one ticker per navigation cycle.
+//
+// `defer t.Stop()` AND `ctx.Done()` are both needed: ctx.Done() handles
+// the OnNavigatedFrom cancel path, t.Stop() releases the runtime timer
+// resource when the goroutine exits via either path.
+func (pg *WalletInfo) startBlockAgeTicker() {
+	if pg.blockAgeTickerCancel != nil {
+		pg.blockAgeTickerCancel()
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	pg.blockAgeTickerCancel = cancel
+	log.Infof("InfoPage: starting block-age ticker (5s)")
+	go func() {
+		t := time.NewTicker(5 * time.Second)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				log.Infof("InfoPage: block-age ticker stopped")
+				return
+			case <-t.C:
+				// Refresh the cached "X ago" string BEFORE Reload() —
+				// Layout will then read the freshly stored value. Without
+				// this the cache stays at the value computed on
+				// OnNavigatedTo and the displayed time never advances
+				// (cursor-driven re-layouts read the same cached string).
+				pg.walletSyncInfo.RefreshBlockAge()
+				win := pg.ParentWindow()
+				if win != nil {
+					win.Reload()
+				} else {
+					log.Warnf("InfoPage: ticker fired but ParentWindow() is nil")
+				}
+			}
+		}
+	}()
 }

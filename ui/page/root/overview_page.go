@@ -151,7 +151,7 @@ func (op *OverviewPage) layoutWalletCard(gtx layout.Context, w sharedW.Asset) la
 	dcrAsset, ok := w.(*dcr.Asset)
 	if !ok {
 		// Should not happen in v1 — Monetarium wallets are always *dcr.Asset.
-		return op.Theme.Body1(fmt.Sprintf("(unsupported wallet: %s)", w.GetWalletName())).Layout(gtx)
+		return op.Theme.Body1(values.StringF(values.StrUnsupportedWallet, w.GetWalletName())).Layout(gtx)
 	}
 
 	walletTitle := op.Theme.H6(w.GetWalletName())
@@ -160,7 +160,7 @@ func (op *OverviewPage) layoutWalletCard(gtx layout.Context, w sharedW.Asset) la
 
 	balancesByCoin, err := dcrAsset.GetWalletCoinBalances()
 	if err != nil {
-		errLine := op.Theme.Body2(fmt.Sprintf("balance error: %v", err))
+		errLine := op.Theme.Body2(values.StringF(values.StrBalanceError, err))
 		errLine.Color = op.Theme.Color.Danger
 		return op.cardWrap(gtx,
 			layout.Rigid(walletTitle.Layout),
@@ -170,7 +170,10 @@ func (op *OverviewPage) layoutWalletCard(gtx layout.Context, w sharedW.Asset) la
 		)
 	}
 
-	cts := dcrAsset.ActiveCoinTypes()
+	// Only enumerate coin types the wallet has actual activity for —
+	// otherwise every Overview row would list every chain-active SKA-n
+	// with "0" balance (bug #7).
+	cts := dcrAsset.DisplayableCoinTypes()
 	var coinChildren []layout.FlexChild
 	coinChildren = append(coinChildren,
 		layout.Rigid(walletTitle.Layout),

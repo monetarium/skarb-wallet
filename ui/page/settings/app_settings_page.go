@@ -6,6 +6,7 @@ import (
 	"os"
 	"regexp"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"decred.org/dcrdex/dex"
@@ -80,6 +81,15 @@ type AppSettingsPage struct {
 
 	isDarkModeOn      bool
 	isStartupPassword bool
+
+	// copyResetPending fires from a time.AfterFunc goroutine after the
+	// clipboard "Copied" feedback has been on screen for 3s. We can't
+	// touch button.Text / .Color directly from that goroutine — Layout
+	// reads them every frame on the UI thread, and concurrent struct-
+	// field writes are a Gio data race that yields glitch flashes /
+	// occasional crashes under -race. Same pattern as the broadcast-
+	// success reset in ui/page/send/page.go (atomic + Reload + drain).
+	copyResetPending atomic.Bool
 }
 
 func NewAppSettingsPage(l *load.Load) *AppSettingsPage {
@@ -575,6 +585,14 @@ func (pg *AppSettingsPage) subSectionLabel(title string) layout.Widget {
 // displayed.
 // Part of the load.Page interface.
 func (pg *AppSettingsPage) HandleUserInteractions(gtx C) {
+	// Drain the clipboard-feedback reset signalled from the AfterFunc
+	// goroutine 3s after the user clicked "Copy DEX seed". Done on the
+	// UI thread so the button.Text / .Color writes don't race with Layout.
+	if pg.copyResetPending.CompareAndSwap(true, false) {
+		pg.copyDEXSeed.Text = values.String(values.StrCopy)
+		pg.copyDEXSeed.Color = pg.Theme.Color.Primary
+	}
+
 	if pg.network.Clicked(gtx) {
 		currentNetType := string(pg.AssetsManager.NetType())
 		networkSelectorModal := preference.NewListPreference(pg.Load, "", currentNetType, preference.NetworkTypes).
@@ -687,9 +705,13 @@ func (pg *AppSettingsPage) HandleUserInteractions(gtx C) {
 		gtx.Execute(clipboard.WriteCmd{Data: io.NopCloser(strings.NewReader(pg.dexSeed.String()))})
 		pg.copyDEXSeed.Text = values.String(values.StrCopied)
 		pg.copyDEXSeed.Color = pg.Theme.Color.Success
+		// AfterFunc fires on a fresh goroutine — touching button.Text or
+		// .Color from there would race with Layout. Signal via atomic
+		// flag + Reload; the actual reset lands on the UI thread in the
+		// next HandleUserInteractions tick (drained at the top of this
+		// function).
 		time.AfterFunc(time.Second*3, func() {
-			pg.copyDEXSeed.Text = values.String(values.StrCopy)
-			pg.copyDEXSeed.Color = pg.Theme.Color.Primary
+			pg.copyResetPending.Store(true)
 			pg.ParentWindow().Reload()
 		})
 	}
@@ -876,7 +898,7 @@ func ChangeNetworkType(load *load.Load, windowNav app.WindowNavigator, newNetTyp
 
 	confirmNetworkSwitchModal := modal.NewCustomModal(load).
 		Title(modalTitle).
-		Body("Your app will restart to apply this change. Continue?"). // TODO: localize
+		Body(values.String(values.StrAppRestartToApply)).
 		SetCancelable(true).
 		SetPositiveButtonText(values.String(values.StrYes)).
 		SetNegativeButtonText(values.String(values.StrCancel)).

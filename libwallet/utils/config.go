@@ -116,6 +116,46 @@ func (str AssetType) String() string {
 	return string(str)
 }
 
+// DisplayName returns the user-facing label for the asset type. For
+// Monetarium-forked AssetType the internal ID is still "DCR" (a
+// Cryptopower/Decred convention we keep for serialisation stability —
+// changing the const would break stored config keys, the storm DB
+// schema, every API caller that compares against "DCR" string, etc.),
+// but the brand surface says "VAR & SKA": one wallet holds VAR
+// (Varta) plus N SKAn (Skarb) token coin types. UI dropdowns / titles
+// / wallet-selector labels use this; do NOT use it for equality
+// against AssetType constants. For the reverse mapping (text →
+// AssetType) call ParseAssetTypeDisplayName.
+func (str AssetType) DisplayName() string {
+	switch str {
+	case DCRWalletAsset:
+		return "VAR & SKA"
+	case BTCWalletAsset:
+		return "BTC"
+	case LTCWalletAsset:
+		return "LTC"
+	default:
+		return string(str)
+	}
+}
+
+// ParseAssetTypeDisplayName maps a user-facing label back to the
+// internal AssetType ID. Counterpart to DisplayName — kept on the
+// same package so the two stay in sync. Returns NilAsset if the
+// label doesn't match any known asset.
+func ParseAssetTypeDisplayName(label string) AssetType {
+	switch label {
+	case "VAR & SKA":
+		return DCRWalletAsset
+	case "BTC":
+		return BTCWalletAsset
+	case "LTC":
+		return LTCWalletAsset
+	default:
+		return NilAsset
+	}
+}
+
 // ExtractDateOrTime returns the date represented by the timestamp as a date string
 // if the timestamp is over 24 hours ago. Otherwise, the time alone is returned as a string.
 func ExtractDateOrTime(timestamp int64) string {

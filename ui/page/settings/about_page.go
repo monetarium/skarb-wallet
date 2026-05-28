@@ -1,14 +1,11 @@
 package settings
 
 import (
-	"time"
-
 	"gioui.org/layout"
 
 	"github.com/monetarium/skarb-wallet/app"
 	"github.com/monetarium/skarb-wallet/ui/cryptomaterial"
 	"github.com/monetarium/skarb-wallet/ui/load"
-	"github.com/monetarium/skarb-wallet/ui/modal"
 	"github.com/monetarium/skarb-wallet/ui/page/components"
 	"github.com/monetarium/skarb-wallet/ui/values"
 )
@@ -32,9 +29,6 @@ type AboutPage struct {
 	licenseRow     *cryptomaterial.Clickable
 	backButton     cryptomaterial.IconButton
 	shadowBox      *cryptomaterial.Shadow
-
-	versionTapCount int       // Tap counter
-	lastTapTime     time.Time // Track last tap time
 }
 
 func NewAboutPage(l *load.Load) *AboutPage {
@@ -52,8 +46,6 @@ func NewAboutPage(l *load.Load) *AboutPage {
 		license:          l.Theme.Body1(values.String(values.StrLicense)),
 		licenseRow:       l.Theme.NewClickable(true),
 		shadowBox:        l.Theme.Shadow(),
-		versionTapCount:  0,
-		lastTapTime:      time.Time{},
 	}
 
 	pg.licenseRow.Radius = cryptomaterial.BottomRadius(14)
@@ -191,31 +183,6 @@ func (pg *AboutPage) HandleUserInteractions(gtx C) {
 	if pg.backButton.Button.Clicked(gtx) {
 		pg.ParentNavigator().CloseCurrentPage()
 	}
-
-	if pg.versionRow.Clicked(gtx) {
-		now := time.Now()
-		if now.Sub(pg.lastTapTime) > 5*time.Second {
-			pg.versionTapCount = 0
-		}
-
-		pg.versionTapCount++
-		pg.lastTapTime = now
-
-		if pg.versionTapCount >= 5 {
-			pg.versionTapCount = 0
-			pg.showSecretModal()
-		}
-	}
-}
-
-func (pg *AboutPage) showSecretModal() {
-	secretModal := modal.NewCustomModal(pg.Load).
-		SetCancelable(true).
-		SetupWithTemplate(modal.StakeyImageTemplate).
-		SetContentAlignment(layout.W, layout.Center, layout.Center).
-		SetPositiveButtonText("") // No positive button
-
-	pg.ParentWindow().ShowModal(secretModal)
 }
 
 // OnNavigatedFrom is called when the page is about to be removed from

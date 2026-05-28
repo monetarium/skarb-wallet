@@ -121,34 +121,48 @@ func (pg *WalletSelectorPage) OnNavigatedTo() {
 	}
 
 	go func() {
-		// calculate total assets balance
+		// All three pg.* map writes below race with the Layout reads
+		// at lines ~375-386 (`pg.assetsBalance[asset]`,
+		// `pg.assetsTotalUSDBalance[asset]`, `pg.assetRate[...]`) —
+		// Go maps are not safe for concurrent read/write. listLock
+		// (sync.RWMutex) already exists on the page; previous code
+		// declared it but didn't apply it to the balance maps, so
+		// concurrent access crashed under `go run -race`.
+		//
+		// Compute everything first (slow path: network + rate source),
+		// then acquire the write lock for the single batch swap into
+		// pg.* fields, then release before Reload. Layout's reads
+		// guard via pg.listLock.RLock() in Layout's enclosing function.
+
 		assetsBalance, err := pg.AssetsManager.CalculateTotalAssetsBalance(true)
 		if err != nil {
 			log.Error(err)
 		}
-		pg.assetsBalance = assetsBalance
-
-		// calculate total assets balance in USD
 		assetsTotalUSDBalance, err := pg.AssetsManager.CalculateAssetsUSDBalance(assetsBalance)
 		if err != nil {
 			log.Error(err)
 		}
-		pg.assetsTotalUSDBalance = assetsTotalUSDBalance
-
-		// calculate assets USD rate
+		rateUpdates := make(map[libutils.AssetType]float64, len(assetsBalance))
 		for assetType := range assetsBalance {
 			marketValue, exist := values.AssetExchangeMarketValue[assetType]
 			if !exist {
 				log.Errorf("Unsupported asset type: %s", assetType)
 				break
 			}
-
 			rate := pg.AssetsManager.RateSource.GetTicker(marketValue, true)
 			if rate == nil || rate.LastTradePrice <= 0 {
 				continue
 			}
-			pg.assetRate[assetType] = rate.LastTradePrice
+			rateUpdates[assetType] = rate.LastTradePrice
 		}
+
+		pg.listLock.Lock()
+		pg.assetsBalance = assetsBalance
+		pg.assetsTotalUSDBalance = assetsTotalUSDBalance
+		for assetType, rate := range rateUpdates {
+			pg.assetRate[assetType] = rate
+		}
+		pg.listLock.Unlock()
 
 		pg.ParentWindow().Reload()
 	}()
@@ -311,6 +325,13 @@ func (pg *WalletSelectorPage) assetDropdown(asset libutils.AssetType) layout.Wid
 }
 
 func (pg *WalletSelectorPage) dropdownTitleLayout(gtx C, asset libutils.AssetType) D {
+	// listLock guards the three balance/USD/rate maps populated by the
+	// background goroutine in OnNavigatedTo. RLock here covers every
+	// map read in this function (and its layout closures); the
+	// goroutine acquires Lock() before its batch swap.
+	pg.listLock.RLock()
+	defer pg.listLock.RUnlock()
+
 	margin := layout.Inset{}
 	if pg.assetCollapsibles[asset].IsExpanded() {
 		margin = layout.Inset{Bottom: values.MarginPadding5}
@@ -372,7 +393,7 @@ func (pg *WalletSelectorPage) dropdownTitleLayout(gtx C, asset libutils.AssetTyp
 						}.Layout(gtx,
 							layout.Rigid(func(gtx C) D {
 								// check if asset balance is nil
-								if pg.assetsBalance[asset] == nil || pg.assetsBalance[asset].String() == "0 BTC" {
+								if pg.assetsBalance[asset] == nil {
 									txt := pg.Theme.Label(values.TextSize16, "0.00 "+asset.String())
 									txt.Color = pg.Theme.Color.Text
 									txt.Font.Weight = font.SemiBold

@@ -184,15 +184,30 @@ func (asset *Asset) UnspentOutputs(account int32) ([]*sharedW.UnspentOutput, err
 		return nil, utils.ErrDCRNotInitialized
 	}
 
-	policy := w.OutputSelectionPolicy{
-		Account:               uint32(account),
-		RequiredConfirmations: asset.RequiredConfirmations(),
-	}
-
+	// Upstream wallet.UnspentOutputs only walks the bucket for ONE coin
+	// type (`policy.CoinType`, defaulting to 0 = VAR). A wallet that
+	// holds only SKA1 returns zero results here, so the manual UTXO
+	// selector and any downstream consumer gets an empty list to filter
+	// — the user-facing symptom is "I have 530 SKA1 but the UTXO
+	// selector is blank". Iterate over every active coin type and
+	// concatenate the per-coin results into a single flat slice; the
+	// UI then filters by the send-page's currently-selected coin type
+	// (manual_coin_selection.go) so the user sees only what they can
+	// spend with the active selection.
 	ctx, _ := asset.ShutdownContextWithCancel()
-	unspents, err := asset.Internal().DCR.UnspentOutputs(ctx, policy)
-	if err != nil {
-		return nil, err
+	activeCoins := asset.ActiveCoinTypes()
+	unspents := make([]*w.TransactionOutput, 0)
+	for _, ct := range activeCoins {
+		policy := w.OutputSelectionPolicy{
+			Account:               uint32(account),
+			RequiredConfirmations: asset.RequiredConfirmations(),
+			CoinType:              ct,
+		}
+		perCoin, err := asset.Internal().DCR.UnspentOutputs(ctx, policy)
+		if err != nil {
+			return nil, err
+		}
+		unspents = append(unspents, perCoin...)
 	}
 
 	unspentOutputs := make([]*sharedW.UnspentOutput, 0, len(unspents))
@@ -215,16 +230,30 @@ func (asset *Asset) UnspentOutputs(account int32) ([]*sharedW.UnspentOutput, err
 			addr = addresses[0]
 		}
 
+		// SKA UTXOs ship with Output.Value=0; their atom count lives in
+		// Output.SKAValue (*big.Int). Carry both channels through:
+		// the int64 Amount stays VAR-shaped (0 for SKA, real for VAR)
+		// to keep legacy callers happy, and SKAAmountAtoms holds the
+		// lossless decimal-string atoms when this UTXO is SKA. The
+		// CoinType field lets the UI filter — without it, manual-coin-
+		// selection treats every UTXO as VAR.
+		ct := uint8(utxo.Output.CoinType)
+		var skaAtomsStr string
+		if utxo.Output.CoinType.IsSKA() && utxo.Output.SKAValue != nil && utxo.Output.SKAValue.Sign() > 0 {
+			skaAtomsStr = utxo.Output.SKAValue.String()
+		}
 		unspentOutputs = append(unspentOutputs, &sharedW.UnspentOutput{
-			TxID:          utxo.OutPoint.Hash.String(),
-			Vout:          utxo.OutPoint.Index,
-			Address:       addr,
-			Amount:        Amount(utxo.Output.Value),
-			ScriptPubKey:  hex.EncodeToString(utxo.Output.PkScript),
-			ReceiveTime:   utxo.ReceiveTime,
-			Confirmations: confirmations,
-			Spendable:     true,
-			Tree:          utxo.OutPoint.Tree,
+			TxID:           utxo.OutPoint.Hash.String(),
+			Vout:           utxo.OutPoint.Index,
+			Address:        addr,
+			Amount:         Amount(utxo.Output.Value),
+			ScriptPubKey:   hex.EncodeToString(utxo.Output.PkScript),
+			ReceiveTime:    utxo.ReceiveTime,
+			Confirmations:  confirmations,
+			Spendable:      true,
+			Tree:           utxo.OutPoint.Tree,
+			CoinType:       ct,
+			SKAAmountAtoms: skaAtomsStr,
 		})
 	}
 

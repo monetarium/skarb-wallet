@@ -40,6 +40,16 @@ type WalletSyncInfo struct {
 	statusMu          sync.RWMutex
 
 	switchEnabled atomic.Bool
+
+	// cachedBlockAgeText holds the formatted "Latest block — N (X ago)"
+	// string. Gio re-runs Layout on EVERY event (mouse move, scroll,
+	// focus), so if we called pageutils.TimeAgo() inline inside Layout
+	// the displayed time would advance with the cursor — exactly what
+	// the user complained about ("реагує на курсор"). The cache is
+	// refreshed only from RefreshBlockAge(), which is driven by the
+	// Info-page ticker and OnBlockAttached. Layout reads the string,
+	// never recomputes from time.Now().
+	cachedBlockAgeText atomic.Value // string
 }
 
 // SyncInfo is made independent of the WalletSyncInfo struct so that once
@@ -99,6 +109,41 @@ func (wsi *WalletSyncInfo) SetSliderOn() {
 
 func (wsi *WalletSyncInfo) GetWallet() sharedW.Asset {
 	return wsi.wallet
+}
+
+// RefreshBlockAge recomputes the "Latest block" string from the current
+// best-block height and timestamp, storing the result for Layout to
+// consume. Called by:
+//   - info_page block-age ticker (5s cadence) — advances "X ago"
+//     without requiring user interaction.
+//   - OnBlockAttached / OnNavigatedTo — picks up new height immediately.
+//
+// Safe to call from any goroutine: atomic.Value handles the write,
+// Layout reads the value through blockAgeText().
+func (wsi *WalletSyncInfo) RefreshBlockAge() {
+	bestBlock := wsi.wallet.GetBestBlock()
+	if bestBlock == nil {
+		return
+	}
+	text := fmt.Sprintf("%d (%s)", bestBlock.Height, pageutils.TimeAgo(bestBlock.Timestamp))
+	wsi.cachedBlockAgeText.Store(text)
+}
+
+// blockAgeText returns the cached string Layout should display. If the
+// cache is empty (first frame before RefreshBlockAge runs) it falls back
+// to a live computation — acceptable for one frame, after which the
+// ticker takes over and the cache is always populated.
+func (wsi *WalletSyncInfo) blockAgeText() string {
+	if v := wsi.cachedBlockAgeText.Load(); v != nil {
+		if s, ok := v.(string); ok && s != "" {
+			return s
+		}
+	}
+	bestBlock := wsi.wallet.GetBestBlock()
+	if bestBlock == nil {
+		return ""
+	}
+	return fmt.Sprintf("%d (%s)", bestBlock.Height, pageutils.TimeAgo(bestBlock.Timestamp))
 }
 
 func (wsi *WalletSyncInfo) WalletInfoLayout(gtx C) D {
@@ -401,8 +446,13 @@ func (wsi *WalletSyncInfo) syncContent(gtx C, uniform layout.Inset) D {
 							return wsi.labelTexSize16Layout(syncProgressState, dp8, false)(gtx)
 						}),
 						layout.Rigid(func(gtx C) D {
-							latestBlockTitle := fmt.Sprintf("%d (%s)", bestBlock.Height, pageutils.TimeAgo(bestBlock.Timestamp))
-							return wsi.labelTexSize16Layout(latestBlockTitle, dp8, false)(gtx)
+							// Read from cache instead of recomputing — see
+							// RefreshBlockAge doc-comment. Inline TimeAgo()
+							// would re-read time.Now() on every Gio event
+							// (mouse move, scroll), causing the display to
+							// "react to the cursor" instead of advancing on
+							// the ticker.
+							return wsi.labelTexSize16Layout(wsi.blockAgeText(), dp8, false)(gtx)
 						}),
 						layout.Rigid(func(gtx C) D {
 							if !isInProgress || (isRescanning && wsi.isBtcOrLtcAsset()) {
@@ -657,6 +707,11 @@ func (wsi *WalletSyncInfo) ListenForNotifications() {
 			wsi.reload()
 		},
 		OnBlockAttached: func(_ int, _ int32) {
+			// New block — recompute cached "X ago" string immediately
+			// so the Reload() below paints the freshly-cached value.
+			// Without this, the cache holds the previous block's data
+			// until the next 5s tick.
+			wsi.RefreshBlockAge()
 			wsi.reload()
 		},
 	}

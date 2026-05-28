@@ -5,6 +5,7 @@ import (
 	"image/color"
 	"io"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"gioui.org/font"
@@ -60,6 +61,13 @@ type SaveSeedPage struct {
 	redirectCallback     Redirectfunc
 	wordSeedType         sharedW.WordSeedType
 	seedFormatRadioGroup *widget.Enum
+
+	// copyResetPending is set from a time.AfterFunc goroutine 3s after the
+	// user pressed Copy, signalling that the button's "Copied" feedback
+	// should revert. Writing copy.Text / .Color directly from that
+	// goroutine races with Layout. Same pattern as the broadcast-success
+	// reset in ui/page/send/page.go.
+	copyResetPending atomic.Bool
 }
 
 func NewSaveSeedPage(l *load.Load, wallet sharedW.Asset, redirect Redirectfunc) *SaveSeedPage {
@@ -185,6 +193,13 @@ func divideWordsIntoRows(words []string, numberOfColumns int) []saveSeedRow {
 // displayed.
 // Part of the load.Page interface.
 func (pg *SaveSeedPage) HandleUserInteractions(gtx C) {
+	// Drain the clipboard-feedback reset signalled from the AfterFunc
+	// goroutine 3s after Copy was clicked. UI-thread mutation, no race.
+	if pg.copyResetPending.CompareAndSwap(true, false) {
+		pg.copy.Text = values.String(values.StrCopy)
+		pg.copy.Color = pg.Theme.Color.Primary
+	}
+
 	if pg.actionButton.Clicked(gtx) {
 		pg.ParentNavigator().Display(NewVerifySeedPage(pg.Load, pg.wallet, pg.seed, pg.wordSeedType, pg.redirectCallback))
 	}
@@ -356,9 +371,11 @@ func (pg *SaveSeedPage) handleCopyEvent(gtx C) {
 
 		pg.copy.Text = values.String(values.StrCopied)
 		pg.copy.Color = pg.Theme.Color.Success
+		// AfterFunc fires on a goroutine — can't write copy.Text /
+		// .Color directly (Layout reads them on UI thread). Signal via
+		// atomic + Reload; HandleUserInteractions drains.
 		time.AfterFunc(time.Second*3, func() {
-			pg.copy.Text = values.String(values.StrCopy)
-			pg.copy.Color = pg.Theme.Color.Primary
+			pg.copyResetPending.Store(true)
 			pg.ParentWindow().Reload()
 		})
 	}

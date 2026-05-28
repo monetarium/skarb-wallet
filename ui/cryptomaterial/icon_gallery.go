@@ -19,14 +19,14 @@ type Icons struct {
 	ReceiveIcon, Transferred, TransactionsIcon, TransactionsIconInactive, SendIcon,
 	PendingIcon, Logo, RedirectIcon, ConfirmIcon, NewWalletIcon, ArrowForward, AccountIcon,
 	EditIcon, expandIcon, MixedTx, Mixer, SettingsIcon,
-	ArrowDownIcon, SyncingIcon, TransactionFingerprint, DocumentationIcon, TimerIcon, StakeIcon, StakeIconInactive, StakeyIcon,
+	ArrowDownIcon, SyncingIcon, TransactionFingerprint, DocumentationIcon, TimerIcon, StakeIcon, StakeIconInactive,
 	GovernanceActiveIcon, GovernanceInactiveIcon, LogoDarkMode, TimerDarkMode, Rebroadcast, Notification, SuccessIcon, FailedIcon,
 	MixedTxIcon, UnmixedTxIcon, MixerIcon, NotSynced, InfoAction, LightMode, DarkMode, AddExchange, FlypMeIcon, ChangellyIcon,
 	SimpleSwapIcon, SwapzoneIcon, ShapeShiftIcon, GodexIcon, CoinSwitchIcon, ChangeNowIcon, TrocadorIcon,
 	LTCBackground, LTCGroupIcon, DCRBackground, LogoDCRSlide, BTCBackground, BTCGroupIcon, CrossPlatformIcon,
 	IntegratedExchangeIcon, MultiWalletIcon, Dot, TradeExchangeIcon, FilterImgIcon, FilterOffImgIcon, ShareIcon,
-	CircleBTC, CircleLTC, CircleDCR, TelegramIcon, MatrixIcon, WebsiteIcon, TwitterIcon, OrangeAlert, ImportedAccountIcon,
-	StakeyImage *Image
+	CircleBTC, CircleLTC, CircleDCR, TelegramIcon, MatrixIcon, WebsiteIcon, TwitterIcon, OrangeAlert,
+	ImportedAccountIcon *Image
 
 	TicketImmatureIcon,
 	TicketLiveIcon,
@@ -110,7 +110,6 @@ func (i *Icons) DefaultIcons() *Icons {
 	i.TradeIconInactive = NewImage(decredIcons["ic_trade_inactive"])
 	i.StakeIcon = NewImage(decredIcons["ic_stake"])
 	i.StakeIconInactive = NewImage(decredIcons["ic_stake_inactive"])
-	i.StakeyIcon = NewImage(decredIcons["ic_stakey"])
 	i.TicketImmatureIcon = NewImage(decredIcons["ic_ticket_immature"])
 	i.TicketUnminedIcon = NewImage(decredIcons["ic_ticket_unmined"])
 	i.TicketLiveIcon = NewImage(decredIcons["ic_ticket_live"])
@@ -184,7 +183,6 @@ func (i *Icons) DefaultIcons() *Icons {
 	i.MatrixIcon = NewImage(decredIcons["ic_matrix"])
 	i.WebsiteIcon = NewImage(decredIcons["ic_www"])
 	i.TwitterIcon = NewImage(decredIcons["logo_twitter"])
-	i.StakeyImage = NewImage(decredIcons["stakey_deal_with_it"])
 
 	return i
 }

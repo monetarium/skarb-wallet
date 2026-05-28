@@ -126,6 +126,15 @@ func SetWalletLogo(l *load.Load, gtx C, assetType libutils.AssetType, size unit.
 	return D{}
 }
 
+// LayoutOrderAmount is currently dead (no call sites), kept for the legacy
+// order-rendering surface. The float64 input channel makes this unusable
+// for SKA: dcrutil.NewAmount multiplies by 1e8 (VAR atoms/coin), and
+// float64's 53-bit mantissa drops the last ~3 decimal digits of a
+// 18-decimal SKA value before this function ever sees it. If a caller
+// needs to render a SKA order amount, switch to FormatTxAmountBig with a
+// string-atoms channel, don't extend this signature. The explicit SKA
+// rejection below is a sentinel — better an obviously-broken label than
+// a quietly-truncated number routed through dcrutil.Amount.
 func LayoutOrderAmount(l *load.Load, gtx C, assetType string, amount float64) D {
 	var convertedAmountStr string
 

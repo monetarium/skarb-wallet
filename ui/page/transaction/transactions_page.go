@@ -47,9 +47,13 @@ type multiWalletTx struct {
 	walletID int
 }
 
+// txTabs holds the transaction-category tabs. Staking (StrStakingTx) was
+// removed in Skarb v1 — Monetarium has no staking — leaving a single
+// "regular" category, so the tab bar itself is hidden in Layout when only
+// one category remains. Kept as a slice (not a constant) so re-introducing
+// categories later is a one-line change.
 var txTabs = []string{
 	values.StrTxRegular,
-	values.StrStakingTx,
 }
 
 // TransactionsPage shows transactions for a specific wallet or for all wallets.
@@ -137,13 +141,35 @@ func NewTransactionsPage(l *load.Load, wallet sharedW.Asset) *TransactionsPage {
 }
 
 // initCoinTypeDropdown rebuilds the asset filter dropdown from the selected
-// wallet's active coin types. The first item is always "All assets"; the
-// remaining items are pulled from chaincfg.Params.GetActiveSKATypes() (plus
-// VAR), so the dropdown reflects whatever is currently active on chain.
+// wallet's active coin types. Index 0 is always the "All assets" sentinel
+// (filter disabled); subsequent items are pulled from
+// chaincfg.Params.GetActiveSKATypes() (plus VAR), so the dropdown reflects
+// whatever is currently active on chain.
+//
+// Two correctness traps it threads:
+//
+//  1. Preserve current selection across rebuild. The legacy code rebuilt
+//     a fresh DropDown on every walletDropDown.Changed event, defaulting
+//     selectedIndex back to "All assets" — silently wiping any coin
+//     filter the user had set whenever they switched wallets. We grab
+//     the prior coin-type via prevCoinType and re-apply it after the
+//     rebuild so the user's filter survives a wallet swap.
+//
+//  2. "All assets" sentinel survives localization. The label is now
+//     `values.String(StrAllAssets)` — "Усі активи" in Ukrainian. The
+//     downstream filter (filterByCoinType) uses SelectedIndex()==0 to
+//     detect the sentinel, NOT a string comparison against "All assets".
+//     A string match would silently break the moment the locale label
+//     differs from the en-literal sentinel (the tx list would become
+//     empty in non-EN locales).
 func (pg *TransactionsPage) initCoinTypeDropdown() {
-	items := []cryptomaterial.DropDownItem{{Text: "All assets"}}
+	prevCoinType := pg.selectedCoinType()
+
+	items := []cryptomaterial.DropDownItem{{Text: values.String(values.StrAllAssets)}}
 	if dcrAsset, ok := pg.selectedWallet.(*dcr.Asset); ok {
-		for _, ct := range dcrAsset.ActiveCoinTypes() {
+		// DisplayableCoinTypes filters by wallet activity so users don't
+		// see SKA-n entries they've never received (bug #7).
+		for _, ct := range dcrAsset.DisplayableCoinTypes() {
 			items = append(items, cryptomaterial.DropDownItem{Text: dcr.CoinSymbol(ct)})
 		}
 	} else {
@@ -155,11 +181,70 @@ func (pg *TransactionsPage) initCoinTypeDropdown() {
 			cryptomaterial.DropDownItem{Text: dcr.CoinSymbol(cointype.CoinType(1))},
 		)
 	}
+
+	// Re-apply the user's prior coin filter when the new wallet still has
+	// activity for it. Default to 0 (All assets) when the prior coin
+	// isn't displayable for this wallet — better to show all txs than to
+	// silently filter to a coin the user never had.
+	selectedIndex := 0
+	if prevCoinType != nil {
+		want := dcr.CoinSymbol(*prevCoinType)
+		for i, item := range items {
+			if item.Text == want {
+				selectedIndex = i
+				break
+			}
+		}
+	}
+
 	pg.coinTypeDropDown = pg.Theme.DropdownWithCustomPos(items, values.CoinTypeDropdownGroup, 2, 0, false)
 	pg.coinTypeDropDown.Width = values.MarginPadding100
 	pg.coinTypeDropDown.CollapsedLayoutTextDirection = layout.E
 	pg.coinTypeDropDown.SetConvertTextSize(pg.ConvertTextSize)
 	settingCommonDropdown(pg.Theme, pg.coinTypeDropDown)
+	if selectedIndex > 0 {
+		pg.coinTypeDropDown.SetSelectedValue(items[selectedIndex].Text)
+	}
+}
+
+// selectedCoinType returns the currently filter-selected coin type, or nil
+// when the "All assets" sentinel (index 0) is active. Used to preserve the
+// user's choice across dropdown rebuilds and to drive filterByCoinType
+// without depending on the localized label text matching.
+func (pg *TransactionsPage) selectedCoinType() *cointype.CoinType {
+	if pg.coinTypeDropDown == nil {
+		return nil
+	}
+	idx := pg.coinTypeDropDown.SelectedIndex()
+	if idx <= 0 {
+		return nil
+	}
+	// Reverse-map the label back to a CoinType by walking the active
+	// list in display order. The first item is the sentinel; subsequent
+	// items mirror DisplayableCoinTypes()'s ordering (VAR first, then
+	// SKA-n numeric). We keep the mapping label-driven (not index-direct)
+	// because the dropdown items slice isn't preserved on rebuild.
+	picked := pg.coinTypeDropDown.Selected()
+	if picked == "" {
+		return nil
+	}
+	if dcrAsset, ok := pg.selectedWallet.(*dcr.Asset); ok {
+		for _, ct := range dcrAsset.DisplayableCoinTypes() {
+			if dcr.CoinSymbol(ct) == picked {
+				ct := ct // capture loop var
+				return &ct
+			}
+		}
+	} else {
+		// Multi-wallet fallback list mirrors initCoinTypeDropdown.
+		for _, ct := range []cointype.CoinType{cointype.CoinTypeVAR, cointype.CoinType(1)} {
+			if dcr.CoinSymbol(ct) == picked {
+				ct := ct
+				return &ct
+			}
+		}
+	}
+	return nil
 }
 
 func NewTransactionsPageWithType(l *load.Load, selectedTab int, wallet sharedW.Asset) *TransactionsPage {
@@ -171,6 +256,11 @@ func NewTransactionsPageWithType(l *load.Load, selectedTab int, wallet sharedW.A
 		txCategoryTab:    l.Theme.SegmentedControl(txTabs, cryptomaterial.SegmentTypeGroup),
 		selectedWallet:   wallet,
 		isShowTitle:      true,
+	}
+	// Guard against an out-of-range selectedTab: txTabs shrank to a single
+	// entry when staking was removed, and callers may still pass a stale index.
+	if selectedTab < 0 || selectedTab >= len(txTabs) {
+		selectedTab = 0
 	}
 	pg.selectedTxCategoryTab = selectedTab
 	pg.txCategoryTab.SetSelectedSegment(txTabs[selectedTab])
@@ -327,15 +417,18 @@ func (pg *TransactionsPage) fetchTransactions(offset, pageSize int32) (txs []*mu
 	return txs, len(txs), isReset, err
 }
 
-// filterByCoinType drops any transactions whose CoinType differs from the one
-// selected in the coin-type filter dropdown. The "All assets" sentinel skips
-// the filter entirely.
+// filterByCoinType drops any transactions whose CoinType differs from the
+// one selected in the coin-type filter dropdown. The "All assets"
+// sentinel (index 0) skips the filter entirely.
+//
+// Sentinel detection is index-based, not text-based: comparing against the
+// literal "All assets" used to silently break in non-EN locales (the
+// label is `values.String(StrAllAssets)`, which is "Усі активи" in
+// Ukrainian — the string comparison would never match the sentinel and
+// the list would render as empty).
 func (pg *TransactionsPage) filterByCoinType(in []*multiWalletTx) []*multiWalletTx {
-	if pg.coinTypeDropDown == nil {
-		return in
-	}
-	picked := pg.coinTypeDropDown.Selected()
-	if picked == "" || picked == "All assets" {
+	picked := pg.selectedCoinType()
+	if picked == nil {
 		return in
 	}
 	out := in[:0]
@@ -343,7 +436,7 @@ func (pg *TransactionsPage) filterByCoinType(in []*multiWalletTx) []*multiWallet
 		if mw.Transaction == nil {
 			continue
 		}
-		if dcr.CoinSymbol(cointype.CoinType(mw.CoinType)) == picked {
+		if cointype.CoinType(mw.CoinType) == *picked {
 			out = append(out, mw)
 		}
 	}
@@ -422,7 +515,10 @@ func settingCommonDropdown(t *cryptomaterial.Theme, dropdown *cryptomaterial.Dro
 // Part of the load.Page interface.
 func (pg *TransactionsPage) Layout(gtx C) D {
 	isDCRAssetSelected := pg.selectedWallet != nil && pg.selectedWallet.GetAssetType() == utils.DCRWalletAsset
-	if isDCRAssetSelected || (pg.dcrWalletExists && pg.selectedWallet == nil) {
+	// The category tab bar is only meaningful when there is more than one
+	// category. Staking was removed in Skarb v1 (Monetarium has no staking),
+	// leaving a single "regular" category, so the bar is hidden entirely.
+	if len(txTabs) > 1 && (isDCRAssetSelected || (pg.dcrWalletExists && pg.selectedWallet == nil)) {
 		// Only show tx category navigation txCategoryTab for DCR wallets.
 		return pg.txCategoryTab.Layout(gtx, pg.layoutContent, pg.IsMobileView())
 	}
@@ -800,10 +896,16 @@ func exportTxs(assets []sharedW.Asset, fileName string) error {
 				tx.Hash,
 				tx.Type,
 				txhelper.TxDirectionString(tx.Direction),
-				// CSV row formatted under the tx's actual CoinType so SKA exports
-				// don't silently rebrand to "X.XX VAR" via dcrutil.Amount.String().
-				dcr.FormatTxAmount(tx.Fee, tx.CoinType),
-				dcr.FormatTxAmount(tx.Amount, tx.CoinType),
+				// CSV row formatted under the tx's actual CoinType so SKA
+				// exports don't silently rebrand to "X.XX VAR" via
+				// dcrutil.Amount.String(). We use the *Big formatter so
+				// that SKA amounts larger than int64 (a single UTXO past
+				// ~9.22 SKA) and SKA mempool fees (where the int64
+				// channel can be wire-stripped to zero) export with the
+				// lossless decimal-string field rather than the
+				// truncated int64 mirror.
+				dcr.FormatTxAmountBig(tx.FeeAtoms, tx.Fee, tx.CoinType),
+				dcr.FormatTxAmountBig(tx.AmountAtoms, tx.Amount, tx.CoinType),
 			})
 			if err != nil {
 				return fmt.Errorf("csv.Writer.Write error: %v", err)

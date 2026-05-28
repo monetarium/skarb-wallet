@@ -31,7 +31,17 @@ type sendConfirmModal struct {
 	passwordEditor               cryptomaterial.Editor
 
 	txSent    func()
-	isSending bool
+	// txBroadcastSuccess fires from the broadcast goroutine the instant
+	// Broadcast() returns nil, BEFORE the success modal is shown. The page
+	// uses it to nudge the underlying Send form out of its pre-broadcast
+	// state (amount editor still holds the typed atoms, balance just hit
+	// zero, per-frame validation flips to "Insufficient funds" behind the
+	// green-check modal — jarring). The callback must be goroutine-safe:
+	// the Send page's implementation does an atomic flag flip + window
+	// Invalidate, and the actual editor.SetText / autoDefault work happens
+	// on the next UI-thread HandleUserInteractions tick.
+	txBroadcastSuccess func()
+	isSending          bool
 
 	*authoredTxData
 	asset           sharedW.Asset
@@ -52,7 +62,14 @@ func newSendConfirmModal(l *load.Load, data *authoredTxData, asset sharedW.Asset
 	scm.closeConfirmationModalButton = l.Theme.OutlineButton(values.String(values.StrCancel))
 	scm.closeConfirmationModalButton.Font.Weight = font.Medium
 
-	scm.confirmButton = l.Theme.Button("")
+	// Pre-resolve the translated label in the constructor: the modal is
+	// short-lived (created on Confirm click, gone after "Гаразд") so we
+	// don't need a per-frame refresh, and resolving here also fixes the
+	// legacy bug where Layout assigned `scm.confirmButton.Text =
+	// values.StrSend` — that's the localization-table KEY ("send"), not
+	// the translated text, so the final action button showed the literal
+	// "send" string verbatim in both EN and UK locales.
+	scm.confirmButton = l.Theme.Button(values.String(values.StrSend))
 	scm.confirmButton.Font.Weight = font.Medium
 	scm.confirmButton.SetEnabled(false)
 
@@ -96,13 +113,52 @@ func (scm *sendConfirmModal) broadcastTransaction() {
 			scm.ParentWindow().Reload()
 			return
 		}
+		// Capture the callbacks once, *before* the modals start moving
+		// around. The success-modal "Гаразд" handler runs on a later
+		// event-loop tick after the user clicks; if we let scm.txSent()
+		// fire in this goroutine (as the original code did) it would
+		// synchronously dismiss pg.modalLayout — tearing down the page
+		// and its ParentNavigator — and then the "Гаразд" callback
+		// would dereference a destroyed page through scm.sentHandle,
+		// crashing the goroutine and silently killing the Gio event
+		// loop. That's bug #4 in the v1 report ("Skarb closes after
+		// Гаразд"). Run sentHandle (navigate to tx details) BEFORE
+		// txSent (teardown) so the navigator is still alive at the
+		// time we need it.
+		handleSent := scm.sentHandle
+		teardown := scm.txSent
+
+		// Form-state reset goes here, not in `teardown`. Reset clears the
+		// recipient editors and the cached fee/total strings — operations
+		// safe to schedule from this goroutine via an atomic-flag-+
+		// -invalidate pattern (the Send page picks them up on the next
+		// HandleUserInteractions tick). Doing it BEFORE ShowModal means the
+		// form behind the green-check success modal is already clean by
+		// the time Gio repaints, so the user doesn't see "Недостатньо
+		// коштів" appearing under the "Transaction sent!" banner. The
+		// page-teardown (`teardown` / `txSent`) still happens after
+		// "Гаразд" because that's the call that dismisses pg.modalLayout
+		// — running it inline crashes the navigator (bug #4 in v1).
+		if scm.txBroadcastSuccess != nil {
+			scm.txBroadcastSuccess()
+		}
+
 		successModal := modal.NewSuccessModal(scm.Load, values.String(values.StrTxSent), func(_ bool, _ *modal.InfoModal) bool {
-			scm.sentHandle(txHash)
+			if handleSent != nil {
+				handleSent(txHash)
+			}
+			if teardown != nil {
+				teardown()
+			}
 			return true
 		})
 		scm.ParentWindow().ShowModal(successModal)
-
-		scm.txSent()
+		// Confirm modal goes away now; the success modal sits on top
+		// and waits for "Гаразд". The Send page underneath stays
+		// mounted until the success modal fires its callback —
+		// recipient field state stays visible behind the modal, which
+		// is the same as the old behaviour from the user's point of
+		// view but without the use-after-free.
 		scm.Dismiss()
 	}()
 }
@@ -273,7 +329,9 @@ func (scm *sendConfirmModal) Layout(gtx C) D {
 									return material.Loader(scm.Theme.Base).Layout(gtx)
 								})
 							}
-							scm.confirmButton.Text = values.StrSend
+							// Label set once in the constructor with the
+							// translated text — don't reassign it here
+							// (the old code wrote the literal key "send").
 							return scm.confirmButton.Layout(gtx)
 						}),
 					)

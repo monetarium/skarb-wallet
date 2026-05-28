@@ -9,6 +9,8 @@ import (
 	"gioui.org/text"
 	"gioui.org/widget"
 
+	"github.com/monetarium/monetarium-node/cointype"
+	"github.com/monetarium/skarb-wallet/libwallet/assets/dcr"
 	sharedW "github.com/monetarium/skarb-wallet/libwallet/assets/wallet"
 	libutils "github.com/monetarium/skarb-wallet/libwallet/utils"
 	"github.com/monetarium/skarb-wallet/ui/cryptomaterial"
@@ -265,7 +267,16 @@ func (pg *Page) advanceOptionsLayout(gtx C) D {
 					return layout.Inset{
 						Top: values.MarginPadding16,
 					}.Layout(gtx, func(gtx C) D {
-						return pg.contentWrapper(gtx, values.String(values.StrCoinSelection), true, pg.coinSelectionSection)
+						return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
+							layout.Rigid(func(gtx C) D {
+								return pg.contentWrapper(gtx, values.String(values.StrCustomFeeTitle), false, pg.customFeeSection)
+							}),
+							layout.Rigid(func(gtx C) D {
+								return layout.Inset{Top: values.MarginPadding16}.Layout(gtx, func(gtx C) D {
+									return pg.contentWrapper(gtx, values.String(values.StrCoinSelection), true, pg.coinSelectionSection)
+								})
+							}),
+						)
 					})
 				}
 
@@ -279,6 +290,73 @@ func (pg *Page) advanceOptionsLayout(gtx C) D {
 				)
 			}
 			return pg.advanceOptions.Layout(gtx, collapsibleHeader, collapsibleBody)
+		})
+	})
+}
+
+// customFeeSection renders the editable fee-rate input + apply/clear buttons
+// + a bounds-info line ("Range: min — max atoms/KB") + a status line for the
+// last applied/cleared/error result. The actual SetFeeRateOverride call lives
+// in HandleUserInteractions; this function is render-only.
+func (pg *Page) customFeeSection(gtx C) D {
+	dcrAsset, ok := pg.selectedWallet.(*dcr.Asset)
+	if !ok {
+		return D{}
+	}
+	// Convert atomic bounds to the user's coin unit so the visible numbers
+	// are something a human can type. For SKA the min relay fee is
+	// 4e18 atoms/KB (= 4 SKA1/KB) — showing raw atoms here would mean a
+	// 19-digit hint like "Range: 4000000000000000000 — 4000000000000000000000"
+	// which the user can't reasonably read or enter. FormatTxAmountBig
+	// already emits "X.YZ SYMBOL" formatted output; we route the bounds
+	// through it and strip the trailing symbol-with-space for inline
+	// concatenation into the localised template.
+	ct := cointype.CoinTypeVAR
+	if pg.coinTypeDropdown != nil {
+		ct = pg.coinTypeDropdown.Selected()
+	}
+	minR, maxR := dcrAsset.FeeRateBounds()
+	minStr := dcr.FormatTxAmountBig(minR.String(), 0, uint8(ct))
+	maxStr := dcr.FormatTxAmountBig(maxR.String(), 0, uint8(ct))
+	boundsLbl := pg.Theme.Body2(values.StringF(values.StrFeeRateBounds, minStr, maxStr))
+	boundsLbl.Color = pg.Theme.Color.GrayText2
+
+	statusLbl := pg.Theme.Body2(pg.customFeeStatus)
+	if pg.customFeeStatusIsErr {
+		statusLbl.Color = pg.Theme.Color.Danger
+	} else {
+		statusLbl.Color = pg.Theme.Color.Success
+	}
+
+	border := widget.Border{
+		Color:        pg.Theme.Color.Gray4,
+		CornerRadius: values.MarginPadding10,
+		Width:        values.MarginPadding2,
+	}
+	return border.Layout(gtx, func(gtx C) D {
+		return layout.UniformInset(values.MarginPadding12).Layout(gtx, func(gtx C) D {
+			return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
+				layout.Rigid(func(gtx C) D {
+					return layout.Inset{Bottom: values.MarginPadding4}.Layout(gtx, boundsLbl.Layout)
+				}),
+				layout.Rigid(func(gtx C) D {
+					return layout.Flex{Alignment: layout.Middle}.Layout(gtx,
+						layout.Flexed(0.6, pg.customFeeEditor.Layout),
+						layout.Rigid(func(gtx C) D {
+							return layout.Inset{Left: values.MarginPadding8}.Layout(gtx, pg.customFeeApplyBtn.Layout)
+						}),
+						layout.Rigid(func(gtx C) D {
+							return layout.Inset{Left: values.MarginPadding4}.Layout(gtx, pg.customFeeClearBtn.Layout)
+						}),
+					)
+				}),
+				layout.Rigid(func(gtx C) D {
+					if pg.customFeeStatus == "" {
+						return D{}
+					}
+					return layout.Inset{Top: values.MarginPadding6}.Layout(gtx, statusLbl.Layout)
+				}),
+			)
 		})
 	})
 }

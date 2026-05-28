@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"math/big"
+	"strings"
 	"time"
 
 	sharedW "github.com/monetarium/skarb-wallet/libwallet/assets/wallet"
@@ -82,6 +83,92 @@ func AmountAtomForCoinType(f float64, ct cointype.CoinType) int64 {
 	return AmountAtom(f)
 }
 
+// ParseAmountToAtomsBig converts the user-typed amount STRING (not float)
+// directly to *big.Int atoms. This is the lossless replacement for the
+// AmountAtomForCoinTypeBig path that used to go through float64: float
+// has only ~15-17 significant decimal digits, so "1.234567890123456789"
+// SKA lost its last ~3 digits before atomization and the broadcast tx
+// differed from what the user typed (bug #3 in v1 bug report).
+//
+// Accepts decimals with either '.' or ',' separator. Rejects: empty
+// strings, negative numbers, non-digit characters, more digits after the
+// separator than the coin's atom resolution allows (8 for VAR, 18 for
+// SKA). Returns nil with a non-nil error in all rejection cases.
+//
+// For VAR returns big.NewInt(atoms) where atoms = whole*1e8 + frac8.
+// For SKA returns big.Int(whole*1e18 + frac18). The result is
+// authoritative — it is what the authoring path should encode into the
+// tx output's SKAValue / Value field.
+func ParseAmountToAtomsBig(s string, ct cointype.CoinType) (*big.Int, error) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return nil, fmt.Errorf("amount is empty")
+	}
+	// Allow comma as decimal separator (Ukrainian locale convention).
+	s = strings.Replace(s, ",", ".", 1)
+	if strings.HasPrefix(s, "-") {
+		return nil, fmt.Errorf("amount cannot be negative")
+	}
+
+	decimals := 8
+	if ct.IsSKA() {
+		decimals = 18
+	}
+
+	wholePart, fracPart := s, ""
+	if dot := strings.IndexByte(s, '.'); dot >= 0 {
+		wholePart, fracPart = s[:dot], s[dot+1:]
+	}
+	if wholePart == "" {
+		wholePart = "0"
+	}
+	// Strip leading zeros so SetString doesn't reject "0123" on
+	// hypothetical strict-parse backends (math/big is permissive but be
+	// explicit). Reject obvious garbage early.
+	if !isAllDigits(wholePart) {
+		return nil, fmt.Errorf("amount contains non-digit characters: %q", s)
+	}
+	if fracPart != "" && !isAllDigits(fracPart) {
+		return nil, fmt.Errorf("amount contains non-digit characters: %q", s)
+	}
+	if len(fracPart) > decimals {
+		// Truncating silently would change the broadcast amount; refuse
+		// and let the UI surface the limit instead.
+		return nil, fmt.Errorf("amount has %d fractional digits, max %d for this coin",
+			len(fracPart), decimals)
+	}
+	// Pad fractional part to the coin's atom resolution, then concatenate
+	// into a single integer atom string.
+	if pad := decimals - len(fracPart); pad > 0 {
+		fracPart += strings.Repeat("0", pad)
+	}
+	combined := wholePart + fracPart
+	// Trim leading zeros so the resulting big.Int has no surprises;
+	// math/big.SetString(.., 10) handles it either way but keep
+	// representation tidy.
+	combined = strings.TrimLeft(combined, "0")
+	if combined == "" {
+		combined = "0"
+	}
+	atoms, ok := new(big.Int).SetString(combined, 10)
+	if !ok {
+		return nil, fmt.Errorf("amount parse failed: %q", s)
+	}
+	return atoms, nil
+}
+
+func isAllDigits(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
+
 // AmountAtomForCoinTypeBig is the lossless variant: converts a user-typed
 // float to *big.Int atoms without int64 truncation. Returns nil on
 // rejection (negative, NaN). For VAR the result is a fast big.Int wrap of
@@ -94,6 +181,10 @@ func AmountAtomForCoinType(f float64, ct cointype.CoinType) int64 {
 // before this function runs — that's a UI-layer problem (text input) not
 // a math problem here. For phase 1, plumbing the editor text directly
 // through a decimal-string parser would be the next step.
+//
+// Deprecated: prefer ParseAmountToAtomsBig — it accepts the raw user
+// string and avoids the float64 round-trip entirely. Kept for callers
+// that already have a float in hand (USD/exchange-rate conversion).
 func AmountAtomForCoinTypeBig(f float64, ct cointype.CoinType) *big.Int {
 	if math.IsNaN(f) || f < 0 {
 		return nil

@@ -108,37 +108,27 @@ func VerticalInset(v unit.Dp) layout.Inset {
 	return layout.Inset{Top: v, Bottom: v}
 }
 
+// UniformPadding wraps body with a constant 24dp gutter on every side.
+// Original Cryptopower grew the horizontal gutter linearly with window
+// width to keep the content centered on huge screens; for Skarb that
+// produced a "block stranded in the middle" look, so we use a fixed
+// gutter and let the content stretch.
 func UniformPadding(gtx C, body layout.Widget) D {
-	width := gtx.Constraints.Max.X
-
-	padding := values.MarginPadding24
-
-	if (width - 2*gtx.Dp(padding)) > gtx.Dp(values.AppWidth) {
-		paddingValue := float32(width-gtx.Dp(values.AppWidth)) / 4
-		padding = unit.Dp(paddingValue)
-	}
-
 	return layout.Inset{
 		Top:    values.MarginPadding24,
-		Right:  padding,
+		Right:  values.MarginPadding24,
 		Bottom: values.MarginPadding24,
-		Left:   padding,
+		Left:   values.MarginPadding24,
 	}.Layout(gtx, body)
 }
 
+// UniformHorizontalPadding is like UniformPadding but only adds the
+// horizontal gutter (no top/bottom). Same rationale for the constant
+// 24dp instead of a width-proportional value.
 func UniformHorizontalPadding(gtx C, body layout.Widget) D {
-	width := gtx.Constraints.Max.X
-
-	padding := values.MarginPadding24
-
-	if (width - 2*gtx.Dp(padding)) > gtx.Dp(values.AppWidth) {
-		paddingValue := float32(width-gtx.Dp(values.AppWidth)) / 3
-		padding = unit.Dp(paddingValue)
-	}
-
 	return layout.Inset{
-		Right: padding,
-		Left:  padding,
+		Right: values.MarginPadding24,
+		Left:  values.MarginPadding24,
 	}.Layout(gtx, body)
 }
 
@@ -381,8 +371,8 @@ func LayoutTransactionRow(gtx C, l *load.Load, wal sharedW.Asset, tx *sharedW.Tr
 				status.Color = grayText
 				status.Text = values.String(values.StrComplete)
 				date := time.Unix(tx.Timestamp, 0).Format("2006-01-02")
-				timeSplit := time.Unix(tx.Timestamp, 0).Format("03:04 PM")
-				dateTimeLbl = l.Theme.Label(l.ConvertTextSize(txSize), fmt.Sprintf("%v at %v", date, timeSplit))
+				timeSplit := time.Unix(tx.Timestamp, 0).Format("15:04")
+				dateTimeLbl = l.Theme.Label(l.ConvertTextSize(txSize), values.StringF(values.StrDateAtTime, date, timeSplit))
 				dateTimeLbl.Color = grayText
 			} else {
 				status = l.Theme.Label(txSize, values.StringF(values.StrTxStatusPending, txConfirmations, reqConf))
@@ -714,6 +704,14 @@ func CalculateTotalWalletsBalance(wallet sharedW.Asset) (*CummulativeWalletsBala
 		return nil, err
 	}
 
+	// VAR-only aggregation: account.Balance.Total / .Spendable / .Immature*
+	// etc. are int64 VAR atoms (1e8/coin). Per-wallet sum is bounded by
+	// VAR's 21M × 1e8 = 2.1e15-atom supply cap — three orders of magnitude
+	// below int64-max. SKA balances live in account.Balance.SKATotal /
+	// .SKASpendable and are surfaced through GetCoinBalance + the SKA-
+	// aware overview path, not here. If a future caller wants a
+	// SKA-inclusive cumulative balance, add a parallel routine returning
+	// per-coin big.Int sums rather than extending these int64 += lines.
 	for _, account := range accountsResult.Accounts {
 		totalBalance += account.Balance.Total.ToInt()
 		spandableBalance += account.Balance.Spendable.ToInt()
