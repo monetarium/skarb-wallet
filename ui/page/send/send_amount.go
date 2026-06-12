@@ -164,10 +164,17 @@ func (sa *sendAmount) setAmountBig(atoms *big.Int) {
 	}
 	sa.amountEditor.Editor.SetText(displayText)
 
-	if sa.exchangeRate != -1 && atoms.IsInt64() {
+	// No USD for SKA: applying the VAR-USD exchange rate to a SKA coin value is
+	// a category error (same reason validateAmount suppresses it for SKA). A
+	// SendMax click would otherwise leave a meaningless VAR-rate dollar figure
+	// stuck next to the SKA amount, since the synthetic Changed event is
+	// swallowed and validateAmount never re-runs to clear it.
+	if sa.exchangeRate != -1 && atoms.IsInt64() && !sa.coinType.IsSKA() {
 		usdAmount := utils.CryptoToUSD(sa.exchangeRate, coinValue)
 		sa.usdSendMaxChangeEvent = true
 		sa.usdAmountEditor.Editor.SetText(fmt.Sprintf("%.2f", usdAmount))
+	} else if sa.coinType.IsSKA() {
+		sa.usdAmountEditor.Editor.SetText("")
 	}
 }
 

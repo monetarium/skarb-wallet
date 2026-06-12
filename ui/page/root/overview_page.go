@@ -170,10 +170,12 @@ func (op *OverviewPage) layoutWalletCard(gtx layout.Context, w sharedW.Asset) la
 		)
 	}
 
-	// Only enumerate coin types the wallet has actual activity for —
-	// otherwise every Overview row would list every chain-active SKA-n
-	// with "0" balance (bug #7).
-	cts := dcrAsset.DisplayableCoinTypes()
+	// Enumerate the user-visible coins: everything emitted on chain minus
+	// the wallet's settings filter. Zero-balance coins ARE listed (a freshly
+	// emitted SKA-n must be discoverable); users hide unwanted ones via the
+	// settings coin filter. balancesByCoin (already fetched above) supplies
+	// the values, so no second balance scan runs per frame.
+	cts := dcrAsset.VisibleCoinTypes()
 	var coinChildren []layout.FlexChild
 	coinChildren = append(coinChildren,
 		layout.Rigid(walletTitle.Layout),

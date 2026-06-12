@@ -95,6 +95,16 @@ type Page struct {
 	// and flashes "Недостатньо коштів" + "- SKA1" under the green check.
 	pendingBroadcastReset atomic.Bool
 
+	// pendingExchangeRate / pendingExchangeRateApply hand the freshly-fetched
+	// USD rate from the fetchExchangeRate goroutine to the UI thread. The
+	// goroutine writes pendingExchangeRate then Store(true) (release); the next
+	// HandleUserInteractions frame CompareAndSwap-drains it (acquire) and runs
+	// updateRecipientExchangeRate + validateAndConstructTx — both of which call
+	// Editor.SetText — on the UI thread. Writing editor buffers straight from
+	// the goroutine is the race CLAUDE.md §3 forbids.
+	pendingExchangeRate      float64
+	pendingExchangeRateApply atomic.Bool
+
 	// Custom fee override (user-typed relay-fee rate in atoms/KB). The
 	// backend hooks (SetFeeRateOverride / ClearFeeRateOverride) live on
 	// the DCR asset and validate against per-coin chainparams MinRelayTxFee.
@@ -120,6 +130,15 @@ type Page struct {
 	// this via SetFeeRateOverride so the next EstimateFeeAndSize sees
 	// the override.
 	feeRateOverride cointype.SKAAmount
+
+	// subtractFeeFromRecipient mirrors the advanced-options checkbox: when
+	// true the transaction fee is deducted from the (single) recipient's
+	// output instead of the sender's change, so the sender spends exactly
+	// the entered amount and the recipient receives amount-minus-fee. Wired
+	// to the wallet via AddSendDestinationBig's subtractFeeFromAmount arg.
+	subtractFeeFromRecipient bool
+	// subtractFeeCheckbox is the widget backing that toggle.
+	subtractFeeCheckbox cryptomaterial.CheckBoxStyle
 }
 
 type getPageFields func() pageFields
@@ -155,6 +174,17 @@ type selectedUTXOsInfo struct {
 	sourceAccount    *sharedW.Account
 	selectedUTXOs    []*sharedW.UnspentOutput
 	totalUTXOsAmount int64
+	// totalUTXOsAmountBig is the lossless atom sum of the selected UTXOs.
+	// SKA UTXOs carry their value in SKAAmountAtoms with the int64 Amount
+	// == 0, so totalUTXOsAmount reads 0 for a SKA selection — the big.Int
+	// total is the real spendable for both coin types.
+	totalUTXOsAmountBig *big.Int
+	// coinType is the active coin type when the selection was made. A
+	// selection is only valid for the coin it was picked for — switching the
+	// VAR/SKAn dropdown must not feed VAR outpoints into a SKA tx (or vice
+	// versa), so manualSelectionFor rejects a selection whose coinType differs
+	// from the currently-selected dropdown coin.
+	coinType cointype.CoinType
 }
 
 func NewSendPage(l *load.Load, wallet sharedW.Asset) *Page {
@@ -205,6 +235,13 @@ func NewSendPage(l *load.Load, wallet sharedW.Asset) *Page {
 	pg.customFeeClearBtn.TextSize = values.TextSize14
 	pg.customFeeClearBtn.Inset = layout.UniformInset(values.MarginPadding8)
 
+	// Label is empty: the section title (contentWrapper) already shows
+	// "Відняти комісію із суми отримувача"; the checkbox sits under it with
+	// the explanatory caption, so a second copy of the label would be
+	// redundant.
+	pg.subtractFeeCheckbox = l.Theme.CheckBox(new(widget.Bool), values.String(values.StrSubtractFeeFromRecipientToggle))
+	pg.subtractFeeCheckbox.TextSize = values.TextSize14
+
 	pg.addRecipient()
 	pg.initLayoutWidgets()
 	pg.setAssetTypeForRecipients()
@@ -248,6 +285,16 @@ func (pg *Page) applyCoinType(ct cointype.CoinType) {
 	if pg.accountDropdown != nil {
 		pg.accountDropdown.SetCoinType(ct)
 	}
+	// Source-wallet rows follow the active coin too (visible in multi-wallet
+	// view); destination wallet/account rows follow via rc.setCoinType above.
+	if pg.walletDropdown != nil {
+		pg.walletDropdown.SetCoinType(ct)
+	}
+	// A manual UTXO selection is coin-specific: VAR outpoints can't fund a SKA
+	// tx (and vice versa). Drop it on a coin switch so the wallet auto-selects
+	// from the new coin's UTXO set instead of carrying stale outpoints (the
+	// coinSelectionSection also returns to "Автоматично").
+	pg.selectedUTXOs = selectedUTXOsInfo{totalUTXOsAmountBig: new(big.Int)}
 	pg.validateAndConstructTx()
 }
 
@@ -428,15 +475,34 @@ func (pg *Page) RestyleWidgets() {
 }
 
 func (pg *Page) UpdateSelectedUTXOs(utxos []*sharedW.UnspentOutput) {
+	selectionCoinType := cointype.CoinTypeVAR
+	if pg.coinTypeDropdown != nil {
+		selectionCoinType = pg.coinTypeDropdown.Selected()
+	}
 	pg.selectedUTXOs = selectedUTXOsInfo{
-		selectedUTXOs: utxos,
-		sourceAccount: pg.accountDropdown.SelectedAccount(),
+		selectedUTXOs:       utxos,
+		sourceAccount:       pg.accountDropdown.SelectedAccount(),
+		totalUTXOsAmountBig: new(big.Int),
+		coinType:            selectionCoinType,
 	}
 	if len(utxos) > 0 {
 		for _, elem := range utxos {
 			pg.selectedUTXOs.totalUTXOsAmount += elem.Amount.ToInt()
+			// Lossless big.Int sum: utxoAtoms reads SKAAmountAtoms for SKA
+			// (the int64 Amount is 0 there) and Amount for VAR.
+			pg.selectedUTXOs.totalUTXOsAmountBig.Add(pg.selectedUTXOs.totalUTXOsAmountBig, utxoAtoms(elem))
 		}
 	}
+
+	// Immediately rebuild the authored tx so the new selection is pushed into
+	// the wallet's TxAuthoredInfo (via constructTx → NewUnsignedTx) and the
+	// form's fee/total reflect it RIGHT NOW. Without this, the selection only
+	// sat in pg.selectedUTXOs and did not reach the tx until the next form
+	// interaction — so a user who clicked "Done" and then "Send" broadcast the
+	// previous AUTO-selected tx, and the hand-picked UTXOs took effect only in
+	// the post-broadcast rebuild (too late). See manual-selection log trace:
+	// broadcast at .748 used auto, applied=1 appeared at .766.
+	pg.validateAndConstructTx()
 }
 
 // OnNavigatedTo is called when the page is about to be displayed and
@@ -509,10 +575,11 @@ func (pg *Page) fetchExchangeRate() {
 		return
 	}
 
-	pg.exchangeRate = rate.LastTradePrice
-	pg.updateRecipientExchangeRate()
-	pg.validateAndConstructTx() // convert estimates to usd
-
+	// Hand the rate to the UI thread; applying it touches editor buffers
+	// (updateRecipientExchangeRate / validateAndConstructTx → Editor.SetText),
+	// which must not run from this goroutine.
+	pg.pendingExchangeRate = rate.LastTradePrice
+	pg.pendingExchangeRateApply.Store(true)
 	pg.isFetchingExchangeRate = false
 	pg.ParentWindow().Reload()
 }
@@ -529,6 +596,32 @@ func (pg *Page) validateAndConstructTx() {
 	}
 }
 
+// manualSelectionFor returns the user's hand-picked UTXOs when they belong to
+// the given source account, else nil (→ automatic selection). Matching is by
+// account identity (WalletID + Number), NOT *Account pointer equality: the
+// account dropdown can hand back a freshly-allocated Account value on each call
+// (e.g. after a balance refresh / window Reload), so the old `==` pointer
+// comparison would intermittently fail and silently drop a valid manual
+// selection — the wallet then picked UTXOs automatically as if nothing was
+// chosen (observed symptom: selection on the UTXO page had no effect).
+func (pg *Page) manualSelectionFor(sourceAccount *sharedW.Account) []*sharedW.UnspentOutput {
+	stored := pg.selectedUTXOs.sourceAccount
+	if stored == nil || sourceAccount == nil || len(pg.selectedUTXOs.selectedUTXOs) == 0 {
+		return nil
+	}
+	if stored.WalletID != sourceAccount.WalletID || stored.Number != sourceAccount.Number {
+		return nil
+	}
+	// Reject a selection picked for a different coin type — its outpoints
+	// belong to the other coin's UTXO set and would be silently dropped by the
+	// coin-type filter in the input source, producing a confusing empty-input
+	// "insufficient" failure while the form still claims a manual selection.
+	if pg.coinTypeDropdown != nil && pg.selectedUTXOs.coinType != pg.coinTypeDropdown.Selected() {
+		return nil
+	}
+	return pg.selectedUTXOs.selectedUTXOs
+}
+
 func (pg *Page) constructTx() {
 	if pg.accountDropdown == nil {
 		return
@@ -537,10 +630,7 @@ func (pg *Page) constructTx() {
 	if sourceAccount == nil {
 		return
 	}
-	selectedUTXOs := make([]*sharedW.UnspentOutput, 0)
-	if sourceAccount == pg.selectedUTXOs.sourceAccount {
-		selectedUTXOs = pg.selectedUTXOs.selectedUTXOs
-	}
+	selectedUTXOs := pg.manualSelectionFor(sourceAccount)
 
 	err := pg.selectedWallet.NewUnsignedTx(sourceAccount.Number, selectedUTXOs)
 	if err != nil {
@@ -644,7 +734,15 @@ func (pg *Page) constructTx() {
 	pg.destinationAccount = pg.getDestinationAccounts()
 	pg.sourceAccount = sourceAccount
 
-	if pg.exchangeRate != -1 && pg.usdExchangeSet {
+	// SKA tokens have no USD pairing in v1. .ToCoin()/Fee.CoinValue divide
+	// atoms by 1e8 (the VAR scale) — applied to 1e18-scaled SKA atoms and then
+	// multiplied by the VAR-USD rate, that yields dollar figures inflated by
+	// ~1e10 (a 5 SKA send showed billions). Only compute USD for VAR, matching
+	// the per-recipient suppression already in send_amount.go (!IsSKA()). For
+	// SKA we blank every USD string so neither the totals rows nor the confirm
+	// modal render a bogus value.
+	isSKASend := pg.coinTypeDropdown != nil && pg.coinTypeDropdown.Selected().IsSKA()
+	if pg.exchangeRate != -1 && pg.usdExchangeSet && !isSKASend {
 		pg.feeRateSelector.USDExchangeSet = true
 		pg.txFeeUSD = fmt.Sprintf("$%.4f", utils.CryptoToUSD(pg.exchangeRate, feeAndSize.Fee.CoinValue))
 		pg.feeRateSelector.TxFeeUSD = pg.txFeeUSD
@@ -653,16 +751,23 @@ func (pg *Page) constructTx() {
 
 		usdAmount := utils.CryptoToUSD(pg.exchangeRate, wal.ToAmount(totalAmount).ToCoin())
 		pg.sendAmountUSD = utils.FormatAsUSDString(pg.Printer, usdAmount)
+	} else {
+		pg.feeRateSelector.USDExchangeSet = false
+		pg.txFeeUSD = ""
+		pg.feeRateSelector.TxFeeUSD = ""
+		pg.totalCostUSD = ""
+		pg.balanceAfterSendUSD = ""
+		pg.sendAmountUSD = ""
 	}
 
-	pg.checkAssetCoverage(sourceAccount, totalAmount, feeAtom, pg.totalSendAmountBig)
+	pg.checkAssetCoverage(sourceAccount, totalAmount, feeAtom, feeAndSize.Fee.UnitValueBig, pg.totalSendAmountBig)
 }
 
 // checkAssetCoverage validates that the selected CoinType has enough balance to
 // cover (amount + fee) on the source account. Monetarium pays the fee in the
 // SAME asset as the transfer, so a SKA-1 transfer with no SKA-1 in the wallet
 // fails even when the user has plenty of VAR.
-func (pg *Page) checkAssetCoverage(sourceAccount *sharedW.Account, totalAmount, feeAtom int64, totalAmountBigStr string) {
+func (pg *Page) checkAssetCoverage(sourceAccount *sharedW.Account, totalAmount, feeAtom int64, feeBigStr, totalAmountBigStr string) {
 	dcrAsset, ok := pg.selectedWallet.(*dcr.Asset)
 	if !ok || pg.coinTypeDropdown == nil {
 		return
@@ -678,17 +783,28 @@ func (pg *Page) checkAssetCoverage(sourceAccount *sharedW.Account, totalAmount, 
 		log.Errorf("checkAssetCoverage: GetCoinBalance(%s): %v", ct, err)
 		return
 	}
+	// Fee component: prefer the lossless big-string. A high custom SKA fee
+	// rate (≳33 SKA1/KB) produces a per-tx fee above int64, so feeAtom is the
+	// MaxInt64 placeholder — using it here would compute a nonsensical
+	// `amount + 9.22 SKA1` requirement and either falsely pass or falsely
+	// fail. feeBigStr carries the real atom count.
+	feeBig := big.NewInt(feeAtom)
+	if feeBigStr != "" {
+		if parsed, ok := new(big.Int).SetString(feeBigStr, 10); ok {
+			feeBig = parsed
+		}
+	}
 	// Build the required-atom big.Int from the lossless big-string when the
 	// SKA amount overflowed int64 (constructTx populated totalAmountBigStr
-	// in that case). Otherwise lift the int64 totalAmount + feeAtom.
+	// in that case). Otherwise lift the int64 totalAmount. Add the (real) fee.
 	var required *big.Int
 	if totalAmountBigStr != "" {
 		if parsed, ok := new(big.Int).SetString(totalAmountBigStr, 10); ok {
-			required = new(big.Int).Add(parsed, big.NewInt(feeAtom))
+			required = new(big.Int).Add(parsed, feeBig)
 		}
 	}
 	if required == nil {
-		required = big.NewInt(totalAmount + feeAtom)
+		required = new(big.Int).Add(big.NewInt(totalAmount), feeBig)
 	}
 	available := bal.SKASpendable.BigInt()
 	if available == nil {
@@ -708,10 +824,7 @@ func (pg *Page) addSendDestination() (sharedW.AssetAmount, sharedW.AssetAmount, 
 	var totalCost int64
 
 	sourceAccount := pg.accountDropdown.SelectedAccount()
-	selectedUTXOs := make([]*sharedW.UnspentOutput, 0)
-	if sourceAccount == pg.selectedUTXOs.sourceAccount {
-		selectedUTXOs = pg.selectedUTXOs.selectedUTXOs
-	}
+	selectedUTXOs := pg.manualSelectionFor(sourceAccount)
 
 	// Note: we no longer call EstimateFeeAndSize up here. The legacy code
 	// did it BEFORE adding the destinations to TxAuthoredInfo, which made
@@ -759,8 +872,20 @@ func (pg *Page) addSendDestination() (sharedW.AssetAmount, sharedW.AssetAmount, 
 		}
 	}
 	if len(selectedUTXOs) > 0 {
-		spendableAmount = pg.selectedUTXOs.totalUTXOsAmount
-		spendableBig = big.NewInt(spendableAmount)
+		// Spendable for a manual selection is the sum of the hand-picked
+		// UTXOs, not the whole account. Use the lossless big.Int total (the
+		// int64 totalUTXOsAmount is 0 for SKA, whose value lives in
+		// SKAAmountAtoms) so balanceAfterSend and Max are correct for SKA.
+		if pg.selectedUTXOs.totalUTXOsAmountBig != nil {
+			spendableBig = new(big.Int).Set(pg.selectedUTXOs.totalUTXOsAmountBig)
+		} else {
+			spendableBig = big.NewInt(pg.selectedUTXOs.totalUTXOsAmount)
+		}
+		if spendableBig.IsInt64() {
+			spendableAmount = spendableBig.Int64()
+		} else {
+			spendableAmount = int64(^uint64(0) >> 1) // MaxInt64 placeholder; big channel carries truth
+		}
 	}
 
 	wal := pg.selectedWallet
@@ -779,7 +904,11 @@ func (pg *Page) addSendDestination() (sharedW.AssetAmount, sharedW.AssetAmount, 
 		amountAtom, amountAtomBig, SendMax := recipient.validAmountBig()
 		var err error
 		if dcrAsset, ok := pg.selectedWallet.(*dcr.Asset); ok {
-			err = dcrAsset.AddSendDestinationBig(recipient.id, destinationAddress, amountAtom, amountAtomBig, SendMax)
+			// Only attach the subtract-fee flag to a non-SendMax recipient;
+			// SendMax already sweeps the whole balance via changeSource so
+			// the notion of "fee from recipient" doesn't apply there.
+			subtractFee := pg.subtractFeeFromRecipient && !SendMax
+			err = dcrAsset.AddSendDestinationBig(recipient.id, destinationAddress, amountAtom, amountAtomBig, SendMax, subtractFee)
 		} else {
 			err = pg.selectedWallet.AddSendDestination(recipient.id, destinationAddress, amountAtom, SendMax)
 		}
@@ -790,6 +919,12 @@ func (pg *Page) addSendDestination() (sharedW.AssetAmount, sharedW.AssetAmount, 
 				recipient.addressValidationError(err.Error())
 			}
 			pg.clearEstimates()
+			// Skip folding this destination into the totals: validAmountBig
+			// returns amountAtom == -1 on a parse/validation error, and the
+			// wallet's destinations map does not contain it (AddSendDestination
+			// failed). Folding -1 atoms would make the page totals diverge from
+			// the actual output set the estimate is built against.
+			continue
 		}
 
 		// Build the recipient's atom contribution as big.Int.
@@ -816,6 +951,11 @@ func (pg *Page) addSendDestination() (sharedW.AssetAmount, sharedW.AssetAmount, 
 	// balance, which is what the legacy pre-loop call could not handle.
 	feeAndSize, feeErr := pg.selectedWallet.EstimateFeeAndSize()
 	if feeErr != nil {
+		// Surface the real reason instead of failing silently — a high
+		// custom fee whose amount exceeds the spendable balance makes the
+		// wallet's input selection return InsufficientBalance here, and the
+		// form would otherwise just blank ("- SKA1") with no diagnostic.
+		log.Errorf("addSendDestination: EstimateFeeAndSize failed: %v", feeErr)
 		pg.setRecipientsAmountErr(feeErr)
 		return nil, nil, 0, feeErr
 	}
@@ -836,8 +976,28 @@ func (pg *Page) addSendDestination() (sharedW.AssetAmount, sharedW.AssetAmount, 
 	if feeBig == nil {
 		feeBig = big.NewInt(feeAtom)
 	}
-	totalCost += feeAtom * int64(len(pg.recipients))
-	for range pg.recipients {
+	// When the fee is subtracted from the recipient (the advanced-options
+	// toggle), the sender spends EXACTLY the entered amount — the fee comes
+	// out of the recipient's output, so it must NOT be added to
+	// "Загальна сума" or reduce "Баланс після відправлення" beyond the
+	// amount itself. SFFA never applies to a SendMax recipient (that sweeps
+	// the whole balance via change), so only skip the fee-add when no
+	// recipient is SendMax.
+	sffaApplies := pg.subtractFeeFromRecipient
+	if sffaApplies {
+		for _, recipient := range pg.recipients {
+			if _, _, sm := recipient.validAmountBig(); sm {
+				sffaApplies = false
+				break
+			}
+		}
+	}
+	if !sffaApplies {
+		// EstimateFeeAndSize returns ONE fee for the whole serialized tx, not a
+		// per-output fee. Add it exactly once — the old `feeAtom * len(recipients)`
+		// over-charged a multi-recipient send (e.g. 3× the real fee in "Загальна
+		// сума") and could falsely trip the insufficient-funds path.
+		totalCost += feeAtom
 		totalCostBig.Add(totalCostBig, feeBig)
 	}
 
@@ -878,19 +1038,45 @@ func (pg *Page) addSendDestination() (sharedW.AssetAmount, sharedW.AssetAmount, 
 		} else {
 			maxBig = big.NewInt(spendableAmount - feeAtom)
 		}
+		// A SendMax recipient sweeps only what is LEFT after the fee AND any
+		// fixed-amount recipients in the same tx. The first pass already
+		// accumulated those fixed amounts into totalSendAmountBig (the SendMax
+		// recipient itself contributed 0 there, and only one SendMax recipient
+		// is allowed), so subtracting it gives the true sweepable remainder.
+		// Without this, a Max+fixed tx overstated totalCost and rendered a
+		// negative "Баланс після відправлення".
+		maxBig.Sub(maxBig, totalSendAmountBig)
 		if maxBig.Sign() <= 0 {
 			recipient.amountValidationError(values.String(values.StrInsufficientFund))
 			pg.clearEstimates()
 			continue
 		}
-		if !maxBig.IsInt64() {
-			recipient.amountValidationError(values.String(values.StrInvalidAmount))
-			log.Warnf("SendMax refused: %s spendable-after-fee %s atoms exceeds int64; phase-1 author can only emit up to ~9.22 SKA in one tx",
-				pg.coinTypeDropdown.Selected(), maxBig.String())
-			pg.clearEstimates()
-			continue
-		}
+		// No int64 ceiling here. SendMax authoring uses
+		// OutputSelectionAlgorithmAll + a changeSource (see
+		// constructTransaction) — the wallet sweeps the whole account and
+		// there is no fixed output to overflow int64. The editor value is
+		// display-only for SendMax, and setAmountBig renders it losslessly
+		// via ToDecimalString even above int64. The old `!maxBig.IsInt64()`
+		// refusal made Max unusable for any SKA balance over ~9.22 SKA
+		// (i.e. essentially all real SKA balances) — that was the reported
+		// bug: VAR Max worked (VAR ≤ 2.1e15 atoms always fits int64) but
+		// SKA Max errored instead of filling spendable-minus-fee.
 		recipient.setAmountBig(maxBig)
+		// maxBig (spendable − fee) IS the amount this SendMax recipient
+		// sends. The first pass above added 0 for it (validAmountBig returns
+		// 0 while SendMax is set), and the fee-add block already folded the
+		// fee into the totals — so without folding maxBig in here, totalCost
+		// would equal just the fee and "Баланс після відправлення" would
+		// render the full untouched balance instead of ~0. After this:
+		// totalSendAmount == swept amount, totalCost == swept + fee ==
+		// spendable, hence balanceAfterSend == spendable − totalCost ≈ 0
+		// (a Max send sweeps everything; the change output is empty).
+		totalSendAmountBig.Add(totalSendAmountBig, maxBig)
+		totalCostBig.Add(totalCostBig, maxBig)
+		if maxBig.IsInt64() {
+			totalSendAmount += maxBig.Int64()
+			totalCost += maxBig.Int64()
+		}
 	}
 	// Compute balance-after-send and totals in big.Int when the SKA
 	// balance OR the cumulative cost has overflowed int64. The int64
@@ -1028,6 +1214,24 @@ func (pg *Page) showBalanceAfterSend() {
 		if sourceAccount == nil || sourceAccount.Balance == nil {
 			return
 		}
+		// Render the idle "balance after send" in the ACTIVE coin. The legacy
+		// path always read the VAR Spendable, so with Актив=SKA1 the row
+		// showed "0 VAR" (the account's VAR balance) instead of the SKA
+		// spendable in SKA units.
+		if pg.coinTypeDropdown != nil && pg.coinTypeDropdown.Selected().IsSKA() {
+			ct := pg.coinTypeDropdown.Selected()
+			if dcrAsset, ok := pg.selectedWallet.(*dcr.Asset); ok {
+				if bal, err := dcrAsset.GetCoinBalance(sourceAccount.Number, ct); err == nil {
+					atoms := "0"
+					if b := bal.SKASpendable.BigInt(); b != nil {
+						atoms = b.String()
+					}
+					pg.balanceAfterSend = dcr.FormatTxAmountBig(atoms, 0, uint8(ct))
+					pg.balanceAfterSendUSD = "" // no USD pairing for SKA
+					return
+				}
+			}
+		}
 		balanceAfterSend := sourceAccount.Balance.Spendable
 		pg.balanceAfterSend = balanceAfterSend.String()
 		pg.balanceAfterSendUSD = utils.FormatAsUSDString(pg.Printer, utils.CryptoToUSD(pg.exchangeRate, balanceAfterSend.ToCoin()))
@@ -1083,12 +1287,31 @@ func (pg *Page) HandleUserInteractions(gtx C) {
 		pg.autoDefaultCoinTypeFromBalance()
 	}
 
+	// Apply a freshly-fetched USD rate on the UI thread (the fetch ran in a
+	// goroutine). updateRecipientExchangeRate + validateAndConstructTx write
+	// editor buffers, so they cannot run from the fetch goroutine.
+	if pg.pendingExchangeRateApply.CompareAndSwap(true, false) {
+		pg.exchangeRate = pg.pendingExchangeRate
+		pg.updateRecipientExchangeRate()
+		pg.validateAndConstructTx()
+	}
+
 	// Custom-fee Apply: parse the editor's number with the coin-type-aware
 	// big.Int parser (SKA fees > int64 are pathological but the bounds
 	// allow up to 1000× MinRelayTxFee, which on a 1e18-atoms/coin SKA can
 	// exceed int64 quickly), push through SetFeeRateOverride, and surface
 	// either the localised "applied" string or the validator's error. The
 	// editor itself is left intact so the user can tweak and reapply.
+
+	// Subtract-fee-from-recipient toggle. Re-estimate on change so the
+	// "Загальна сума" / "Баланс після відправлення" rows reflect whether the
+	// fee comes out of the recipient's output (sender spends exactly the
+	// entered amount) or the sender's change (the default).
+	if pg.subtractFeeCheckbox.CheckBox.Update(gtx) {
+		pg.subtractFeeFromRecipient = pg.subtractFeeCheckbox.CheckBox.Value
+		pg.validateAndConstructTx()
+	}
+
 	if pg.customFeeApplyBtn.Clicked(gtx) {
 		if dcrAsset, ok := pg.selectedWallet.(*dcr.Asset); ok {
 			text := strings.TrimSpace(pg.customFeeEditor.Editor.Text())
@@ -1143,23 +1366,46 @@ func (pg *Page) HandleUserInteractions(gtx C) {
 					pg.validateAndConstructTx()
 					rateStr := dcr.FormatTxAmountBig(atomsBig.String(), 0, uint8(ct))
 					effective := pg.txFee
-					if effective == "" {
+					switch {
+					case effective == "":
 						// No recipient/amount yet — fee can't be estimated.
 						// Show the rate-only fallback so we don't display
 						// "Орієнтовна комісія: " with an empty tail.
-						pg.customFeeStatus = values.StringF(values.StrCustomFeeApplied,
-							rateStr, "—")
-					} else {
-						pg.customFeeStatus = values.StringF(values.StrCustomFeeApplied,
-							rateStr, effective)
+						pg.customFeeStatus = values.StringF(values.StrCustomFeeApplied, rateStr, "—")
+						pg.customFeeStatusIsErr = false
+					case strings.Contains(effective, " - "):
+						// clearEstimates() ran — the estimate FAILED at this
+						// rate (almost always: the resulting fee exceeds the
+						// account's spendable balance for this coin; see
+						// addSendDestination's insufficient_balance log). The
+						// old code still printed the green "applied … - SKA1"
+						// success here, which read as "ok" while the totals
+						// were blank and the amount row showed an error.
+						// Surface a real error in the fee section instead.
+						pg.customFeeStatus = values.StringF(values.StrCustomFeeTooHigh, rateStr)
+						pg.customFeeStatusIsErr = true
+					default:
+						pg.customFeeStatus = values.StringF(values.StrCustomFeeApplied, rateStr, effective)
+						pg.customFeeStatusIsErr = false
 					}
-					pg.customFeeStatusIsErr = false
 				}
 			}
 		}
 	}
 	if pg.customFeeClearBtn.Clicked(gtx) {
 		if dcrAsset, ok := pg.selectedWallet.(*dcr.Asset); ok {
+			// Reset must be idempotent. It only clears the fee-rate INPUT
+			// field; it must not re-estimate the fee on every press. The old
+			// code called validateAndConstructTx() unconditionally, and each
+			// reconstruct re-runs coin selection (a different input set →
+			// different size → different fee), so repeated Reset presses
+			// visibly jittered "Загальна сума" — the reported bug. Capture
+			// whether a custom fee was actually in effect; only when we're
+			// genuinely reverting custom→default do we reconstruct, and then
+			// exactly once. With no override active, Reset just wipes the
+			// (un-applied) editor text and leaves the total untouched.
+			hadOverride := !pg.feeRateOverride.IsZero()
+
 			dcrAsset.ClearFeeRateOverride()
 			pg.feeRateOverride = cointype.Zero()
 			pg.customFeeEditor.Editor.SetText("")
@@ -1178,7 +1424,12 @@ func (pg *Page) HandleUserInteractions(gtx C) {
 			pg.customFeeEditor.Hint = values.String(values.StrFeeRatePerKbHint)
 			pg.customFeeStatus = values.String(values.StrCustomFeeCleared)
 			pg.customFeeStatusIsErr = false
-			pg.validateAndConstructTx()
+			if hadOverride {
+				// Revert the total to the default-fee estimate a single
+				// time; subsequent Reset presses are no-ops (no override to
+				// clear), so the fee no longer changes on every click.
+				pg.validateAndConstructTx()
+			}
 		}
 	}
 
@@ -1224,7 +1475,11 @@ func (pg *Page) HandleUserInteractions(gtx C) {
 					pg.ParentNavigator().Display(txpage.NewTransactionDetailsPage(pg.Load, pg.selectedWallet, transaction))
 				}
 			})
-			pg.confirmTxModal.exchangeRateSet = pg.exchangeRate != -1 && pg.usdExchangeSet
+			// No USD for SKA (no v1 pairing; .ToCoin() is VAR-only) — gating the
+			// modal on this keeps the confirm header/fee/total-cost rows from
+			// showing a bogus VAR-rate dollar value for a SKA send.
+			isSKASend := pg.coinTypeDropdown != nil && pg.coinTypeDropdown.Selected().IsSKA()
+			pg.confirmTxModal.exchangeRateSet = pg.exchangeRate != -1 && pg.usdExchangeSet && !isSKASend
 			// TODO handle if there are many description texts
 			// this workaround shows the description text when there is only one recipient and does not show when have more than one recipient
 			descriptionText := ""

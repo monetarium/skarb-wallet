@@ -5,11 +5,18 @@ import (
 	"fmt"
 	"math/big"
 	"sort"
+	"strconv"
+	"strings"
 
 	"github.com/monetarium/monetarium-node/cointype"
 	"github.com/monetarium/monetarium-node/dcrutil"
 	dcrW "github.com/monetarium/monetarium-wallet/wallet"
 )
+
+// HiddenCoinTypesConfigKey stores the user's per-wallet coin-visibility
+// filter as a ";"-joined list of SKA coin-type numbers the user chose to
+// HIDE (VAR can't be hidden). Empty/absent = show everything emitted.
+const HiddenCoinTypesConfigKey = "hidden_coin_types"
 
 // ActiveCoinTypes returns the list of coin types currently active on the
 // chain the wallet is connected to. CoinTypeVAR is always first; SKAn types
@@ -37,6 +44,89 @@ func (asset *Asset) ActiveCoinTypes() []cointype.CoinType {
 	return out
 }
 
+// EmittedCoinTypes returns VAR plus every SKA coin that is LIVE on the
+// chain right now: protocol-active in chainparams AND whose configured
+// EmissionHeight has been reached by the wallet's best block. This makes
+// new SKA coins appear in the UI automatically the moment the chain
+// reaches their emission height (e.g. SKA2 at testnet height 10000) —
+// no balance required, no app update beyond the params that define the
+// coin. Coins configured for a future height stay hidden until then.
+func (asset *Asset) EmittedCoinTypes() []cointype.CoinType {
+	best := asset.GetBestBlockHeight()
+	skaTypes := make([]cointype.CoinType, 0, len(asset.chainParams.SKACoins))
+	for ct, cfg := range asset.chainParams.SKACoins {
+		if cfg == nil || !cfg.Active {
+			continue
+		}
+		if cfg.EmissionHeight > 0 && best < cfg.EmissionHeight {
+			continue
+		}
+		skaTypes = append(skaTypes, ct)
+	}
+	sort.Slice(skaTypes, func(i, j int) bool { return skaTypes[i] < skaTypes[j] })
+	out := make([]cointype.CoinType, 0, 1+len(skaTypes))
+	out = append(out, cointype.CoinTypeVAR)
+	out = append(out, skaTypes...)
+	return out
+}
+
+// HiddenCoinTypes returns the SKA coin types the user chose to hide via the
+// wallet-settings coin filter.
+func (asset *Asset) HiddenCoinTypes() map[cointype.CoinType]bool {
+	raw := asset.ReadStringConfigValueForKey(HiddenCoinTypesConfigKey, "")
+	hidden := make(map[cointype.CoinType]bool)
+	for _, part := range strings.Split(raw, ";") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		// n == 0 is VAR — hidable too (full-privacy mode).
+		if n, err := strconv.Atoi(part); err == nil && n >= 0 && n <= 255 {
+			hidden[cointype.CoinType(n)] = true
+		}
+	}
+	return hidden
+}
+
+// SetCoinTypeHidden adds/removes a coin from the user's hide filter. VAR can
+// be hidden too — a user may not want the wallet UI to reveal they hold any
+// coins at all.
+func (asset *Asset) SetCoinTypeHidden(ct cointype.CoinType, hidden bool) {
+	set := asset.HiddenCoinTypes()
+	if hidden {
+		set[ct] = true
+	} else {
+		delete(set, ct)
+	}
+	parts := make([]string, 0, len(set))
+	for c := range set {
+		parts = append(parts, strconv.Itoa(int(c)))
+	}
+	sort.Strings(parts)
+	asset.SaveUserConfigValue(HiddenCoinTypesConfigKey, strings.Join(parts, ";"))
+}
+
+// VisibleCoinTypes is what UI surfaces should enumerate: every coin emitted
+// on chain (EmittedCoinTypes) minus the ones the user hid via the settings
+// filter — including VAR, so a privacy-conscious user can blank the wallet's
+// balance surfaces entirely. Unlike the old DisplayableCoinTypes this does
+// NOT require a non-zero balance — a freshly emitted coin (e.g. SKA2) shows
+// up immediately so the user can receive it; unwanted coins are hidden
+// explicitly through the filter instead. May return an empty slice when the
+// user hid everything; UI callers must tolerate that.
+func (asset *Asset) VisibleCoinTypes() []cointype.CoinType {
+	hidden := asset.HiddenCoinTypes()
+	emitted := asset.EmittedCoinTypes()
+	out := make([]cointype.CoinType, 0, len(emitted))
+	for _, ct := range emitted {
+		if hidden[ct] {
+			continue
+		}
+		out = append(out, ct)
+	}
+	return out
+}
+
 // DisplayableCoinTypes filters ActiveCoinTypes to the subset the wallet
 // has any visible activity for. VAR is always included; an SKA-n coin
 // type is included only when the wallet's aggregate balance across all
@@ -44,6 +134,9 @@ func (asset *Asset) ActiveCoinTypes() []cointype.CoinType {
 // selectors and balance breakdowns so users don't see SKA-n entries
 // they have never received — that was bug #7 in the v1 bug report
 // ("coin lists show coins that aren't emitted or circulating").
+//
+// Deprecated for UI enumeration: prefer VisibleCoinTypes (emitted-on-chain
+// ∩ user filter), which shows zero-balance coins so they can be received.
 //
 // Note this is a *wallet-side* filter, not a chain-side one. A coin
 // that is emitted on chain but the user never received still won't
@@ -57,13 +150,22 @@ func (asset *Asset) ActiveCoinTypes() []cointype.CoinType {
 // UI isn't stuck on VAR-only forever — better to show extra coins
 // than to silently hide everything.
 func (asset *Asset) DisplayableCoinTypes() []cointype.CoinType {
-	out := []cointype.CoinType{cointype.CoinTypeVAR}
 	balances, err := asset.GetWalletCoinBalances()
 	if err != nil {
 		log.Warnf("DisplayableCoinTypes: balance query failed, "+
 			"falling back to ActiveCoinTypes: %v", err)
 		return asset.ActiveCoinTypes()
 	}
+	return asset.DisplayableCoinTypesFromBalances(balances)
+}
+
+// DisplayableCoinTypesFromBalances derives the displayable coin list from an
+// already-fetched balance map, so a caller that already holds the balances
+// (e.g. the Overview wallet card) doesn't trigger a SECOND full balance scan
+// per frame. DisplayableCoinTypes is the convenience wrapper that fetches the
+// map first.
+func (asset *Asset) DisplayableCoinTypesFromBalances(balances map[cointype.CoinType]dcrW.CoinBalance) []cointype.CoinType {
+	out := []cointype.CoinType{cointype.CoinTypeVAR}
 	// Sort SKA types numerically: see the comment in ActiveCoinTypes
 	// for why this is mandatory (Go map iteration is randomised, so the
 	// raw output of GetActiveSKATypes shuffles every call and would
@@ -183,14 +285,15 @@ func (asset *Asset) GetWalletCoinBalances() (map[cointype.CoinType]dcrW.CoinBala
 //	SKA-1 total=1                   -> "0.000000000000000001 SKA-1"
 func FormatCoinAmount(bal dcrW.CoinBalance) string {
 	if bal.CoinType.IsVAR() {
-		return dcrutil.Amount(bal.Total).String()
+		return padDecimalsMin2(dcrutil.Amount(bal.Total).String())
 	}
 	// SKA: render the *big.Int SKATotal with the SKA-default 1e18 divisor.
 	// Per-coin AtomsPerCoin overrides live in chaincfg.SKACoinConfig but are
 	// 1e18 for every active SKA today; switch to a Params-driven lookup when
-	// that changes.
+	// that changes. padDecimalsMin2 keeps zero balances reading "0.00 SKA2"
+	// rather than a bare "0".
 	atomsStr := bal.SKATotal.ToDecimalString(cointype.AtomsPerSKACoin)
-	return atomsStr + " " + CoinSymbol(bal.CoinType)
+	return padDecimalsMin2(atomsStr) + " " + CoinSymbol(bal.CoinType)
 }
 
 // FormatTxAmount renders a transaction-side int64 atom value with the correct

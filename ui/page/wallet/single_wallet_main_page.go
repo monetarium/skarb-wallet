@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"gioui.org/io/event"
 	"gioui.org/io/key"
@@ -31,6 +32,7 @@ import (
 	"github.com/monetarium/skarb-wallet/ui/utils"
 	"github.com/monetarium/skarb-wallet/ui/values"
 	"github.com/gen2brain/beeep"
+	"github.com/monetarium/monetarium-node/cointype"
 )
 
 const (
@@ -75,9 +77,14 @@ type SingleWalletMasterPage struct {
 	walletDropdown         *cryptomaterial.DropDown
 	allWallets             []sharedW.Asset
 
+	// usdExchangeRate + usdExchangeSet are written by the fetchExchangeRate
+	// goroutine and read by LayoutUSDBalance/updateBalance on the UI thread —
+	// guarded by balanceMu. isFetchingExchangeRate is the in-flight guard: an
+	// atomic.Bool so the click-refresh and the settings-refresh can't both pass
+	// a non-atomic read-modify-write check and launch two concurrent fetches.
 	usdExchangeRate        float64
 	usdExchangeSet         bool
-	isFetchingExchangeRate bool
+	isFetchingExchangeRate atomic.Bool
 	isBalanceHidden        bool
 
 	totalBalanceUSD string
@@ -89,6 +96,11 @@ type SingleWalletMasterPage struct {
 	// 0-VAR / SKA-only wallet no longer shows just "0 VAR" in the header.
 	// Guarded by balanceMu (computed off-thread in updateBalance).
 	skaBalanceLines []string
+
+	// varHidden mirrors the wallet's coin-visibility filter for VAR.
+	// Cached here (recomputed in updateBalance) so Layout doesn't read the
+	// wallet config every frame. Guarded by balanceMu.
+	varHidden bool
 
 	// balanceMu guards walletBalance + totalBalanceUSD because
 	// updateBalance() is called both from the UI thread (initial load,
@@ -278,36 +290,42 @@ func (swmp *SingleWalletMasterPage) isGovernanceAPIAllowed() bool {
 }
 
 func (swmp *SingleWalletMasterPage) updateExchangeSetting() {
+	swmp.balanceMu.Lock()
 	swmp.usdExchangeSet = false
+	swmp.balanceMu.Unlock()
 	if swmp.AssetsManager.ExchangeRateFetchingEnabled() {
 		go swmp.fetchExchangeRate()
 	}
 }
 
 func (swmp *SingleWalletMasterPage) fetchExchangeRate() {
-	if swmp.isFetchingExchangeRate {
+	// Atomic CAS guard: if a fetch is already in flight, bail. A plain
+	// read-then-set let two callers (refresh button + settings change) both
+	// pass the check and launch concurrent fetches that raced on the rate.
+	if !swmp.isFetchingExchangeRate.CompareAndSwap(false, true) {
 		return
 	}
+	defer swmp.isFetchingExchangeRate.Store(false)
 
-	swmp.isFetchingExchangeRate = true
 	market, err := utils.USDMarketFromAsset(swmp.selectedWallet.GetAssetType())
 	if err != nil {
 		log.Errorf("Asset type %q is not supported for exchange rate fetching", swmp.selectedWallet.GetAssetType())
-		swmp.isFetchingExchangeRate = false
 		return
 	}
 
 	rate := swmp.AssetsManager.RateSource.GetTicker(market, false)
 	if rate == nil || rate.LastTradePrice <= 0 {
-		swmp.isFetchingExchangeRate = false
 		return
 	}
 
+	swmp.balanceMu.Lock()
 	swmp.usdExchangeRate = rate.LastTradePrice
+	swmp.balanceMu.Unlock()
 	swmp.updateBalance()
+	swmp.balanceMu.Lock()
 	swmp.usdExchangeSet = true
+	swmp.balanceMu.Unlock()
 	swmp.ParentWindow().Reload()
-	swmp.isFetchingExchangeRate = false
 }
 
 func (swmp *SingleWalletMasterPage) updateBalance() {
@@ -320,7 +338,10 @@ func (swmp *SingleWalletMasterPage) updateBalance() {
 		log.Error(err)
 		return
 	}
-	balanceInUSD := totalBalance.Total.MulF64(swmp.usdExchangeRate).ToCoin()
+	swmp.balanceMu.RLock()
+	usdRate := swmp.usdExchangeRate
+	swmp.balanceMu.RUnlock()
+	balanceInUSD := totalBalance.Total.MulF64(usdRate).ToCoin()
 	usdStr := utils.FormatAsUSDString(swmp.Printer, balanceInUSD)
 
 	// Compute SKA token balances off-thread too, so the header can show
@@ -328,10 +349,16 @@ func (swmp *SingleWalletMasterPage) updateBalance() {
 	// keep the lock window tight.
 	skaLines := swmp.computeSKABalanceLines()
 
+	varHidden := false
+	if dcrAsset, ok := swmp.selectedWallet.(*dcr.Asset); ok {
+		varHidden = dcrAsset.HiddenCoinTypes()[cointype.CoinTypeVAR]
+	}
+
 	swmp.balanceMu.Lock()
 	swmp.walletBalance = totalBalance.Total
 	swmp.totalBalanceUSD = usdStr
 	swmp.skaBalanceLines = skaLines
+	swmp.varHidden = varHidden
 	swmp.balanceMu.Unlock()
 }
 
@@ -351,7 +378,7 @@ func (swmp *SingleWalletMasterPage) computeSKABalanceLines() []string {
 		return nil
 	}
 	var lines []string
-	for _, ct := range dcrAsset.DisplayableCoinTypes() {
+	for _, ct := range dcrAsset.VisibleCoinTypes() {
 		if !ct.IsSKA() {
 			continue
 		}
@@ -470,7 +497,17 @@ func (swmp *SingleWalletMasterPage) navigateToSelectedTab() {
 	case values.StrAccounts:
 		pg = accounts.NewAccountPage(swmp.Load, swmp.selectedWallet)
 	case values.StrSettings:
-		pg = NewSettingsPage(swmp.Load, swmp.selectedWallet, swmp.showNavigationFunc, swmp.changeTab)
+		pg = NewSettingsPage(swmp.Load, swmp.selectedWallet, swmp.showNavigationFunc, swmp.changeTab).
+			SetBalanceRefresher(func() {
+				// Recompute the cached header balances (updateBalance reads
+				// the coin filter) and redraw — the toggle takes effect in
+				// the header immediately. updateBalance locks balanceMu, so
+				// running it off the UI thread is safe.
+				go func() {
+					swmp.updateBalance()
+					swmp.ParentWindow().Reload()
+				}()
+			})
 	}
 
 	if pg == nil {
@@ -710,16 +747,21 @@ func (swmp *SingleWalletMasterPage) walletDropdownLayout(gtx C) D {
 }
 
 func (swmp *SingleWalletMasterPage) LayoutUSDBalance(gtx C) D {
-	if !swmp.usdExchangeSet {
+	// Snapshot all balanceMu-guarded fields once so a concurrent
+	// fetchExchangeRate/updateBalance goroutine can't tear the reads mid-frame.
+	swmp.balanceMu.RLock()
+	usdExchangeSet := swmp.usdExchangeSet
+	usdExchangeRate := swmp.usdExchangeRate
+	totalBalanceUSD := swmp.totalBalanceUSD
+	varHidden := swmp.varHidden
+	swmp.balanceMu.RUnlock()
+	fetching := swmp.isFetchingExchangeRate.Load()
+	// USD is derived from the VAR balance — hide it together with VAR.
+	if !usdExchangeSet || varHidden {
 		return D{}
 	}
-	// Snapshot the USD string under RLock so a concurrent updateBalance()
-	// goroutine can't tear the read mid-frame.
-	swmp.balanceMu.RLock()
-	totalBalanceUSD := swmp.totalBalanceUSD
-	swmp.balanceMu.RUnlock()
 	switch {
-	case swmp.isFetchingExchangeRate && swmp.usdExchangeRate == 0:
+	case fetching && usdExchangeRate == 0:
 		gtx.Constraints.Max.Y = gtx.Dp(values.MarginPadding18)
 		gtx.Constraints.Max.X = gtx.Constraints.Max.Y
 		return layout.Inset{
@@ -729,7 +771,7 @@ func (swmp *SingleWalletMasterPage) LayoutUSDBalance(gtx C) D {
 			loader := material.Loader(swmp.Theme.Base)
 			return loader.Layout(gtx)
 		})
-	case !swmp.isFetchingExchangeRate && swmp.usdExchangeRate == 0:
+	case !fetching && usdExchangeRate == 0:
 		return layout.Inset{
 			Top:  values.MarginPadding7,
 			Left: values.MarginPadding5,
@@ -765,7 +807,13 @@ func (swmp *SingleWalletMasterPage) totalAssetBalance(gtx C) D {
 	// goroutine while Layout reads it here.
 	swmp.balanceMu.RLock()
 	walletBalance := swmp.walletBalance
+	varHidden := swmp.varHidden
 	swmp.balanceMu.RUnlock()
+	// The coin-visibility filter hides VAR entirely (a privacy-minded user
+	// may hide every coin so the header reveals nothing).
+	if varHidden {
+		return D{}
+	}
 	if swmp.isBalanceHidden || walletBalance == nil {
 		hiddenBalanceText := swmp.Theme.Label(textSize*0.8, "****************")
 		return layout.Inset{Bottom: values.MarginPadding0, Top: values.MarginPadding5}.Layout(gtx, func(gtx C) D {
@@ -773,7 +821,10 @@ func (swmp *SingleWalletMasterPage) totalAssetBalance(gtx C) D {
 			return hiddenBalanceText.Layout(gtx)
 		})
 	}
-	return components.LayoutBalanceWithUnitSize(gtx, swmp.Load, walletBalance.String(), textSize)
+	// FormatTxAmount pads to ≥2 decimals so an empty wallet reads
+	// "0.00 VAR" instead of a bare "0 VAR".
+	return components.LayoutBalanceWithUnitSize(gtx, swmp.Load,
+		dcr.FormatTxAmount(walletBalance.ToInt(), uint8(cointype.CoinTypeVAR)), textSize)
 }
 
 // skaBalancesLayout renders the wallet's SKA token balances (one per line)
@@ -789,20 +840,30 @@ func (swmp *SingleWalletMasterPage) skaBalancesLayout(gtx C) D {
 	if len(lines) == 0 {
 		return D{}
 	}
-	textSize := values.TextSize16
+	// Match the VAR total's font sizing exactly (see totalAssetBalance):
+	// TextSize20 on desktop, TextSize16 on mobile. Using a smaller size here
+	// made the SKA digits (both the big integer part and the small decimals)
+	// visibly smaller than the VAR balance above them.
+	textSize := values.TextSize20
 	if swmp.Load.IsMobileView() {
-		textSize = values.TextSize14
+		textSize = values.TextSize16
 	}
 	children := make([]layout.FlexChild, 0, len(lines))
 	for _, line := range lines {
 		line := line
 		children = append(children, layout.Rigid(func(gtx C) D {
-			lbl := swmp.Theme.Label(textSize, line)
-			lbl.Color = swmp.Theme.Color.PageNavText
-			return layout.E.Layout(gtx, lbl.Layout)
+			// Same big/small split as the VAR total (formatBalance): integer
+			// part + first two decimals at `textSize`, the remaining decimals
+			// at 70%, and the " SKA1" unit at full size. LayoutBalanceWithUnitSize
+			// uses Color.PageNavText — the same colour as the previous plain label.
+			return layout.E.Layout(gtx, func(gtx C) D {
+				return components.LayoutBalanceWithUnitSize(gtx, swmp.Load, line, textSize)
+			})
 		}))
 	}
-	return layout.Flex{Axis: layout.Vertical}.Layout(gtx, children...)
+	// Alignment End right-aligns every coin line within the block — without
+	// it a short line ("0.00 SKA2") sat left-ragged under a long SKA1 line.
+	return layout.Flex{Axis: layout.Vertical, Alignment: layout.End}.Layout(gtx, children...)
 }
 
 func (swmp *SingleWalletMasterPage) postTransactionNotification(t *sharedW.Transaction) {

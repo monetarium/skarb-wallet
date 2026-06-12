@@ -219,7 +219,15 @@ func (scm *sendConfirmModal) Layout(gtx C) D {
 										})
 									}),
 									layout.Rigid(func(gtx C) D {
-										balLabel := scm.Theme.Label(unit.Sp(24), scm.sendAmount+" ("+scm.sendAmountUSD+")")
+										// Only append the USD parenthetical when a rate is set
+										// AND the coin has a USD pairing (exchangeRateSet is
+										// false for SKA) — otherwise the header rendered
+										// "5.0 SKA1 ( - )" or a bogus VAR-rate dollar value.
+										amountText := scm.sendAmount
+										if scm.exchangeRateSet {
+											amountText = scm.sendAmount + " (" + scm.sendAmountUSD + ")"
+										}
+										balLabel := scm.Theme.Label(unit.Sp(24), amountText)
 										return layout.Inset{Top: values.MarginPadding2}.Layout(gtx, func(gtx C) D {
 											return layout.Center.Layout(gtx, balLabel.Layout)
 										})

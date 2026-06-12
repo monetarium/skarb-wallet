@@ -289,7 +289,7 @@ func (pg *AcctDetailsPage) loadSKABalances() []acctCoinBalance {
 		return nil
 	}
 	var lines []acctCoinBalance
-	for _, ct := range dcrAsset.ActiveCoinTypes() {
+	for _, ct := range dcrAsset.VisibleCoinTypes() {
 		if !ct.IsSKA() {
 			continue
 		}

@@ -104,7 +104,10 @@ func (str AssetType) ToFull() string {
 	case BTCWalletAsset:
 		return "Bitcoin"
 	case DCRWalletAsset:
-		return "Decred"
+		// Skarb is a Decred fork that runs the Monetarium chain; the
+		// user-facing full network name is "Monetarium" (surfaces e.g. in
+		// the rebroadcast success modal: "…republished to the %s network").
+		return "Monetarium"
 	case LTCWalletAsset:
 		return "Litecoin"
 	default:

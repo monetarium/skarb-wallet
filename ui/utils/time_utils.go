@@ -5,6 +5,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/ararog/timeago"
 	"github.com/monetarium/skarb-wallet/ui/values"
@@ -21,6 +23,14 @@ const (
 // TimeAgo returns the elapsed time since now.
 func TimeAgo(timestamp int64) string {
 	timeAgo, _ := timeago.TimeAgoWithTime(time.Now(), time.Unix(timestamp, 0))
+	// The timeago library capitalizes the first word ("A minute ago",
+	// "About an hour ago"). The string is always rendered mid-sentence here —
+	// after a block height ("18508 (a minute ago)") or as a transaction-age
+	// suffix — so lowercase the leading rune.
+	r, size := utf8.DecodeRuneInString(timeAgo)
+	if size > 0 && unicode.IsUpper(r) {
+		timeAgo = string(unicode.ToLower(r)) + timeAgo[size:]
+	}
 	return timeAgo
 }
 

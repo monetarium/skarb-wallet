@@ -4,6 +4,7 @@ import (
 	"context"
 	"image/color"
 	"strings"
+	"sync"
 	"time"
 
 	"gioui.org/font"
@@ -41,6 +42,13 @@ type WalletInfo struct {
 
 	container *widget.List
 
+	// txMu guards transactions, stakes and showMaterialLoader: loadTransactions
+	// / loadStakes run on the wallet notification goroutine (ListenForNewTx)
+	// and on `go`-launched calls from OnNavigatedTo, while Layout and
+	// HandleUserInteractions read these on the UI thread. Without the lock the
+	// slice-header write races with the reads, and swapping in a shorter slice
+	// between a frame and a click could index out of range.
+	txMu               sync.RWMutex
 	transactions       []*sharedW.Transaction
 	recentTransactions *cryptomaterial.ClickableList
 
@@ -139,6 +147,28 @@ func (pg *WalletInfo) reload() {
 // to be eventually drawn on screen.
 // Part of the load.Page interface.
 // Layout lays out the widgets for the main wallets pg.
+// snapshotTxs / snapshotStakes / loaderShown return the slice headers / flag
+// under the read lock. loadTransactions/loadStakes assign each slice header in
+// a single locked write and never mutate the backing array afterward, so a
+// header snapshot is internally consistent for its own len()+index use.
+func (pg *WalletInfo) snapshotTxs() []*sharedW.Transaction {
+	pg.txMu.RLock()
+	defer pg.txMu.RUnlock()
+	return pg.transactions
+}
+
+func (pg *WalletInfo) snapshotStakes() []*sharedW.Transaction {
+	pg.txMu.RLock()
+	defer pg.txMu.RUnlock()
+	return pg.stakes
+}
+
+func (pg *WalletInfo) loaderShown() bool {
+	pg.txMu.RLock()
+	defer pg.txMu.RUnlock()
+	return pg.showMaterialLoader
+}
+
 func (pg *WalletInfo) Layout(gtx C) D {
 	return pg.Theme.List(pg.container).Layout(gtx, 1, func(gtx C, _ int) D {
 		items := []layout.FlexChild{layout.Rigid(pg.walletSyncInfo.WalletInfoLayout)}
@@ -148,16 +178,16 @@ func (pg *WalletInfo) Layout(gtx C) D {
 		if pg.wallet.GetAssetType() == libutils.DCRWalletAsset && pg.wallet.(*dcr.Asset).IsAccountMixerActive() {
 			items = append(items, layout.Rigid(pg.mixerLayout))
 		}
-		if pg.showMaterialLoader {
+		if pg.loaderShown() {
 			items = append(items, layout.Rigid(func(gtx C) D {
 				return layout.Center.Layout(gtx, pg.materialLoader.Layout)
 			}))
 		}
-		if len(pg.transactions) > 0 {
+		if len(pg.snapshotTxs()) > 0 {
 			items = append(items, layout.Rigid(pg.recentTransactionLayout))
 		}
 
-		if len(pg.stakes) > 0 {
+		if len(pg.snapshotStakes()) > 0 {
 			items = append(items, layout.Rigid(pg.recentStakeLayout))
 		}
 
@@ -182,20 +212,22 @@ func (pg *WalletInfo) mixerLayout(gtx C) D {
 }
 
 func (pg *WalletInfo) recentTransactionLayout(gtx C) D {
+	txs := pg.snapshotTxs()
 	return pg.pageContentWrapper(gtx, values.String(values.StrRecentTransactions), pg.viewAllTxButton.Layout, func(gtx C) D {
-		return pg.recentTransactions.Layout(gtx, len(pg.transactions), func(gtx C, index int) D {
-			tx := pg.transactions[index]
-			isHiddenSeparator := index == len(pg.transactions)-1
+		return pg.recentTransactions.Layout(gtx, len(txs), func(gtx C, index int) D {
+			tx := txs[index]
+			isHiddenSeparator := index == len(txs)-1
 			return pg.walletTxWrapper(gtx, tx, isHiddenSeparator)
 		})
 	})
 }
 
 func (pg *WalletInfo) recentStakeLayout(gtx C) D {
+	stakes := pg.snapshotStakes()
 	return pg.pageContentWrapper(gtx, values.String(values.StrStakingActivity), pg.viewAllStakeButton.Layout, func(gtx C) D {
-		return pg.recentStakes.Layout(gtx, len(pg.stakes), func(gtx C, index int) D {
-			tx := pg.stakes[index]
-			isHiddenSeparator := index == len(pg.stakes)-1
+		return pg.recentStakes.Layout(gtx, len(stakes), func(gtx C, index int) D {
+			tx := stakes[index]
+			isHiddenSeparator := index == len(stakes)-1
 			return pg.walletTxWrapper(gtx, tx, isHiddenSeparator)
 		})
 	})
@@ -268,11 +300,18 @@ func (pg *WalletInfo) HandleUserInteractions(gtx C) {
 	pg.walletSyncInfo.HandleUserInteractions(gtx)
 
 	if clicked, selectedItem := pg.recentTransactions.ItemClicked(); clicked {
-		pg.ParentNavigator().Display(transaction.NewTransactionDetailsPage(pg.Load, pg.wallet, pg.transactions[selectedItem]))
+		// Bounds-check: the slice can be swapped for a shorter one by a
+		// notification-goroutine reload between the rendered frame and this
+		// click handler.
+		if txs := pg.snapshotTxs(); selectedItem >= 0 && selectedItem < len(txs) {
+			pg.ParentNavigator().Display(transaction.NewTransactionDetailsPage(pg.Load, pg.wallet, txs[selectedItem]))
+		}
 	}
 
 	if clicked, selectedItem := pg.recentStakes.ItemClicked(); clicked {
-		pg.ParentNavigator().Display(transaction.NewTransactionDetailsPage(pg.Load, pg.wallet, pg.stakes[selectedItem]))
+		if stakes := pg.snapshotStakes(); selectedItem >= 0 && selectedItem < len(stakes) {
+			pg.ParentNavigator().Display(transaction.NewTransactionDetailsPage(pg.Load, pg.wallet, stakes[selectedItem]))
+		}
 	}
 
 	// Mixer & staking pages are not part of the v1 Monetarium wallet.
@@ -336,7 +375,9 @@ func (pg *WalletInfo) ListenForNewTx(walletID int) {
 }
 
 func (pg *WalletInfo) loadTransactions() {
+	pg.txMu.Lock()
 	pg.showMaterialLoader = true
+	pg.txMu.Unlock()
 	mapInfo, _ := components.TxPageDropDownFields(pg.wallet.GetAssetType(), 0)
 	if len(mapInfo) == 0 {
 		log.Errorf("no tx filters for asset type (%v)", pg.wallet.GetAssetType())
@@ -367,13 +408,18 @@ func (pg *WalletInfo) loadTransactions() {
 	} else {
 		log.Infof("InfoPage.loadTransactions: 0 tx returned")
 	}
+	pg.txMu.Lock()
 	pg.transactions = txs
 	pg.showMaterialLoader = false
+	pg.txMu.Unlock()
 	pg.ParentWindow().Reload()
 }
 
 func (pg *WalletInfo) loadStakes() {
-	pg.stakes = make([]*sharedW.Transaction, 0)
+	// Build into a local slice and publish it with one locked assignment —
+	// mutating pg.stakes across append/reslice while Layout reads it on the UI
+	// thread is the race this avoids.
+	stakes := make([]*sharedW.Transaction, 0)
 
 	txs, err := pg.wallet.GetTransactionsRaw(0, 10, libutils.TxFilterStaking, true, "")
 	if err != nil {
@@ -382,12 +428,15 @@ func (pg *WalletInfo) loadStakes() {
 	}
 	for _, stakeTx := range txs {
 		if (stakeTx.Type == dcr.TxTypeTicketPurchase) || (stakeTx.Type == dcr.TxTypeRevocation) {
-			pg.stakes = append(pg.stakes, stakeTx)
+			stakes = append(stakes, stakeTx)
 		}
 	}
-	if len(pg.stakes) > 3 {
-		pg.stakes = pg.stakes[:3]
+	if len(stakes) > 3 {
+		stakes = stakes[:3]
 	}
+	pg.txMu.Lock()
+	pg.stakes = stakes
+	pg.txMu.Unlock()
 	pg.ParentWindow().Reload()
 }
 

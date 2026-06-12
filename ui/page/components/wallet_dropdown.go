@@ -3,15 +3,18 @@ package components
 import (
 	"fmt"
 	"strconv"
+	"sync/atomic"
 
 	"gioui.org/font"
 	"gioui.org/layout"
 	"github.com/monetarium/skarb-wallet/app"
+	"github.com/monetarium/skarb-wallet/libwallet/assets/dcr"
 	sharedW "github.com/monetarium/skarb-wallet/libwallet/assets/wallet"
 	"github.com/monetarium/skarb-wallet/libwallet/utils"
 	"github.com/monetarium/skarb-wallet/ui/cryptomaterial"
 	"github.com/monetarium/skarb-wallet/ui/load"
 	"github.com/monetarium/skarb-wallet/ui/values"
+	"github.com/monetarium/monetarium-node/cointype"
 )
 
 const WalletAndAccountSelectorID = "WalletAndAccountSelector"
@@ -25,6 +28,16 @@ type WalletDropdown struct {
 	walletIsValid         func(sharedW.Asset) bool
 	isWatchOnlyEnabled    bool
 	assetTypes            []utils.AssetType
+	// pendingRefresh is set from the tx/block notification goroutine and
+	// drained in Handle (UI thread). The callback rebuilds dropdowns and
+	// touches editors, which must not run off the UI thread.
+	pendingRefresh atomic.Bool
+
+	// coinType controls which coin's balance each wallet row displays.
+	// Defaults to VAR. SetCoinType(SKAn) switches the rows to that token's
+	// per-wallet balance — on the send page's destination selector the rows
+	// previously always showed VAR even when the user was sending SKA1.
+	coinType cointype.CoinType
 }
 
 func NewWalletDropdown(l *load.Load, assetType ...utils.AssetType) *WalletDropdown {
@@ -117,8 +130,42 @@ func (d *WalletDropdown) walletBalance(wal sharedW.Asset) (totalBalance, spendab
 }
 
 func (d *WalletDropdown) getWalletItemLayout(wallet sharedW.Asset) layout.Widget {
-	return func(gtx C) D {
+	// Compute the balance labels ONCE at build time (Setup/SetCoinType, UI
+	// thread) — the old closure called walletBalance → GetAccountsRaw (a DB
+	// scan) per wallet row on EVERY frame. The dropdown is rebuilt via Setup
+	// on tx/block notifications, so the cached labels stay fresh.
+	//
+	// The displayed balance follows d.coinType: VAR uses the legacy int64
+	// aggregation; an SKA coin reads the wallet-wide big.Int balance for that
+	// token, so the send page's destination rows show the balance of the coin
+	// actually being sent instead of always VAR.
+	var totalLabel, spendableLabel string
+	if d.coinType.IsSKA() {
+		if dcrAsset, ok := wallet.(*dcr.Asset); ok {
+			if balances, err := dcrAsset.GetWalletCoinBalances(); err == nil {
+				bal := balances[d.coinType]
+				bal.CoinType = d.coinType // ensure FormatCoinAmount picks the SKA branch
+				totalLabel = dcr.FormatCoinAmount(bal)
+				spendBal := bal
+				spendBal.Total = bal.Spendable
+				spendBal.SKATotal = bal.SKASpendable
+				spendableLabel = dcr.FormatCoinAmount(spendBal)
+			} else {
+				log.Errorf("WalletDropdown: GetWalletCoinBalances(%s): %v", wallet.GetWalletName(), err)
+			}
+		}
+	}
+	if totalLabel == "" {
 		totalBal, spendable := d.walletBalance(wallet)
+		totalLabel = wallet.ToAmount(totalBal).String()
+		spendableLabel = wallet.ToAmount(spendable).String()
+	}
+	if wallet.IsWatchingOnlyWallet() {
+		// Zero spendable, rendered in the active coin's unit.
+		spendableLabel = dcr.FormatTxAmount(0, uint8(d.coinType))
+	}
+
+	return func(gtx C) D {
 		return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
 			layout.Rigid(func(gtx C) D {
 				return layout.Flex{Axis: layout.Horizontal, Spacing: layout.SpaceBetween}.Layout(gtx,
@@ -129,7 +176,7 @@ func (d *WalletDropdown) getWalletItemLayout(wallet sharedW.Asset) layout.Widget
 						return lbl.Layout(gtx)
 					}),
 					layout.Rigid(func(gtx C) D {
-						return d.Theme.Label(values.TextSizeTransform(d.IsMobileView(), values.TextSize16), wallet.ToAmount(totalBal).String()).Layout(gtx)
+						return d.Theme.Label(values.TextSizeTransform(d.IsMobileView(), values.TextSize16), totalLabel).Layout(gtx)
 					}),
 				)
 			}),
@@ -141,12 +188,25 @@ func (d *WalletDropdown) getWalletItemLayout(wallet sharedW.Asset) layout.Widget
 						return spendableText.Layout(gtx)
 					}),
 					layout.Rigid(func(gtx C) D {
-						return d.Theme.Label(values.TextSizeTransform(d.IsMobileView(), values.TextSize14), wallet.ToAmount(spendable).String()).Layout(gtx)
+						return d.Theme.Label(values.TextSizeTransform(d.IsMobileView(), values.TextSize14), spendableLabel).Layout(gtx)
 					}),
 				)
 			}),
 		)
 	}
+}
+
+// SetCoinType switches the per-wallet balance display to the given coin type
+// and rebuilds the dropdown rows so the change is visible immediately. Pass
+// cointype.CoinTypeVAR to restore the default.
+func (d *WalletDropdown) SetCoinType(ct cointype.CoinType) {
+	if d.coinType == ct {
+		return
+	}
+	d.coinType = ct
+	// Rebuild items in place, preserving the current selection (Setup keeps
+	// d.selectedWallet when passed as the arg).
+	d.Setup(d.selectedWallet)
 }
 
 func (d *WalletDropdown) WalletValidator(walletIsValid func(sharedW.Asset) bool) *WalletDropdown {
@@ -186,6 +246,12 @@ func (d *WalletDropdown) SetChangedCallback(callback func(sharedW.Asset)) *Walle
 }
 
 func (d *WalletDropdown) Handle(gtx C) {
+	// Drain a deferred tx/block-notification refresh on the UI thread.
+	if d.pendingRefresh.CompareAndSwap(true, false) {
+		if d.walletChangedCallback != nil && d.selectedWallet != nil {
+			d.walletChangedCallback(d.selectedWallet)
+		}
+	}
 	if d.dropdown.Changed(gtx) {
 		d.onChanged()
 	}
@@ -210,20 +276,15 @@ func (d *WalletDropdown) Layout(gtx C, titleKey string) D {
 func (d *WalletDropdown) ListenForTxNotifications(window app.WindowNavigator) {
 	txAndBlockNotificationListener := &sharedW.TxAndBlockNotificationListener{
 		OnTransaction: func(_ int, _ *sharedW.Transaction) {
-			// refresh wallets/Accounts list when new transaction is received
-			// only if selected wallet is not valid.
-			if d.walletChangedCallback != nil && d.selectedWallet != nil {
-				d.walletChangedCallback(d.selectedWallet)
-				window.Reload()
-			}
+			// Defer the callback to the UI thread: it rebuilds dropdown items
+			// and (on the send page) touches recipient editors, which races
+			// with Layout if done here on the notification goroutine.
+			d.pendingRefresh.Store(true)
+			window.Reload()
 		},
 		OnBlockAttached: func(_ int, _ int32) {
-			// refresh wallet and account balance on every new block
-			// only if sync is completed.
-			if d.walletChangedCallback != nil && d.selectedWallet != nil {
-				d.walletChangedCallback(d.selectedWallet)
-				window.Reload()
-			}
+			d.pendingRefresh.Store(true)
+			window.Reload()
 		},
 	}
 	if d.selectedWallet == nil {

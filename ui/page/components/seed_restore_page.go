@@ -573,15 +573,27 @@ func (pg *SeedRestore) KeysToHandle() []event.Filter {
 	if pg.isRestoring {
 		return nil // don't capture keys while restoring, problematic?
 	}
-	return []event.Filter{key.FocusFilter{Target: pg},
-		key.Filter{Focus: pg, Name: key.NameTab, Optional: key.ModShift},
-		key.Filter{Focus: pg, Name: key.NameUpArrow},
-		key.Filter{Focus: pg, Name: key.NameDownArrow},
-		key.Filter{Focus: pg, Name: key.NameLeftArrow},
-		key.Filter{Focus: pg, Name: key.NameRightArrow},
-		key.Filter{Focus: pg, Name: key.NameReturn},
-		key.Filter{Focus: pg, Name: key.NameEnter},
+	// Key every filter to each seed editor's focus tag, NOT Focus:pg. A
+	// key.Filter only matches while its Focus tag is the focused widget; focus
+	// always lives on an individual seed editor (never pg), so Focus:pg never
+	// matched and HandleKeyPress never ran — the arrow-key suggestion
+	// navigation and Enter-to-select (which, unlike Tab, have no Gio default
+	// fallback) were completely dead. HandleKeyPress already guards every
+	// branch on evt.State == key.Press.
+	filters := []event.Filter{key.FocusFilter{Target: pg}}
+	for _, ed := range pg.seedEditors.editors {
+		tag := ed.Edit.Editor
+		filters = append(filters,
+			key.Filter{Focus: tag, Name: key.NameTab, Optional: key.ModShift},
+			key.Filter{Focus: tag, Name: key.NameUpArrow},
+			key.Filter{Focus: tag, Name: key.NameDownArrow},
+			key.Filter{Focus: tag, Name: key.NameLeftArrow},
+			key.Filter{Focus: tag, Name: key.NameRightArrow},
+			key.Filter{Focus: tag, Name: key.NameReturn},
+			key.Filter{Focus: tag, Name: key.NameEnter},
+		)
 	}
+	return filters
 }
 
 // HandleKeyPress is called when one or more keys are pressed on the current

@@ -3,11 +3,13 @@ monetarium-cryptopower
 # Phase-1 stash of files we replaced with stubs
 .phase1-stubs-replaced/
 Skarb.app/
+Skarb Wallet.app/
 dist/
 .DS_Store
 Thumbs.db
 *.swp
 Skarb.dmg
+Skarb Wallet.dmg
 
 # Local developer notes
 CLAUDE.md

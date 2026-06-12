@@ -2,9 +2,11 @@ package components
 
 import (
 	"errors"
-	"strings"
+	"sync/atomic"
 
 	"gioui.org/font"
+	"gioui.org/io/event"
+	"gioui.org/io/key"
 	"gioui.org/layout"
 	"gioui.org/unit"
 	"gioui.org/widget"
@@ -64,8 +66,17 @@ type CreateWallet struct {
 
 	walletCreationSuccessCallback func(newWallet sharedW.Asset)
 
-	showLoader bool
-	isLoading  bool
+	// showLoader / isLoading are written by the create/import goroutines and
+	// read by Layout every frame — atomic per CLAUDE.md §3. Editor errors
+	// produced on those goroutines are staged (stagedNameErr/stagedXpubErr +
+	// pendingErrApply) and applied to the editors in HandleUserInteractions on
+	// the UI thread, since Editor.SetError mutates state Layout reads.
+	showLoader atomic.Bool
+	isLoading  atomic.Bool
+
+	stagedNameErr   string
+	stagedXpubErr   string
+	pendingErrApply atomic.Bool
 }
 
 func NewCreateWallet(l *load.Load, walletCreationSuccessCallback func(newWallet sharedW.Asset), assetType ...libutils.AssetType) *CreateWallet {
@@ -157,7 +168,7 @@ func NewAssetTypeDropDown(l *load.Load) *cryptomaterial.DropDown {
 // the page is displayed.
 // Part of the load.Page interface.
 func (pg *CreateWallet) OnNavigatedTo() {
-	pg.showLoader = false
+	pg.showLoader.Store(false)
 	pg.initPageItems()
 }
 
@@ -358,7 +369,7 @@ func (pg *CreateWallet) createNewWallet(gtx C) D {
 					return layout.Flex{}.Layout(gtx,
 						layout.Flexed(1, func(gtx C) D {
 							return layout.E.Layout(gtx, func(gtx C) D {
-								if pg.isLoading {
+								if pg.isLoading.Load() {
 									gtx.Constraints.Max.X = gtx.Dp(values.MarginPadding20)
 									gtx.Constraints.Min.X = gtx.Constraints.Max.X
 									return pg.materialLoader.Layout(gtx)
@@ -416,7 +427,7 @@ func (pg *CreateWallet) restoreWallet(gtx C) D {
 			return layout.Flex{}.Layout(gtx,
 				layout.Flexed(1, func(gtx C) D {
 					return layout.E.Layout(gtx, func(gtx C) D {
-						if pg.showLoader {
+						if pg.showLoader.Load() {
 							loader := material.Loader(pg.Theme.Base)
 							loader.Color = pg.Theme.Color.Gray1
 							return loader.Layout(gtx)
@@ -443,21 +454,31 @@ func (pg *CreateWallet) handleEditorEvents(gtx C) {
 	}
 
 	// create wallet action
-	if (pg.continueBtn.Clicked(gtx) || isSubmit) && pg.validCreateWalletInputs() {
-		if pg.checkWalletNameExists() {
-			return
+	continueClicked := pg.continueBtn.Clicked(gtx)
+	if continueClicked || isSubmit {
+		valid := pg.validCreateWalletInputs()
+		log.Infof("CreateWallet: continue clicked=%v submit=%v action=%d valid=%v name=%q",
+			continueClicked, isSubmit, pg.selectedWalletAction, valid, pg.walletName.Editor.Text())
+		if valid {
+			if pg.checkWalletNameExists() {
+				return
+			}
+			go pg.createWallet()
 		}
-		go pg.createWallet()
 	}
 
 	// imported wallet click action control
 	if (pg.importBtn.Clicked(gtx) || isSubmit) && pg.validRestoreWalletInputs() {
-		pg.showLoader = true
+		pg.showLoader.Store(true)
 		var err error
 		var newWallet sharedW.Asset
 		go func() {
-			switch strings.ToLower(pg.assetTypeDropdown.Selected()) {
-			case libutils.DCRWalletAsset.ToStringLower():
+			// Selected() is the display name ("VAR & SKA"); map it back to the
+			// asset ID. The old strings.ToLower(Selected()) compared against
+			// "dcr", never matched, and fell through to a nil-wallet success
+			// callback (same bug fixed in createWallet).
+			switch libutils.ParseAssetTypeDisplayName(pg.assetTypeDropdown.Selected()) {
+			case libutils.DCRWalletAsset:
 				var walletWithXPub int
 				walletWithXPub, err = pg.AssetsManager.DCRWalletWithXPub(pg.watchOnlyWalletHex.Editor.Text())
 				if walletWithXPub == -1 {
@@ -465,15 +486,21 @@ func (pg *CreateWallet) handleEditorEvents(gtx C) {
 				} else {
 					err = errors.New(values.String(values.StrXpubWalletExist))
 				}
+			default:
+				err = errors.New(values.String(values.StrNotSupported))
 			}
 
 			if err != nil {
+				// Stage the error for the UI thread — Editor.SetError mutates
+				// state Layout reads, so it must not run on this goroutine.
 				if err.Error() == libutils.ErrExist {
-					pg.watchOnlyWalletHex.SetError(values.StringF(values.StrWalletExist, pg.walletName.Editor.Text()))
+					pg.stagedXpubErr = values.StringF(values.StrWalletExist, pg.walletName.Editor.Text())
 				} else {
-					pg.watchOnlyWalletHex.SetError(err.Error())
+					pg.stagedXpubErr = err.Error()
 				}
-				pg.showLoader = false
+				pg.pendingErrApply.Store(true)
+				pg.showLoader.Store(false)
+				pg.ParentWindow().Reload()
 				return
 			}
 			pg.walletCreationSuccessCallback(newWallet)
@@ -483,20 +510,30 @@ func (pg *CreateWallet) handleEditorEvents(gtx C) {
 
 func (pg *CreateWallet) createWallet() {
 	defer func() {
-		pg.isLoading = false
+		pg.isLoading.Store(false)
 	}()
-	pg.isLoading = true
+	pg.isLoading.Store(true)
 	walletName := pg.walletName.Editor.Text()
 	pass := pg.passwordEditor.Editor.Text()
 	seedType := GetWordSeedType(pg.seedTypeDropdown.Selected())
 	var newWallet sharedW.Asset
 	var err error
-	switch strings.ToLower(pg.assetTypeDropdown.Selected()) {
-	case libutils.DCRWalletAsset.ToStringLower():
+	// assetTypeDropdown.Selected() returns the DISPLAY NAME ("VAR & SKA"), not
+	// the asset ID ("DCR"). Map it back via ParseAssetTypeDisplayName — the
+	// previous `switch strings.ToLower(Selected())` compared the display name
+	// against DCRWalletAsset.ToStringLower() ("dcr"), never matched, fell
+	// through with newWallet=nil/err=nil, and then fired the success callback
+	// with a nil wallet — which closed the page back to home WITHOUT creating
+	// anything and WITHOUT an error. That was the "Continue throws to home" bug.
+	switch libutils.ParseAssetTypeDisplayName(pg.assetTypeDropdown.Selected()) {
+	case libutils.DCRWalletAsset:
 		newWallet, err = pg.AssetsManager.CreateNewDCRWallet(walletName, pass, sharedW.PassphraseTypePass, seedType)
 		if err != nil {
 			if err.Error() == libutils.ErrExist {
-				pg.walletName.SetError(values.StringF(values.StrWalletExist, walletName))
+				// Stage for the UI thread (this runs on the create goroutine).
+				pg.stagedNameErr = values.StringF(values.StrWalletExist, walletName)
+				pg.pendingErrApply.Store(true)
+				pg.ParentWindow().Reload()
 				return
 			}
 
@@ -504,9 +541,14 @@ func (pg *CreateWallet) createWallet() {
 			pg.ParentWindow().ShowModal(errModal)
 			return
 		}
-
+	default:
+		log.Errorf("CreateWallet: unrecognised asset type %q from dropdown", pg.assetTypeDropdown.Selected())
+		errModal := modal.NewErrorModal(pg.Load, values.String(values.StrNotSupported), modal.DefaultClickFunc())
+		pg.ParentWindow().ShowModal(errModal)
+		return
 	}
 
+	log.Infof("CreateWallet: created wallet name=%q id=%d", walletName, newWallet.GetWalletID())
 	pg.walletCreationSuccessCallback(newWallet)
 }
 
@@ -516,6 +558,19 @@ func (pg *CreateWallet) createWallet() {
 // displayed.
 // Part of the load.Page interface.
 func (pg *CreateWallet) HandleUserInteractions(gtx C) {
+	// Apply errors staged by the create/import goroutines on the UI thread
+	// (Editor.SetError mutates state Layout reads — see CLAUDE.md §3).
+	if pg.pendingErrApply.CompareAndSwap(true, false) {
+		if pg.stagedNameErr != "" {
+			pg.walletName.SetError(pg.stagedNameErr)
+			pg.stagedNameErr = ""
+		}
+		if pg.stagedXpubErr != "" {
+			pg.watchOnlyWalletHex.SetError(pg.stagedXpubErr)
+			pg.stagedXpubErr = ""
+		}
+	}
+
 	// back button action
 	if pg.backButton.Button.Clicked(gtx) {
 		pg.ParentNavigator().CloseCurrentPage()
@@ -588,6 +643,8 @@ func (pg *CreateWallet) passwordsMatch(editors ...*widget.Editor) bool {
 
 func (pg *CreateWallet) validCreateWalletInputs() bool {
 	pg.walletName.SetError("")
+	pg.passwordEditor.SetError("")
+	pg.confirmPasswordEditor.SetError("")
 	pg.assetTypeError = pg.Theme.Body1("")
 
 	if !utils.StringNotEmpty(pg.walletName.Editor.Text()) {
@@ -600,13 +657,86 @@ func (pg *CreateWallet) validCreateWalletInputs() bool {
 		return false
 	}
 
-	validPassword := utils.EditorsNotEmpty(pg.confirmPasswordEditor.Editor)
-	if len(pg.passwordEditor.Editor.Text()) > 0 {
-		passwordsMatch := pg.passwordsMatch(pg.passwordEditor.Editor, pg.confirmPasswordEditor.Editor)
-		return validPassword && passwordsMatch
+	// A spending password is REQUIRED. The old code returned true when the
+	// password field was empty (it only checked the match when a password was
+	// typed), so "Continue" with empty passwords passed validation and then
+	// CreateNewDCRWallet failed on the empty passphrase — a confusing dead end.
+	if !utils.EditorsNotEmpty(pg.passwordEditor.Editor) {
+		pg.passwordEditor.SetError(values.String(values.StrEnterSpendingPassword))
+		return false
+	}
+	if !utils.EditorsNotEmpty(pg.confirmPasswordEditor.Editor) {
+		pg.confirmPasswordEditor.SetError(values.String(values.StrConfirmSpendingPassword))
+		return false
+	}
+	return pg.passwordsMatch(pg.passwordEditor.Editor, pg.confirmPasswordEditor.Editor)
+}
+
+// activeTabEditors returns the editors Tab should cycle through for the
+// currently-selected wallet action.
+func (pg *CreateWallet) activeTabEditors() []*widget.Editor {
+	switch pg.selectedWalletAction {
+	case 0: // create new wallet
+		return []*widget.Editor{pg.walletName.Editor, pg.passwordEditor.Editor, pg.confirmPasswordEditor.Editor}
+	case 1: // restore / import
+		if pg.watchOnlyCheckBox.CheckBox.Value {
+			return []*widget.Editor{pg.walletName.Editor, pg.watchOnlyWalletHex.Editor}
+		}
+		return []*widget.Editor{pg.walletName.Editor}
+	default:
+		return nil
+	}
+}
+
+// KeysToHandle registers Tab per active editor focus tag (see the long note in
+// create_password_modal.go): keying on the focused editor — not the page — is
+// what makes the filter match and Tab actually move between the fields.
+func (pg *CreateWallet) KeysToHandle() []event.Filter {
+	eds := pg.activeTabEditors()
+	if len(eds) < 2 {
+		return nil
+	}
+	filters := make([]event.Filter, 0, len(eds)+3)
+	filters = append(filters, key.FocusFilter{Target: pg})
+	for _, ed := range eds {
+		filters = append(filters, key.Filter{Focus: ed, Name: key.NameTab, Optional: key.ModShift})
+	}
+	// Window-level Enter = press Continue (create form). Focused editors
+	// already submit via their own Submit event; HandleKeyPress skips this
+	// branch for them so Enter never double-fires.
+	filters = append(filters,
+		key.Filter{Name: key.NameReturn},
+		key.Filter{Name: key.NameEnter},
+	)
+	return filters
+}
+
+// HandleKeyPress switches editors on Tab. Press-only: a Tab press fires Press
+// AND Release, and SwitchEditors moves focus each call, so acting on both is a
+// net no-op.
+func (pg *CreateWallet) HandleKeyPress(gtx C, evt *key.Event) {
+	if evt.State != key.Press {
+		return
 	}
 
-	return true
+	if evt.Name == key.NameReturn || evt.Name == key.NameEnter {
+		if pg.isLoading.Load() || pg.selectedWalletAction != 0 {
+			return
+		}
+		// Focused editors submit through their own Submit event (isSubmit in
+		// handleEditorEvents); only press Continue when focus is elsewhere so
+		// a single Enter never fires the create action twice.
+		for _, ed := range pg.activeTabEditors() {
+			if gtx.Source.Focused(ed) {
+				return
+			}
+		}
+		pg.continueBtn.Click()
+		pg.ParentWindow().Reload()
+		return
+	}
+
+	cryptomaterial.SwitchEditors(gtx, evt, pg.activeTabEditors()...)
 }
 
 func (pg *CreateWallet) validRestoreWalletInputs() bool {

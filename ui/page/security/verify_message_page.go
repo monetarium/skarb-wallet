@@ -209,14 +209,25 @@ func (pg *VerifyMessagePage) HandleUserInteractions(gtx C) {
 // called when any of these key combinations is pressed.
 // Satisfies the load.KeyEventHandler interface for receiving key events.
 func (pg *VerifyMessagePage) KeysToHandle() []event.Filter {
-	return []event.Filter{key.FocusFilter{Target: pg}, key.Filter{Focus: pg, Name: key.NameTab, Optional: key.ModShift}}
+	// Key the Tab filter to each editor's focus tag, NOT Focus:pg (which is
+	// never the focused widget, so it never matched and Tab was dead).
+	return []event.Filter{
+		key.FocusFilter{Target: pg},
+		key.Filter{Focus: pg.addressEditor.Editor, Name: key.NameTab, Optional: key.ModShift},
+		key.Filter{Focus: pg.signatureEditor.Editor, Name: key.NameTab, Optional: key.ModShift},
+		key.Filter{Focus: pg.messageEditor.Editor, Name: key.NameTab, Optional: key.ModShift},
+	}
 }
 
 // HandleKeyPress is called when one or more keys are pressed on the current
 // window that match any of the key combinations returned by KeysToHandle().
 // Satisfies the load.KeyEventHandler interface for receiving key events.
 func (pg *VerifyMessagePage) HandleKeyPress(gtx C, evt *key.Event) {
-	// Switch editors on tab press.
+	// Switch editors on Press only — a Tab press fires Press AND Release, and
+	// SwitchEditors moves focus on every call, so acting on both cancels out.
+	if evt.State != key.Press {
+		return
+	}
 	cryptomaterial.SwitchEditors(gtx, evt, pg.addressEditor.Editor, pg.signatureEditor.Editor, pg.messageEditor.Editor)
 }
 

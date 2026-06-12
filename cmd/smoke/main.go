@@ -144,16 +144,20 @@ func main() {
 		}
 		fmt.Printf("    %s -> %q\n", label, got)
 	}
-	// VAR formatter goes through dcrutil.Amount.String() ("1.5 VAR" for 1.5e8 atoms).
+	// Balance formatters pad to a minimum of two fractional digits for
+	// display uniformity ("0" → "0.00", "1.5" → "1.50").
 	varBal := dcrW.CoinBalance{CoinType: cointype.CoinTypeVAR, Total: dcrutil.Amount(150000000)}
-	checkFormat("VAR  1.5e8 atoms", "1.5 VAR", dcr.FormatCoinAmount(varBal))
+	checkFormat("VAR  1.5e8 atoms", "1.50 VAR", dcr.FormatCoinAmount(varBal))
 	// SKA formatter divides by 1e18 and appends the coin label.
 	oneAndAHalfSKA := new(big.Int).Mul(big.NewInt(15), new(big.Int).Exp(big.NewInt(10), big.NewInt(17), nil))
 	skaBal := dcrW.CoinBalance{CoinType: cointype.CoinType(1), SKATotal: cointype.NewSKAAmount(oneAndAHalfSKA)}
-	checkFormat("SKA1 1.5e18 atoms", "1.5 SKA1", dcr.FormatCoinAmount(skaBal))
+	checkFormat("SKA1 1.5e18 atoms", "1.50 SKA1", dcr.FormatCoinAmount(skaBal))
 	// 1 atom should render as the smallest expressible fraction.
 	dustBal := dcrW.CoinBalance{CoinType: cointype.CoinType(1), SKATotal: cointype.SKAAmountFromInt64(1)}
 	checkFormat("SKA1 1 atom", "0.000000000000000001 SKA1", dcr.FormatCoinAmount(dustBal))
+	// Zero balances must read "0.00", not a bare "0".
+	zeroBal := dcrW.CoinBalance{CoinType: cointype.CoinType(2)}
+	checkFormat("SKA2 0 atoms", "0.00 SKA2", dcr.FormatCoinAmount(zeroBal))
 
 	// --- Tx authoring with CoinType ---------------------------------------
 	fmt.Println("→ NewUnsignedTx + SetTxCoinType round-trip:")

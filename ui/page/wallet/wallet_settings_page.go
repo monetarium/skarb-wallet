@@ -26,6 +26,7 @@ import (
 	s "github.com/monetarium/skarb-wallet/ui/page/settings"
 	"github.com/monetarium/skarb-wallet/ui/utils"
 	"github.com/monetarium/skarb-wallet/ui/values"
+	"github.com/monetarium/monetarium-node/cointype"
 )
 
 const WalletSettingsPageID = "WalletSettings"
@@ -65,6 +66,15 @@ type SettingsPage struct {
 
 	spendUnconfirmed *cryptomaterial.Switch
 	connectToPeer     *cryptomaterial.Switch
+
+	// Coin-visibility filter (#6): one switch per coin emitted on chain
+	// (VAR included). Off = the coin is hidden from every wallet surface
+	// (send/receive pickers, balances, tx filters). balanceRefreshFunc is
+	// invoked after each toggle so the master page's cached header balances
+	// reflect the change immediately.
+	coinFilterTypes    []cointype.CoinType
+	coinSwitches       map[cointype.CoinType]*cryptomaterial.Switch
+	balanceRefreshFunc func()
 
 	walletCallbackFunc func()
 	changeTab          func(string)
@@ -108,12 +118,36 @@ func NewSettingsPage(l *load.Load, wallet sharedW.Asset, walletCallbackFunc func
 	return pg
 }
 
+// SetBalanceRefresher wires the callback invoked after a coin-visibility
+// toggle, so the hosting master page can refresh its cached header balances
+// immediately.
+func (pg *SettingsPage) SetBalanceRefresher(f func()) *SettingsPage {
+	pg.balanceRefreshFunc = f
+	return pg
+}
+
 // OnNavigatedTo is called when the page is about to be displayed and
 // may be used to initialize page features that are only relevant when
 // the page is displayed.
 // Part of the load.Page interface.
 func (pg *SettingsPage) OnNavigatedTo() {
 	pg.spendUnconfirmed.SetChecked(pg.readBool(sharedW.SpendUnconfirmedConfigKey))
+
+	// Build the coin-visibility switches from the coins emitted on chain.
+	// Checked = visible (not in the wallet's hidden set).
+	pg.coinFilterTypes = nil
+	pg.coinSwitches = make(map[cointype.CoinType]*cryptomaterial.Switch)
+	if dcrAsset, ok := pg.wallet.(*dcr.Asset); ok {
+		hidden := dcrAsset.HiddenCoinTypes()
+		// VAR included: the user may hide ALL coins (e.g. so the wallet UI
+		// doesn't reveal any holdings).
+		for _, ct := range dcrAsset.EmittedCoinTypes() {
+			sw := pg.Theme.Switch()
+			sw.SetChecked(!hidden[ct])
+			pg.coinFilterTypes = append(pg.coinFilterTypes, ct)
+			pg.coinSwitches[ct] = sw
+		}
+	}
 
 	pg.loadPeerAddress()
 
@@ -192,6 +226,23 @@ func (pg *SettingsPage) generalSection() layout.Widget {
 					return pg.subSection(gtx, values.String(values.StrUnconfirmedFunds), pg.spendUnconfirmed.Layout)
 				}
 				return D{}
+			}),
+			// Coin-visibility filter: a switch per SKA coin emitted on chain.
+			layout.Rigid(func(gtx C) D {
+				if len(pg.coinFilterTypes) == 0 {
+					return D{}
+				}
+				children := []layout.FlexChild{
+					layout.Rigid(func(gtx C) D {
+						lbl := pg.Theme.Label(values.TextSize14, values.String(values.StrVisibleCoins))
+						lbl.Color = pg.Theme.Color.GrayText2
+						return layout.Inset{Top: values.MarginPadding8, Bottom: values.MarginPadding4}.Layout(gtx, lbl.Layout)
+					}),
+				}
+				for _, ct := range pg.coinFilterTypes {
+					children = append(children, layout.Rigid(pg.subSectionSwitch(dcr.CoinSymbol(ct), pg.coinSwitches[ct])))
+				}
+				return layout.Flex{Axis: layout.Vertical}.Layout(gtx, children...)
 			}),
 			layout.Rigid(func(gtx C) D {
 				return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
@@ -725,6 +776,20 @@ func (pg *SettingsPage) HandleUserInteractions(gtx C) {
 
 	if pg.spendUnconfirmed.Changed(gtx) {
 		pg.wallet.SaveUserConfigValue(sharedW.SpendUnconfirmedConfigKey, pg.spendUnconfirmed.IsChecked())
+	}
+
+	// Coin-visibility filter toggles: off = hide the coin everywhere. The
+	// refresher recomputes the master page's cached header balances so the
+	// change shows up in the header immediately, not on the next sync event.
+	if dcrAsset, ok := pg.wallet.(*dcr.Asset); ok {
+		for _, ct := range pg.coinFilterTypes {
+			if sw := pg.coinSwitches[ct]; sw != nil && sw.Changed(gtx) {
+				dcrAsset.SetCoinTypeHidden(ct, !sw.IsChecked())
+				if pg.balanceRefreshFunc != nil {
+					pg.balanceRefreshFunc()
+				}
+			}
+		}
 	}
 
 	if pg.connectToPeer.Changed(gtx) && !pg.isPrivacyModeOn() {

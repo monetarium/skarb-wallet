@@ -5,6 +5,7 @@ import (
 	"image"
 	"io"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"gioui.org/io/clipboard"
@@ -96,9 +97,40 @@ type TxDetailsPage struct {
 	title                                 string
 	vspHost                               string
 	vspHostFees                           string
+	// staged*/pendingVSPRefresh hand VSP info from the fetch goroutine
+	// (OnNavigatedTo) to the UI thread, where vspHost/vspHostFees are read by
+	// Layout. Staking is removed in v1 so this path is dormant, but the code is
+	// live and must not write UI-read fields off the UI thread.
+	stagedVSPHost     string
+	stagedVSPHostFees string
+	pendingVSPRefresh atomic.Bool
 
 	moreOptionIsOpen bool
+
+	// pendingTxRefresh is set by the block/confirmation notification
+	// listener (a goroutine) and consumed on the UI thread in
+	// HandleUserInteractions. The notification only flags that something
+	// changed; the actual re-fetch of pg.transaction (whose BlockHeight is
+	// otherwise a stale snapshot — -1 forever for a tx confirmed while this
+	// page is open) and the rebuild of the cached status/icon widgets happen
+	// on the UI thread to avoid a data race with Layout (see CLAUDE.md §3).
+	pendingTxRefresh atomic.Bool
+
+	// rebroadcastTimes records the wall-clock time of each accepted
+	// rebroadcast click. Pressing Rebroadcast too often makes peers flag
+	// the wallet as abusive and ban it for ~24h, so we cap it to
+	// maxRebroadcastsPerWindow within a rolling rebroadcastWindow. Entries
+	// older than the window are pruned on each click.
+	rebroadcastTimes []time.Time
 }
+
+const (
+	// maxRebroadcastsPerWindow / rebroadcastWindow bound how often the user
+	// may re-publish unmined transactions before peers would consider the
+	// behaviour abusive (and ban the wallet for ~24h).
+	maxRebroadcastsPerWindow = 3
+	rebroadcastWindow        = time.Hour
+)
 
 func NewTransactionDetailsPage(l *load.Load, wallet sharedW.Asset, transaction *sharedW.Transaction) *TxDetailsPage {
 	rebroadcast := l.Theme.Label(values.TextSize14, values.String(values.StrRebroadcast))
@@ -258,14 +290,19 @@ func (pg *TxDetailsPage) OnNavigatedTo() {
 		}
 
 		if pg.wallet.TxMatchesFilter(pg.transaction, libutils.TxFilterStaking) {
+			// Defaults set on the UI thread (OnNavigatedTo); the goroutine
+			// publishes its result via staged fields + pendingVSPRefresh so it
+			// never writes vspHost/vspHostFees (read by Layout) off-thread.
+			pg.vspHost = values.String(values.StrNotAvailable)
+			pg.vspHostFees = values.String(values.StrNotAvailable)
 			go func() {
-				pg.vspHost = values.String(values.StrNotAvailable)
-				pg.vspHostFees = values.String(values.StrNotAvailable)
+				host := values.String(values.StrNotAvailable)
+				fees := values.String(values.StrNotAvailable)
 
 				var feeTxHash string
 				info, err := dcrImp.VSPTicketInfo(pg.transaction.Hash)
 				if info != nil {
-					pg.vspHost = info.VSP
+					host = info.VSP
 					feeTxHash = info.FeeTxHash
 				}
 				if err != nil {
@@ -273,20 +310,20 @@ func (pg *TxDetailsPage) OnNavigatedTo() {
 						// Ignore the wallet is locked error.
 						log.Errorf("VSPTicketInfo error: %v", err)
 					}
+					pg.publishVSPInfo(host, fees)
 					return
 				}
 
-				if feeTxHash == "" {
-					return
+				if feeTxHash != "" {
+					feeTx, ferr := pg.wallet.GetTransactionRaw(feeTxHash)
+					if feeTx != nil {
+						fees = pg.wallet.ToAmount(feeTx.Amount).String()
+					}
+					if ferr != nil {
+						log.Errorf("GetTransactionRaw error: %v", ferr)
+					}
 				}
-
-				feeTx, err := pg.wallet.GetTransactionRaw(feeTxHash)
-				if feeTx != nil {
-					pg.vspHostFees = pg.wallet.ToAmount(feeTx.Amount).String()
-				}
-				if err != nil {
-					log.Errorf("GetTransactionRaw error: %v", err)
-				}
+				pg.publishVSPInfo(host, fees)
 			}()
 		}
 	}
@@ -1034,7 +1071,37 @@ func (pg *TxDetailsPage) pageSections(gtx C, body layout.Widget) D {
 // used to update the page's UI components shortly before they are
 // displayed.
 // Part of the load.Page interface.
+// publishVSPInfo stages VSP host/fees fetched on a goroutine and flags the UI
+// thread (via pendingVSPRefresh + Reload) to copy them into vspHost/vspHostFees
+// in HandleUserInteractions. The atomic Store/CompareAndSwap pair provides the
+// happens-before so the staged-field reads are race-free.
+func (pg *TxDetailsPage) publishVSPInfo(host, fees string) {
+	pg.stagedVSPHost = host
+	pg.stagedVSPHostFees = fees
+	pg.pendingVSPRefresh.Store(true)
+	pg.ParentWindow().Reload()
+}
+
 func (pg *TxDetailsPage) HandleUserInteractions(gtx C) {
+	// Apply a pending refresh flagged by the block/confirmation listener on
+	// the UI thread (see pendingTxRefresh). Re-fetch the transaction so its
+	// BlockHeight reflects confirmation, then rebuild the cached status/icon
+	// widgets — without this the "Confirmation Status" row stays "Pending"
+	// until the user navigates away and back.
+	if pg.pendingTxRefresh.CompareAndSwap(true, false) {
+		if updated, err := pg.wallet.GetTransactionRaw(pg.transaction.Hash); err == nil && updated != nil {
+			pg.transaction = updated
+			pg.txnWidgets = pg.initTxnWidgets()
+			pg.refreshSenderClickables() // tx reassigned; clickable pool must follow
+		}
+	}
+
+	// Apply VSP info fetched off-thread (see publishVSPInfo) on the UI thread.
+	if pg.pendingVSPRefresh.CompareAndSwap(true, false) {
+		pg.vspHost = pg.stagedVSPHost
+		pg.vspHostFees = pg.stagedVSPHostFees
+	}
+
 	for _, item := range pg.moreItems {
 		if item.button.Clicked(gtx) {
 			switch item.id {
@@ -1062,17 +1129,43 @@ func (pg *TxDetailsPage) HandleUserInteractions(gtx C) {
 	}
 
 	if pg.rebroadcastClickable.Clicked(gtx) {
+		// Connectivity is checked first, on the UI thread, so a click made
+		// while offline neither hits the network nor consumes a rate-limit
+		// slot.
+		if !pg.wallet.IsConnectedToNetwork() {
+			errModal := modal.NewErrorModal(pg.Load, values.String(values.StrNotConnected), modal.DefaultClickFunc())
+			pg.ParentWindow().ShowModal(errModal)
+			return
+		}
+
+		// Rolling rate-limit: drop timestamps older than the window, then
+		// refuse the click (with an explanatory modal) if the user has
+		// already hit the cap. Spamming Rebroadcast otherwise gets the
+		// wallet banned by peers for ~24h.
+		now := time.Now()
+		kept := pg.rebroadcastTimes[:0]
+		for _, t := range pg.rebroadcastTimes {
+			if now.Sub(t) < rebroadcastWindow {
+				kept = append(kept, t)
+			}
+		}
+		pg.rebroadcastTimes = kept
+
+		if len(pg.rebroadcastTimes) >= maxRebroadcastsPerWindow {
+			// Minutes until the OLDEST recorded click ages out of the
+			// window — i.e. when a slot frees up again.
+			wait := rebroadcastWindow - now.Sub(pg.rebroadcastTimes[0])
+			minutes := int(wait.Minutes()) + 1
+			limitModal := modal.NewErrorModal(pg.Load,
+				values.StringF(values.StrRebroadcastLimitExceeded, minutes),
+				modal.DefaultClickFunc())
+			pg.ParentWindow().ShowModal(limitModal)
+			return
+		}
+		pg.rebroadcastTimes = append(pg.rebroadcastTimes, now)
+
 		go func() {
 			pg.rebroadcastClickable.SetEnabled(false, nil)
-			if !pg.wallet.IsConnectedToNetwork() {
-				// if user is not connected to the network, notify the user
-				errModal := modal.NewErrorModal(pg.Load, values.String(values.StrNotConnected), modal.DefaultClickFunc())
-				pg.ParentWindow().ShowModal(errModal)
-				if !pg.rebroadcastClickable.Enabled() {
-					pg.rebroadcastClickable.SetEnabled(true, nil)
-				}
-				return
-			}
 
 			err := pg.wallet.PublishUnminedTransactions()
 			if err != nil {
@@ -1141,9 +1234,20 @@ func (pg *TxDetailsPage) OnNavigatedFrom() {
 // the same key is already registered — log and continue, the existing
 // listener is a re-mount of this page and still fires Reload.
 func (pg *TxDetailsPage) wireBlockListener() {
+	// Flag a refresh (consumed on the UI thread) AND reload. Reload alone is
+	// not enough: pg.transaction is a snapshot whose BlockHeight stays -1 even
+	// after the tx confirms, so txConfirmations() = bestBlock - (-1) would
+	// never leave "0 / pending". The UI-thread consumer re-fetches the tx so
+	// the height (and thus the live confirmation count + status icon) updates.
 	listener := &sharedW.TxAndBlockNotificationListener{
-		OnBlockAttached:        func(_ int, _ int32) { pg.ParentWindow().Reload() },
-		OnTransactionConfirmed: func(_ int, _ string, _ int32) { pg.ParentWindow().Reload() },
+		OnBlockAttached: func(_ int, _ int32) {
+			pg.pendingTxRefresh.Store(true)
+			pg.ParentWindow().Reload()
+		},
+		OnTransactionConfirmed: func(_ int, _ string, _ int32) {
+			pg.pendingTxRefresh.Store(true)
+			pg.ParentWindow().Reload()
+		},
 	}
 	if err := pg.wallet.AddTxAndBlockNotificationListener(listener, TransactionDetailsPageID); err != nil {
 		log.Errorf("TxDetailsPage: add block listener: %v", err)

@@ -182,10 +182,10 @@ func NewManualCoinSelectionPage(l *load.Load, sendPage *Page) *ManualCoinSelecti
 	name := fmt.Sprintf("%v(%v)", values.String(values.StrAmount), pg.strAssetType)
 
 	// UTXO table view titles.
-	pg.amountLabel = pg.generateLabel(name, pg.amountClickable)                                                 // Component 2
-	pg.addressLabel = pg.generateLabel(values.String(values.StrAddress), pg.addressClickable)                   // Component 3
-	pg.confirmationsLabel = pg.generateLabel(values.String(values.StrConfirmations), pg.confirmationsClickable) // component 4
-	pg.dateLabel = pg.generateLabel(values.String(values.StrDateCreated), pg.dateClickable)                     // component 5
+	pg.amountLabel = pg.generateLabel(name, pg.amountClickable, false)                                                 // Component 2
+	pg.addressLabel = pg.generateLabel(values.String(values.StrAddress), pg.addressClickable, false)                   // Component 3
+	pg.confirmationsLabel = pg.generateLabel(values.String(values.StrConfirmations), pg.confirmationsClickable, false) // component 4
+	pg.dateLabel = pg.generateLabel(values.String(values.StrDateCreated), pg.dateClickable, false)                     // component 5
 
 	pg.accountCollapsible = pg.Theme.Collapsible()
 	pg.accountCollapsible.IconPosition = cryptomaterial.Before
@@ -194,9 +194,9 @@ func NewManualCoinSelectionPage(l *load.Load, sendPage *Page) *ManualCoinSelecti
 	// properties describes the spacing constants set for the display of UTXOs.
 	pg.properties = []componentProperties{
 		{direction: layout.Center, weight: 0.1}, // Component 1
-		{direction: layout.E, weight: 0.17},     // Component 2
+		{direction: layout.E, weight: 0.24},     // Component 2 (Amount — wider so big SKA values aren't chopped)
 		{direction: layout.W, weight: 0.02},     // Spacing Column
-		{direction: layout.W, weight: 0.26},     // Component 3
+		{direction: layout.W, weight: 0.19},     // Component 3 (Address — narrower; values truncated to 16 runes)
 		{direction: layout.W, weight: 0.005},    // Spacing Column
 		{direction: layout.E, weight: 0.18},     // Component 4
 		{direction: layout.W, weight: 0.02},     // Spacing Column
@@ -270,13 +270,24 @@ func (pg *ManualCoinSelectionPage) fetchAccountsInfo() error {
 	}
 
 	previousUTXOs := make(map[string]struct{}, 0)
-	// Use the previous Selection of UTXO if same acccount source has been used.
-	if account == pg.sendPage.selectedUTXOs.sourceAccount {
+	// Use the previous selection of UTXOs if the same account source is shown.
+	// Match by WalletID+Number, NOT pointer identity: AccountDropdown.Setup()
+	// reallocates *Account on every balance refresh / wallet-dropdown change,
+	// so a pointer compare would spuriously fail and "lose" the user's
+	// selection on the page even though manualSelectionFor still treats it as
+	// active downstream (same fix already applied to manualSelectionFor).
+	stored := pg.sendPage.selectedUTXOs.sourceAccount
+	if stored != nil && account != nil && stored.WalletID == account.WalletID && stored.Number == account.Number {
 		for _, utxo := range pg.sendPage.selectedUTXOs.selectedUTXOs {
 			previousUTXOs[utxo.TxID] = struct{}{}
 			pg.selectedAtoms.Add(pg.selectedAtoms, utxoAtoms(utxo))
 		}
-		pg.selectedUTXOrows = pg.sendPage.selectedUTXOs.selectedUTXOs
+		// Copy, don't alias: HandleUserInteractions mutates pg.selectedUTXOrows
+		// in place (copy()+reslice on uncheck, append on check). Sharing the
+		// backing array with the send page's stored slice would corrupt the
+		// stored selection if the user unchecks a UTXO and then leaves via the
+		// back-arrow (which does NOT call UpdateSelectedUTXOs).
+		pg.selectedUTXOrows = append([]*sharedW.UnspentOutput(nil), pg.sendPage.selectedUTXOs.selectedUTXOs...)
 	}
 
 	rowInfo := make([]*UTXOInfo, len(info))
@@ -586,7 +597,7 @@ func (pg *ManualCoinSelectionPage) accountListSection(gtx C) D {
 	})
 }
 
-func (pg *ManualCoinSelectionPage) generateLabel(txt interface{}, clickable *cryptomaterial.Clickable) labelCell {
+func (pg *ManualCoinSelectionPage) generateLabel(txt interface{}, clickable *cryptomaterial.Clickable, isAddress bool) labelCell {
 	txtStr := ""
 	switch n := txt.(type) {
 	case string:
@@ -598,9 +609,18 @@ func (pg *ManualCoinSelectionPage) generateLabel(txt interface{}, clickable *cry
 	}
 
 	lb := pg.Theme.Label(values.TextSizeTransform(pg.IsMobileView(), values.TextSize14), txtStr)
-	if len(txtStr) > MaxAddressLen {
-		// Only addresses have texts longer than 16 characters.
-		lb.Text = txtStr[:MaxAddressLen] + "..."
+	// Truncate + recolour ONLY addresses (rendered as blue copyable links).
+	// The old heuristic `len(txtStr) > 16` misfired on two other column
+	// kinds: (a) large SKA amounts whose decimal string easily exceeds 16
+	// characters, and (b) Cyrillic column headers ("Підтверджень",
+	// "Дата створення") whose UTF-8 BYTE length exceeds 16 at only ~8 runes
+	// — both got chopped to "1123456788140.14..." / "Підтверд..." and dyed
+	// blue. Slice by RUNES so multibyte text is never split mid-codepoint;
+	// non-address cells keep their full text and default colour/weight.
+	if isAddress {
+		if runes := []rune(txtStr); len(runes) > MaxAddressLen {
+			lb.Text = string(runes[:MaxAddressLen]) + "..."
+		}
 		lb.Color = pg.Theme.Color.Primary
 	}
 
@@ -634,10 +654,10 @@ func (pg *ManualCoinSelectionPage) accountListItemsSection(gtx C, utxos []*UTXOI
 							// FormatTxAmountBig so the SKAAmountAtoms big-string
 							// channel surfaces the actual atom value with the right
 							// "SKA1"/"SKA2"/"VAR" suffix.
-							amountLabel := pg.generateLabel(dcr.FormatTxAmountBig(v.SKAAmountAtoms, v.Amount.ToInt(), v.CoinType), nil) // component 2
-							addresslabel := pg.generateLabel(v.Address, nil)                                      // Component 3
-							confirmationsLabel := pg.generateLabel(v.Confirmations, nil)                          // Component 4
-							dateLabel := pg.generateLabel(libutils.FormatUTCShortTime(v.ReceiveTime.Unix()), nil) // Component 5
+							amountLabel := pg.generateLabel(dcr.FormatTxAmountBig(v.SKAAmountAtoms, v.Amount.ToInt(), v.CoinType), nil, false) // component 2
+							addresslabel := pg.generateLabel(v.Address, nil, true)                                                       // Component 3
+							confirmationsLabel := pg.generateLabel(v.Confirmations, nil, false)                                          // Component 4
+							dateLabel := pg.generateLabel(libutils.FormatUTCShortTime(v.ReceiveTime.Unix()), nil, false)                 // Component 5
 
 							// copy destination Address
 							if v.addressCopy.Clicked(gtx) {
