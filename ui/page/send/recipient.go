@@ -91,6 +91,11 @@ func (rp *recipient) setDestinationAssetType(assetType libUtil.AssetType) {
 // AND once at construction time so the default VAR scaling is explicit.
 func (rp *recipient) setCoinType(ct cointype.CoinType) {
 	rp.amount.setCoinType(ct)
+	// Destination wallet/account rows must show the balance of the coin
+	// being sent, not always VAR.
+	if rp.sendDestination != nil {
+		rp.sendDestination.setCoinType(ct)
+	}
 }
 
 func (rp *recipient) isAccountValid(sourceAccount, account *sharedW.Account) bool {

@@ -12,6 +12,7 @@ package root
 
 import (
 	"fmt"
+	"image/color"
 	"strings"
 
 	"gioui.org/font"
@@ -20,10 +21,13 @@ import (
 	"gioui.org/unit"
 
 	"github.com/monetarium/skarb-wallet/app"
+	"github.com/monetarium/skarb-wallet/libwallet/assets/dcr"
 	sharedW "github.com/monetarium/skarb-wallet/libwallet/assets/wallet"
 	"github.com/monetarium/skarb-wallet/ui/cryptomaterial"
 	"github.com/monetarium/skarb-wallet/ui/load"
 	"github.com/monetarium/skarb-wallet/ui/modal"
+	"github.com/monetarium/skarb-wallet/ui/page/components"
+	"github.com/monetarium/skarb-wallet/ui/page/seedbackup"
 	"github.com/monetarium/skarb-wallet/ui/page/settings"
 	walletpage "github.com/monetarium/skarb-wallet/ui/page/wallet"
 	"github.com/monetarium/skarb-wallet/ui/values"
@@ -42,8 +46,19 @@ type HomePage struct {
 	walletEntries []walletEntry
 	walletsList   layout.List
 
-	overviewBtn cryptomaterial.Button
-	settingsBtn cryptomaterial.Button
+	// Nav items are hoverable Clickables (not Buttons): the cryptomaterial
+	// Button's hover/ink uses Hovered(HighlightColor), and the only
+	// transparent-friendly highlight (SurfaceHighlight) is unset (== zero), so
+	// flat Buttons showed NO hover/press feedback. A LinearLayout+Clickable
+	// uses ClickableStyle.HoverColor (Gray5) directly — the same visible hover
+	// the wallet entries already use.
+	overviewClick     *cryptomaterial.Clickable
+	settingsClick     *cryptomaterial.Clickable
+	createWalletClick *cryptomaterial.Clickable
+
+	// selectedWalletID is the wallet whose detail page is currently shown in
+	// the body, so its sidebar entry can be highlighted. -1 = none (Overview).
+	selectedWalletID int
 }
 
 type walletEntry struct {
@@ -53,13 +68,37 @@ type walletEntry struct {
 
 // NewHomePage returns a fresh home page.
 func NewHomePage(l *load.Load) *HomePage {
-	return &HomePage{
-		MasterPage:  app.NewMasterPage(HomePageID),
-		Load:        l,
-		walletsList: layout.List{Axis: layout.Vertical},
-		overviewBtn: l.Theme.Button(values.String(values.StrOverview)),
-		settingsBtn: l.Theme.Button(values.String(values.StrSettings)),
+	hp := &HomePage{
+		MasterPage:        app.NewMasterPage(HomePageID),
+		Load:              l,
+		walletsList:       layout.List{Axis: layout.Vertical},
+		overviewClick:     l.Theme.NewClickable(true),
+		settingsClick:     l.Theme.NewClickable(true),
+		createWalletClick: l.Theme.NewClickable(true),
+		selectedWalletID:  -1,
 	}
+
+	return hp
+}
+
+// navRow renders a single flat sidebar navigation row: a hoverable Clickable
+// (so it shows the standard Gray5 hover + press feedback) wrapping a label.
+func (hp *HomePage) navRow(gtx layout.Context, click *cryptomaterial.Clickable, label string, textColor color.NRGBA) layout.Dimensions {
+	return cryptomaterial.LinearLayout{
+		Width:       cryptomaterial.MatchParent,
+		Height:      cryptomaterial.WrapContent,
+		Clickable:   click,
+		Border:      cryptomaterial.Border{Radius: cryptomaterial.Radius(8)},
+		Padding:     layout.Inset{Top: unit.Dp(9), Bottom: unit.Dp(9), Left: unit.Dp(10), Right: unit.Dp(10)},
+		Orientation: layout.Vertical,
+	}.Layout(gtx,
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			lbl := hp.Theme.Body1(label)
+			lbl.Color = textColor
+			lbl.Font.Weight = font.Medium
+			return lbl.Layout(gtx)
+		}),
+	)
 }
 
 // ID returns the page ID.
@@ -107,6 +146,7 @@ func (hp *HomePage) maybeAutoSync() {
 // the wallet-detail subpage as its "back" callback so the top-left arrow on
 // each wallet sub-screen returns the user to the dashboard.
 func (hp *HomePage) showOverview() {
+	hp.selectedWalletID = -1
 	// Hand the OverviewPage a callback so clicking a wallet card jumps
 	// straight into its detail page — same target as a sidebar entry click.
 	hp.Display(NewOverviewPage(hp.Load, func() {}, hp.openWallet))
@@ -116,6 +156,7 @@ func (hp *HomePage) showOverview() {
 // between sidebar entries and Overview cards so both paths land on the same
 // place.
 func (hp *HomePage) openWallet(w sharedW.Asset) {
+	hp.selectedWalletID = w.GetWalletID()
 	hp.Display(walletpage.NewSingleWalletMasterPage(hp.Load, w, hp.showOverview))
 }
 
@@ -203,14 +244,41 @@ func (hp *HomePage) OnNavigatedFrom() {
 
 // HandleUserInteractions wires sidebar clicks to subpage transitions.
 func (hp *HomePage) HandleUserInteractions(gtx layout.Context) {
-	if hp.overviewBtn.Clicked(gtx) {
+	if hp.overviewClick.Clicked(gtx) {
 		hp.showOverview()
 	}
-	if hp.settingsBtn.Clicked(gtx) {
+	if hp.settingsClick.Clicked(gtx) {
 		// AppSettingsPage hosts the network (mainnet ↔ testnet) switcher,
 		// language, theme, and other process-wide knobs. It's a top-level
 		// modal-style page rather than a wallet-scoped one.
 		hp.ParentWindow().Display(settings.NewAppSettingsPage(hp.Load))
+	}
+	if hp.createWalletClick.Clicked(gtx) {
+		// Reuse the onboarding wallet-creation flow. (The wallet-selector page
+		// that used to host "Add wallet" is unused in this fork, so without
+		// this button there was no in-app way to create a second wallet after
+		// onboarding.) The callback mirrors onboarding: mark the new wallet
+		// for auto-sync, pop back home (the sidebar refreshes every Layout),
+		// then force the seed-backup flow for a freshly created wallet —
+		// restored/watch-only wallets skip it (seed already held / no seed).
+		hp.ParentWindow().Display(components.NewCreateWallet(hp.Load, func(newWallet sharedW.Asset) {
+			hp.ParentWindow().CloseCurrentPage()
+			if newWallet == nil {
+				return
+			}
+			newWallet.SaveUserConfigValue(sharedW.AutoSyncConfigKey, true)
+			if newWallet.IsWatchingOnlyWallet() {
+				return
+			}
+			if dcrW, ok := newWallet.(*dcr.Asset); ok && dcrW.IsRestored {
+				return
+			}
+			currentID := hp.ParentWindow().CurrentPageID()
+			hp.ParentWindow().Display(seedbackup.NewBackupInstructionsPage(hp.Load, newWallet,
+				func(_ *load.Load, navigator app.WindowNavigator) {
+					navigator.ClosePagesAfter(currentID)
+				}))
+		}))
 	}
 	for _, entry := range hp.walletEntries {
 		if entry.click != nil && entry.click.Clicked(gtx) {
@@ -240,40 +308,59 @@ func (hp *HomePage) layoutSidebar(gtx layout.Context) layout.Dimensions {
 		Width:       cryptomaterial.MatchParent,
 		Height:      cryptomaterial.MatchParent,
 		Background:  hp.Theme.Color.Surface,
-		Padding:     layout.UniformInset(unit.Dp(12)),
+		Padding:     layout.UniformInset(unit.Dp(16)),
 		Orientation: layout.Vertical,
 	}.Layout(gtx,
+		// Brand + a single subtle network line (the old layout repeated the
+		// network in two captions and stacked a wallet count up here too).
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 			t := hp.Theme.H6("Skarb")
 			t.Font.Weight = font.Bold
 			return t.Layout(gtx)
 		}),
+		layout.Rigid(layout.Spacer{Height: unit.Dp(2)}.Layout),
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-			c := hp.Theme.Caption(fmt.Sprintf("%s · %d %s",
-				hp.AssetsManager.NetType(),
-				hp.AssetsManager.LoadedWalletsCount(),
-				values.String(values.StrWallets)))
-			return c.Layout(gtx)
-		}),
-		layout.Rigid(layout.Spacer{Height: unit.Dp(12)}.Layout),
-		layout.Rigid(hp.overviewBtn.Layout),
-		layout.Rigid(layout.Spacer{Height: unit.Dp(6)}.Layout),
-		layout.Rigid(hp.settingsBtn.Layout),
-		layout.Rigid(layout.Spacer{Height: unit.Dp(4)}.Layout),
-		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-			net := hp.Theme.Caption(fmt.Sprintf("%s: %s",
-				values.String(values.StrNetwork),
-				hp.AssetsManager.NetType()))
+			net := hp.Theme.Caption(string(hp.AssetsManager.NetType()))
 			net.Color = hp.Theme.Color.GrayText3
 			return net.Layout(gtx)
 		}),
-		layout.Rigid(layout.Spacer{Height: unit.Dp(12)}.Layout),
+		layout.Rigid(layout.Spacer{Height: unit.Dp(14)}.Layout),
+		layout.Rigid(hp.Theme.Separator().Layout),
+		layout.Rigid(layout.Spacer{Height: unit.Dp(10)}.Layout),
+
+		// Navigation.
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-			label := hp.Theme.Caption(strings.ToUpper(values.String(values.StrWallets)))
-			label.Color = hp.Theme.Color.GrayText2
-			return label.Layout(gtx)
+			return hp.navRow(gtx, hp.overviewClick, values.String(values.StrOverview), hp.Theme.Color.GrayText1)
 		}),
-		layout.Rigid(layout.Spacer{Height: unit.Dp(4)}.Layout),
+		layout.Rigid(layout.Spacer{Height: unit.Dp(2)}.Layout),
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			return hp.navRow(gtx, hp.settingsClick, values.String(values.StrSettings), hp.Theme.Color.GrayText1)
+		}),
+		layout.Rigid(layout.Spacer{Height: unit.Dp(10)}.Layout),
+		layout.Rigid(hp.Theme.Separator().Layout),
+		layout.Rigid(layout.Spacer{Height: unit.Dp(12)}.Layout),
+
+		// Wallets section: header (label + count), create action, then the list.
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			return layout.Flex{Alignment: layout.Middle, Spacing: layout.SpaceBetween}.Layout(gtx,
+				layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+					label := hp.Theme.Caption(strings.ToUpper(values.String(values.StrWallets)))
+					label.Color = hp.Theme.Color.GrayText2
+					label.Font.Weight = font.SemiBold
+					return label.Layout(gtx)
+				}),
+				layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+					count := hp.Theme.Caption(fmt.Sprintf("%d", len(hp.walletEntries)))
+					count.Color = hp.Theme.Color.GrayText3
+					return count.Layout(gtx)
+				}),
+			)
+		}),
+		layout.Rigid(layout.Spacer{Height: unit.Dp(6)}.Layout),
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			return hp.navRow(gtx, hp.createWalletClick, values.String(values.StrCreateWallet), hp.Theme.Color.Primary)
+		}),
+		layout.Rigid(layout.Spacer{Height: unit.Dp(8)}.Layout),
 		layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
 			if len(hp.walletEntries) == 0 {
 				empty := hp.Theme.Body2(values.String(values.StrnoValidWalletFound))
@@ -289,18 +376,39 @@ func (hp *HomePage) layoutSidebar(gtx layout.Context) layout.Dimensions {
 }
 
 func (hp *HomePage) layoutWalletEntry(gtx layout.Context, e *walletEntry) layout.Dimensions {
+	// The active wallet gets a filled highlight + primary-coloured name; the
+	// rest are flat rows. This reads as a real selectable list instead of a
+	// pile of identical labels.
+	selected := e.wallet.GetWalletID() == hp.selectedWalletID
+	bg := color.NRGBA{} // transparent
+	nameColor := hp.Theme.Color.GrayText1
+	nameWeight := font.Medium
+	if selected {
+		// Gray5 is the theme's hover/active fill (SurfaceHighlight is unset →
+		// transparent, so it gave no visible highlight). Paired with the
+		// primary-coloured name this clearly marks the active wallet.
+		bg = hp.Theme.Color.Gray5
+		nameColor = hp.Theme.Color.Primary
+		nameWeight = font.SemiBold
+	}
+
 	return cryptomaterial.LinearLayout{
 		Width:       cryptomaterial.MatchParent,
 		Height:      cryptomaterial.WrapContent,
-		Padding:     layout.Inset{Top: unit.Dp(6), Bottom: unit.Dp(6), Left: unit.Dp(4), Right: unit.Dp(4)},
-		Margin:      layout.Inset{Bottom: unit.Dp(2)},
+		Background:  bg,
+		Border:      cryptomaterial.Border{Radius: cryptomaterial.Radius(8)},
+		Padding:     layout.Inset{Top: unit.Dp(8), Bottom: unit.Dp(8), Left: unit.Dp(10), Right: unit.Dp(10)},
+		Margin:      layout.Inset{Bottom: unit.Dp(4)},
 		Clickable:   e.click,
 		Orientation: layout.Vertical,
 	}.Layout(gtx,
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 			lbl := hp.Theme.Body1(e.wallet.GetWalletName())
+			lbl.Color = nameColor
+			lbl.Font.Weight = nameWeight
 			return lbl.Layout(gtx)
 		}),
+		layout.Rigid(layout.Spacer{Height: unit.Dp(1)}.Layout),
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 			meta := hp.Theme.Caption(fmt.Sprintf("ID #%d", e.wallet.GetWalletID()))
 			meta.Color = hp.Theme.Color.GrayText3

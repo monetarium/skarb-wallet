@@ -13,6 +13,7 @@ import (
 	"github.com/monetarium/monetarium-node/chaincfg"
 	"github.com/monetarium/monetarium-node/chaincfg/chainhash"
 	"github.com/monetarium/monetarium-node/dcrutil"
+	"github.com/monetarium/monetarium-node/txscript/stdaddr"
 	"github.com/monetarium/monetarium-node/txscript/stdscript"
 	"github.com/monetarium/monetarium-node/wire"
 	"github.com/monetarium/monetarium-explorer/txhelpers"
@@ -262,14 +263,14 @@ func (asset *Asset) DecodeTransaction(walletTx *sharedW.TxInfoFromWallet, netPar
 		}
 	}
 	if skaTotalOut != nil && skaTotalWalletOut != nil {
-		// Pick the display amount based on direction (int64 classifier
-		// already decided this — we mirror it):
+		// Pick the SKA display amount by direction (the int64 classifier
+		// already decided direction — we mirror it):
 		//   Received: total wallet-owned output value.
-		//   Sent / Transferred: total non-wallet output value (= what
-		//   actually left the wallet, before fee). For phase-1 we
-		//   approximate Sent as skaTotalOut - skaTotalWalletOut; if
-		//   that's zero (everything went to ourselves) fall through to
-		//   skaTotalWalletOut.
+		//   Sent:     total non-wallet output value (what left the wallet,
+		//             before fee); fall back to wallet-out if everything
+		//             went to ourselves.
+		//   Transferred (self): replaced by the coin-type-agnostic block
+		//             below with the amount delivered to the destination.
 		switch direction {
 		case txhelper.TxDirectionReceived:
 			amountAtoms = skaTotalWalletOut.String()
@@ -282,6 +283,81 @@ func (asset *Asset) DecodeTransaction(walletTx *sharedW.TxInfoFromWallet, netPar
 			}
 		default:
 			amountAtoms = skaTotalWalletOut.String()
+		}
+	}
+
+	// Account-to-account (self) transfer: every input and output is owned by
+	// this wallet, so the int64 classifier reports amount == fee (which reads
+	// as "the fee is the amount"). Show instead the value delivered to the
+	// DESTINATION account.
+	//
+	// Identify the change by SOURCE ACCOUNT, not the Internal branch flag.
+	// Filtering on Internal alone was wrong: in an observed self-transfer the
+	// change output was NOT flagged Internal, so "sum the non-internal
+	// outputs" summed the change (the dominant output) and displayed it as the
+	// amount. The change is whatever value returns to the funding (source)
+	// account — the account whose UTXOs were spent as inputs. Everything paid
+	// to a DIFFERENT wallet account is the transferred amount. The Internal
+	// flag is used only as a fallback when account metadata is unavailable
+	// (e.g. a mempool output augmented without a resolved account number).
+	// Applies to both VAR (out.Value) and SKA (out.SKAValue).
+	if direction == txhelper.TxDirectionTransferred {
+		sourceAcct := int32(-1)
+		for _, wi := range walletTx.Inputs {
+			if wi.WAccount != nil {
+				sourceAcct = wi.AccountNumber
+				break
+			}
+		}
+		transferredOut := new(big.Int)
+		for _, wo := range walletTx.Outputs {
+			if int(wo.Index) >= len(msgTx.TxOut) {
+				continue
+			}
+			// Skip the change output: value returning to the funding account.
+			// An output is change if EITHER it is flagged Internal OR its
+			// account resolves to the source account. The Internal check must
+			// come first and NOT be overridden by the account compare:
+			// augmentWalletOutputs recovers mempool change with Internal=true
+			// but a HARDCODED AccountNumber=0, so a plain `isChange =
+			// (account == source)` would evaluate `0 == N` = false for a
+			// non-default source account and wrongly count the change. Honour
+			// the Internal=true signal augment already sets, and only consult
+			// the account when the output is not already known to be internal.
+			isChange := wo.Internal
+			if !isChange && sourceAcct >= 0 && wo.WAccount != nil {
+				isChange = wo.AccountNumber == sourceAcct
+			}
+			if isChange {
+				continue
+			}
+			out := msgTx.TxOut[wo.Index]
+			if isSKATx {
+				if out.SKAValue != nil {
+					transferredOut.Add(transferredOut, out.SKAValue)
+				}
+			} else {
+				transferredOut.Add(transferredOut, big.NewInt(out.Value))
+			}
+		}
+		log.Infof("DecodeTransaction self-transfer tx=%s sourceAcct=%d transferred=%s outs=%d",
+			msgTx.TxHash(), sourceAcct, transferredOut.String(), len(walletTx.Outputs))
+		if transferredOut.Sign() > 0 {
+			amountAtoms = transferredOut.String()
+			// Keep the int64 channel in sync for VAR (row label / sort keys /
+			// balance widgets read tx.Amount directly). SKA keeps its int64
+			// 'amount' slice as-is; AmountAtoms is authoritative for SKA.
+			if !isSKATx && transferredOut.IsInt64() {
+				amount = transferredOut.Int64()
+			}
+		} else if isSKATx && feeBig != nil {
+			// Pure self-consolidation (every output returned to the source
+			// account, nothing delivered elsewhere): the only value that moved
+			// is the fee, matching the int64 classifier's amount==fee semantics.
+			// Without this, the SKA switch default left amountAtoms =
+			// skaTotalWalletOut (the full wallet output, change included),
+			// overstating a ~0-transfer as the entire balance.
+			amountAtoms = feeBig.String()
 		}
 	}
 	return &sharedW.Transaction{
@@ -542,14 +618,17 @@ func (asset *Asset) filterOwnedWalletInputs(msgTx *wire.MsgTx, walletInputs []*s
 // confirmation a different code path re-derives Credits and the row
 // corrects itself; this helper closes the mempool-window gap.
 //
-// Synthetic outputs are flagged Internal=true (they're change by
-// construction — a wallet-owned output we couldn't find in upstream's
-// list is almost always change from a self-initiated send) and
-// AccountNumber=0 with empty AccountName. Downstream the AccountNumber
-// is only read for ownership testing (`!= -1`) — actual account
-// resolution can wait for confirmation. Internal=true keeps the
-// tx-details "To" panel from listing the change as an external
-// recipient.
+// Synthetic outputs resolve their REAL account and branch via the wallet's
+// KnownAddress API (BIP0044Address.Path → account, branch): branch 1 =
+// internal/change, branch 0 = external/receiving. The first version of this
+// helper hardcoded Internal=true + AccountNumber=0, which was right for the
+// common missing-change case but WRONG for an account-to-account transfer
+// whose DESTINATION output is also absent from upstream's mempool MyOutputs:
+// the destination got flagged as change, the self-transfer classifier summed
+// 0 transferred, and tx-details showed the FEE instead of the sent amount
+// until confirmation rebuilt the outputs correctly. When KnownAddress fails
+// (e.g. wallet briefly locked), fall back to the old conservative
+// change-shaped defaults.
 //
 // Returns walletOutputs unchanged if the wallet isn't open (defensive,
 // matches filterOwnedWalletInputs's fail-open behavior during shutdown).
@@ -557,6 +636,7 @@ func (asset *Asset) augmentWalletOutputs(msgTx *wire.MsgTx, walletOutputs []*sha
 	if !asset.WalletOpened() {
 		return walletOutputs
 	}
+	ctx, _ := asset.ShutdownContextWithCancel()
 	known := make(map[int32]bool, len(walletOutputs))
 	for _, wo := range walletOutputs {
 		if wo != nil {
@@ -570,10 +650,12 @@ func (asset *Asset) augmentWalletOutputs(msgTx *wire.MsgTx, walletOutputs []*sha
 		}
 		_, addrs := stdscript.ExtractAddrs(txOut.Version, txOut.PkScript, netParams)
 		var ownedAddr string
+		var ownedStdAddr stdaddr.Address
 		for _, addr := range addrs {
 			a := addr.String()
 			if asset.HaveAddress(a) {
 				ownedAddr = a
+				ownedStdAddr = addr
 				break
 			}
 		}
@@ -586,21 +668,38 @@ func (asset *Asset) augmentWalletOutputs(msgTx *wire.MsgTx, walletOutputs []*sha
 		} else {
 			amount = txOut.Value
 		}
-		log.Warnf("augmentWalletOutputs(tx=%s): output %d (%s atoms, ct=%s) belongs to wallet via address %s but is absent from upstream MyOutputs — appending as Internal=true so totals classify correctly.",
+
+		// Resolve the actual account + branch for the owned address.
+		internal := true        // conservative fallback: change-shaped
+		acctNum := int32(0)     // legacy fallback account
+		acctName := ""
+		if ka, kerr := asset.Internal().DCR.KnownAddress(ctx, ownedStdAddr); kerr == nil && ka != nil {
+			acctName = ka.AccountName()
+			if ba, ok := ka.(w.BIP0044Address); ok {
+				acct, branch, _ := ba.Path()
+				acctNum = int32(acct)
+				internal = branch == 1
+			}
+		} else if kerr != nil {
+			log.Warnf("augmentWalletOutputs(tx=%s): KnownAddress(%s) failed (%v); falling back to Internal=true/acct=0",
+				msgTx.TxHash(), ownedAddr, kerr)
+		}
+
+		log.Warnf("augmentWalletOutputs(tx=%s): output %d (%s atoms, ct=%s) belongs to wallet via address %s but is absent from upstream MyOutputs — appending with acct=%d internal=%v.",
 			msgTx.TxHash(), i, func() string {
 				if txOut.CoinType.IsSKA() && txOut.SKAValue != nil {
 					return txOut.SKAValue.String()
 				}
 				return fmt.Sprintf("%d", txOut.Value)
-			}(), txOut.CoinType, ownedAddr)
+			}(), txOut.CoinType, ownedAddr, acctNum, internal)
 		out = append(out, &sharedW.WOutput{
 			Index:     int32(i),
 			AmountOut: amount,
-			Internal:  true,
+			Internal:  internal,
 			Address:   ownedAddr,
 			WAccount: &sharedW.WAccount{
-				AccountNumber: 0,
-				AccountName:   "",
+				AccountNumber: acctNum,
+				AccountName:   acctName,
 			},
 		})
 		known[int32(i)] = true

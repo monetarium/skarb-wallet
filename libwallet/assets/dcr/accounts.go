@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strconv"
+	"time"
 
 	"github.com/monetarium/monetarium-wallet/errors"
 	w "github.com/monetarium/monetarium-wallet/wallet"
@@ -19,7 +20,7 @@ import (
 func (asset *Asset) GetAccounts() (string, error) {
 	accountsResponse, err := asset.GetAccountsRaw()
 	if err != nil {
-		return "", nil
+		return "", err
 	}
 
 	result, _ := json.Marshal(accountsResponse)
@@ -210,6 +211,11 @@ func (asset *Asset) UnspentOutputs(account int32) ([]*sharedW.UnspentOutput, err
 		unspents = append(unspents, perCoin...)
 	}
 
+	// blockTimeCache memoises block timestamps by height so a wallet with
+	// many UTXOs spread across distinct blocks only does one BlockInfo
+	// lookup per height instead of one per UTXO.
+	blockTimeCache := make(map[int32]time.Time)
+
 	unspentOutputs := make([]*sharedW.UnspentOutput, 0, len(unspents))
 	for _, utxo := range unspents {
 		hash := utxo.OutPoint.Hash
@@ -223,6 +229,23 @@ func (asset *Asset) UnspentOutputs(account int32) ([]*sharedW.UnspentOutput, err
 		inputBlockHeight := utxo.ContainingBlock.Height
 		if inputBlockHeight != -1 {
 			confirmations = asset.GetBestBlockHeight() - inputBlockHeight + 1
+		}
+
+		// The UTXO's real creation time is the timestamp of its containing
+		// block, NOT utxo.ReceiveTime — the latter is when this wallet
+		// *recorded* the credit, which is identical for every output picked
+		// up in a single scan/rescan (symptom: every row in the UTXO
+		// selector shows the same date/time). Fall back to ReceiveTime only
+		// for still-unconfirmed outputs (height == -1) or if the block
+		// lookup fails.
+		receiveTime := utxo.ReceiveTime
+		if inputBlockHeight != -1 {
+			if t, ok := blockTimeCache[inputBlockHeight]; ok {
+				receiveTime = t
+			} else if bt := asset.blockCreationTime(ctx, inputBlockHeight); !bt.IsZero() {
+				blockTimeCache[inputBlockHeight] = bt
+				receiveTime = bt
+			}
 		}
 
 		addr := ""
@@ -248,7 +271,7 @@ func (asset *Asset) UnspentOutputs(account int32) ([]*sharedW.UnspentOutput, err
 			Address:        addr,
 			Amount:         Amount(utxo.Output.Value),
 			ScriptPubKey:   hex.EncodeToString(utxo.Output.PkScript),
-			ReceiveTime:    utxo.ReceiveTime,
+			ReceiveTime:    receiveTime,
 			Confirmations:  confirmations,
 			Spendable:      true,
 			Tree:           utxo.OutPoint.Tree,
@@ -258,6 +281,18 @@ func (asset *Asset) UnspentOutputs(account int32) ([]*sharedW.UnspentOutput, err
 	}
 
 	return unspentOutputs, nil
+}
+
+// blockCreationTime resolves the timestamp of the block at the given height
+// via the wallet's local header store. Returns the zero time.Time on any
+// error so callers can fall back to another time source.
+func (asset *Asset) blockCreationTime(ctx context.Context, height int32) time.Time {
+	identifier := w.NewBlockIdentifierFromHeight(height)
+	info, err := asset.Internal().DCR.BlockInfo(ctx, identifier)
+	if err != nil || info == nil {
+		return time.Time{}
+	}
+	return time.Unix(info.Timestamp, 0)
 }
 
 func (asset *Asset) CreateNewAccount(accountName, privPass string) (int32, error) {

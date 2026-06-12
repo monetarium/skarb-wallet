@@ -22,8 +22,10 @@ import (
 	"github.com/monetarium/skarb-wallet/ui/cryptomaterial"
 	"github.com/monetarium/skarb-wallet/ui/load"
 	"github.com/monetarium/skarb-wallet/ui/modal"
+	"github.com/monetarium/skarb-wallet/libwallet/assets/dcr"
 	"github.com/monetarium/skarb-wallet/ui/page/components"
 	"github.com/monetarium/skarb-wallet/ui/page/root"
+	"github.com/monetarium/skarb-wallet/ui/page/seedbackup"
 	"github.com/monetarium/skarb-wallet/ui/page/settings"
 	"github.com/monetarium/skarb-wallet/ui/preference"
 	"github.com/monetarium/skarb-wallet/ui/utils"
@@ -305,6 +307,20 @@ func (sp *startPage) HandleUserInteractions(gtx C) {
 			}
 			sp.setLanguagePref(false)
 			sp.ParentNavigator().Display(root.NewHomePage(sp.Load))
+			// Force the seed-phrase backup flow for a FRESHLY CREATED wallet
+			// before the user can do anything else. Without this the seed was
+			// never shown at all (backup was only reachable manually via
+			// wallet settings) — a wallet whose DB is lost before a manual
+			// backup is unrecoverable. Restored and watch-only wallets skip
+			// this: their owner already holds the seed / there is no seed.
+			if newWallet != nil && !newWallet.IsWatchingOnlyWallet() {
+				if dcrW, ok := newWallet.(*dcr.Asset); !ok || !dcrW.IsRestored {
+					sp.ParentNavigator().Display(seedbackup.NewBackupInstructionsPage(sp.Load, newWallet,
+						func(_ *load.Load, navigator app.WindowNavigator) {
+							navigator.ClosePagesAfter(root.HomePageID)
+						}))
+				}
+			}
 		})
 		sp.ParentNavigator().Display(createWalletPage)
 	}

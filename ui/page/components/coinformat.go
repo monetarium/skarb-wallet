@@ -112,7 +112,12 @@ func formatBalanceWithHidden(gtx C, l *load.Load, amount string, mainTextSize un
 			if noUnit {
 				stopIndex = len(amount)
 			}
-			unit = amount[stopIndex:]
+			// getIndexUnit returns the index of the SPACE preceding the unit,
+			// so amount[stopIndex:] is " VAR" (leading space). Trim it — the
+			// mask literal already ends in a space, so without this the masked
+			// balance rendered a doubled gap ("******  VAR") inconsistent with
+			// the un-masked single-space rendering.
+			unit = strings.TrimLeft(amount[stopIndex:], " ")
 		}
 		txt.Text = "****** " + unit
 	}

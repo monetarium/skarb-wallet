@@ -285,18 +285,36 @@ func (in *InfoModal) UseCustomWidget(layout layout.Widget) *InfoModal {
 // called when any of these key combinations is pressed.
 // Satisfies the load.KeyEventHandler interface for receiving key events.
 func (in *InfoModal) KeysToHandle() []event.Filter {
-	return []event.Filter{key.FocusFilter{Target: in},
-		key.Filter{Focus: in, Name: key.NameReturn},
-		key.Filter{Focus: in, Name: key.NameEnter},
-		key.Filter{Focus: in, Name: key.NameEscape},
+	// Focus:nil filters match regardless of which widget is focused — the
+	// old `Focus: in` variants never matched (the modal itself is never the
+	// focused widget), so Enter/Escape were dead on every info/success modal.
+	return []event.Filter{
+		key.Filter{Name: key.NameReturn},
+		key.Filter{Name: key.NameEnter},
+		key.Filter{Name: key.NameEscape},
 	}
 }
 
 // HandleKeyPress is called when one or more keys are pressed on the current
 // window that match any of the key combinations returned by KeysToHandle().
 // Satisfies the load.KeyEventHandler interface for receiving key events.
-func (in *InfoModal) HandleKeyPress(_ *key.Event) {
-	in.btnPositive.Click()
+// NOTE: the signature must be exactly (layout.Context, *key.Event) — the old
+// one-arg variant didn't satisfy load.KeyEventHandler, so the window's key
+// dispatcher silently never called it.
+func (in *InfoModal) HandleKeyPress(_ C, evt *key.Event) {
+	if evt.State != key.Press {
+		return
+	}
+	switch evt.Name {
+	case key.NameReturn, key.NameEnter:
+		// Same as clicking the positive ("Гаразд") button.
+		in.btnPositive.Click()
+	case key.NameEscape:
+		if in.isCancelable && !in.isLoading {
+			in.Dismiss()
+			in.negativeButtonClicked()
+		}
+	}
 	in.ParentWindow().Reload()
 }
 

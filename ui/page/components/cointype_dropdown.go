@@ -62,12 +62,12 @@ func (d *CoinTypeDropdown) Setup(w *dcr.Asset, selected ...cointype.CoinType) *C
 		return d
 	}
 	d.wallet = w
-	// Use DisplayableCoinTypes (filtered by wallet activity) so users
-	// don't see SKA-n options for coins they've never received — bug #7
-	// in the v1 bug report. ActiveCoinTypes returns every chain-active
-	// coin type which is useful for backend validation but clutters
-	// user-facing selectors.
-	d.coinTypes = w.DisplayableCoinTypes()
+	// VisibleCoinTypes = every coin emitted on chain minus the user's
+	// settings-filter. Unlike the old balance-based DisplayableCoinTypes
+	// this lists zero-balance coins too, so a freshly emitted SKA-n can be
+	// selected (e.g. to receive it) the moment the chain reaches its
+	// emission height; unwanted coins are hidden via wallet settings.
+	d.coinTypes = w.VisibleCoinTypes()
 
 	items := make([]cryptomaterial.DropDownItem, 0, len(d.coinTypes))
 	for _, ct := range d.coinTypes {

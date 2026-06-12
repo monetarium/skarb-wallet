@@ -459,6 +459,14 @@ type TransactionDestination struct {
 	// over UnitAmount; the int64 channel above is left for backward
 	// compat with legacy call sites that don't know about big.Int.
 	UnitAmountBig string
+
+	// SubtractFeeFromAmount, when true, makes the transaction fee come out
+	// of THIS recipient's output instead of the sender's change (Bitcoin
+	// Core "subtractfeefromamount" semantics). The recipient then receives
+	// UnitAmount minus the fee, and the sender spends exactly UnitAmount in
+	// inputs. Only meaningful on a non-SendMax destination. At most one
+	// destination per transaction may set this.
+	SubtractFeeFromAmount bool
 }
 
 type TransactionOverview struct {

@@ -3,6 +3,7 @@ package components
 import (
 	"fmt"
 	"strconv"
+	"sync/atomic"
 
 	"gioui.org/font"
 	"gioui.org/layout"
@@ -35,6 +36,12 @@ type AccountDropdown struct {
 	// look like it had no funds available to send — a classic source of
 	// "the wallet is broken" support tickets.
 	coinType cointype.CoinType
+
+	// pendingRefresh is set from the tx/block notification goroutine and
+	// drained in Handle (UI thread). accountChangedCallback rebuilds dropdown
+	// items and (on the send page) re-validates recipients / touches editors —
+	// not safe to run off the UI thread.
+	pendingRefresh atomic.Bool
 }
 
 func NewAccountDropdown(l *load.Load) *AccountDropdown {
@@ -138,44 +145,50 @@ func (d *AccountDropdown) SetCoinType(ct cointype.CoinType) {
 }
 
 func (d *AccountDropdown) getAccountItemLayout(account *sharedW.Account) layout.Widget {
-	return func(gtx C) D {
-		// totalLabel / spendableLabel are the two strings rendered on the
-		// right side of the dropdown row. By default we use the account's
-		// own VAR-shaped Balance fields. When SetCoinType was called with
-		// a SKAn type, we look up the per-account SKA balance live and
-		// format it under FormatCoinAmount, which puts the right unit
-		// ("SKA1") + the right number of decimals (1e18 atoms/coin).
-		totalLabel := account.Balance.Total.String()
-		spendableLabel := account.Balance.Spendable.String()
-		if d.coinType.IsSKA() {
-			if dcrAsset, ok := d.selectedWallet.(*dcr.Asset); ok {
-				if bal, err := dcrAsset.GetCoinBalance(account.Number, d.coinType); err == nil {
-					totalLabel = dcr.FormatCoinAmount(bal)
-					// CoinBalance carries Spendable as a sub-field; map
-					// the same shape so SKA users see "X SKA1" instead of
-					// the always-zero VAR Balance.Spendable.
-					spendBal := bal
-					spendBal.Total = bal.Spendable
-					spendBal.SKATotal = bal.SKASpendable
-					spendableLabel = dcr.FormatCoinAmount(spendBal)
-				}
+	// Compute the balance labels ONCE here — getAccountItemLayout is called at
+	// build time (Setup / SetCoinType, on the UI thread), not per frame. The
+	// SKA branch issues a walletdb query (GetCoinBalance); doing it inside the
+	// returned closure ran one DB transaction per dropdown item EVERY frame,
+	// causing scroll/redraw jank. The dropdown is rebuilt (via Setup) on
+	// tx/block notifications, so these cached labels stay fresh.
+	//
+	// totalLabel / spendableLabel are the two strings rendered on the right
+	// side of the dropdown row. By default we use the account's own VAR-shaped
+	// Balance fields. When SetCoinType was called with a SKAn type, we look up
+	// the per-account SKA balance and format it under FormatCoinAmount, which
+	// puts the right unit ("SKA1") + decimals (1e18 atoms/coin).
+	totalLabel := account.Balance.Total.String()
+	spendableLabel := account.Balance.Spendable.String()
+	if d.coinType.IsSKA() {
+		if dcrAsset, ok := d.selectedWallet.(*dcr.Asset); ok {
+			if bal, err := dcrAsset.GetCoinBalance(account.Number, d.coinType); err == nil {
+				totalLabel = dcr.FormatCoinAmount(bal)
+				// CoinBalance carries Spendable as a sub-field; map
+				// the same shape so SKA users see "X SKA1" instead of
+				// the always-zero VAR Balance.Spendable.
+				spendBal := bal
+				spendBal.Total = bal.Spendable
+				spendBal.SKATotal = bal.SKASpendable
+				spendableLabel = dcr.FormatCoinAmount(spendBal)
 			}
 		}
-		if d.selectedWallet != nil && d.selectedWallet.IsWatchingOnlyWallet() {
-			// Show zero spendable for watching-only wallets WITHOUT
-			// mutating the shared account.Balance — that pointer is
-			// reused by other dropdowns and by the send page's
-			// selectedAccount, so mutating it from a layout callback
-			// poisons every other caller's view of the balance.
-			//
-			// Render the zero in the *selected coin's* unit, not always
-			// VAR. wal.ToAmount() is the legacy VAR-only formatter; for
-			// a watch-only SKA1 dropdown it would lie "0 VAR" while the
-			// rest of the row is talking about SKA1. dcr.FormatTxAmount
-			// dispatches on coin type and emits the right suffix.
-			spendableLabel = dcr.FormatTxAmount(0, uint8(d.coinType))
-		}
+	}
+	if d.selectedWallet != nil && d.selectedWallet.IsWatchingOnlyWallet() {
+		// Show zero spendable for watching-only wallets WITHOUT
+		// mutating the shared account.Balance — that pointer is
+		// reused by other dropdowns and by the send page's
+		// selectedAccount, so mutating it would poison every other
+		// caller's view of the balance.
+		//
+		// Render the zero in the *selected coin's* unit, not always
+		// VAR. wal.ToAmount() is the legacy VAR-only formatter; for
+		// a watch-only SKA1 dropdown it would lie "0 VAR" while the
+		// rest of the row is talking about SKA1. dcr.FormatTxAmount
+		// dispatches on coin type and emits the right suffix.
+		spendableLabel = dcr.FormatTxAmount(0, uint8(d.coinType))
+	}
 
+	return func(gtx C) D {
 		return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
 			layout.Rigid(func(gtx C) D {
 				return layout.Flex{Axis: layout.Horizontal, Spacing: layout.SpaceBetween}.Layout(gtx,
@@ -246,6 +259,12 @@ func (d *AccountDropdown) SetChangedCallback(callback func(*sharedW.Account)) *A
 }
 
 func (d *AccountDropdown) Handle(gtx C) {
+	// Drain a deferred tx/block-notification refresh on the UI thread.
+	if d.pendingRefresh.CompareAndSwap(true, false) {
+		if d.accountChangedCallback != nil && d.selectedAccount != nil {
+			d.accountChangedCallback(d.selectedAccount)
+		}
+	}
 	if d.dropdown.Changed(gtx) {
 		d.onChanged()
 	}
@@ -276,32 +295,37 @@ func (d *AccountDropdown) Layout(gtx C, title string) D {
 func (d *AccountDropdown) ListenForTxNotifications(window app.WindowNavigator) {
 	txAndBlockNotificationListener := &sharedW.TxAndBlockNotificationListener{
 		OnTransaction: func(_ int, _ *sharedW.Transaction) {
-			// refresh wallets/Accounts list when new transaction is received
-			if d.accountChangedCallback != nil && d.selectedAccount != nil {
-				d.accountChangedCallback(d.selectedAccount)
-				window.Reload()
-			}
+			// Defer to the UI thread (see Handle): the callback rebuilds
+			// dropdown items and re-validates recipients, racing with Layout.
+			d.pendingRefresh.Store(true)
+			window.Reload()
 		},
 		OnBlockAttached: func(_ int, _ int32) {
-			// refresh wallet and account balance on every new block
-			// only if sync is completed.
-			if d.accountChangedCallback != nil && d.selectedAccount != nil {
-				d.accountChangedCallback(d.selectedAccount)
-				window.Reload()
-			}
+			d.pendingRefresh.Store(true)
+			window.Reload()
 		},
 	}
 	if d.selectedWallet == nil {
 		return
 	}
-	err := d.selectedWallet.AddTxAndBlockNotificationListener(txAndBlockNotificationListener, WalletAndAccountSelectorID)
+	// AccountSelectorListenerID, NOT the WalletDropdown's shared
+	// WalletAndAccountSelectorID: a page that registers both dropdowns on the
+	// same wallet would otherwise collide — the second Add fails with
+	// ErrListenerAlreadyExist (silently, just a log line) and that dropdown
+	// never receives refreshes; worse, whichever Stop runs first would tear
+	// down the other's listener.
+	err := d.selectedWallet.AddTxAndBlockNotificationListener(txAndBlockNotificationListener, AccountSelectorListenerID)
 	if err != nil {
-		log.Errorf("WalletAndAccountSelector.ListenForTxNotifications error: %v", err)
+		log.Errorf("AccountDropdown.ListenForTxNotifications error: %v", err)
 	}
 }
 
+// AccountSelectorListenerID uniquely identifies the AccountDropdown's
+// tx/block notification listener registration.
+const AccountSelectorListenerID = "AccountSelectorListener"
+
 func (d *AccountDropdown) StopTxNtfnListener() {
 	if d.selectedWallet != nil {
-		d.selectedWallet.RemoveTxAndBlockNotificationListener(WalletAndAccountSelectorID)
+		d.selectedWallet.RemoveTxAndBlockNotificationListener(AccountSelectorListenerID)
 	}
 }

@@ -218,7 +218,7 @@ func bootstrapPeerForNet(params *chaincfg.Params) string {
 	}
 	switch params.Net {
 	case wire.MainNet:
-		return "176.113.164.216:9508"
+		return "176.113.164.216:9508;62.216.37.206:9508;134.249.62.43:9508;88.99.60.167:9508"
 	case wire.TestNet3:
 		return "176.9.28.21:19508;134.249.62.108:19508"
 	}

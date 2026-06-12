@@ -175,13 +175,24 @@ func (cm *CreateWatchOnlyModal) KeysToHandle() []event.Filter {
 	if !cm.walletNameEnabled {
 		return []event.Filter{}
 	}
-	return []event.Filter{key.FocusFilter{Target: cm}, key.Filter{Focus: cm, Name: key.NameTab, Optional: key.ModShift}}
+	// Key the Tab filter to each editor's focus tag, NOT Focus:cm (the modal
+	// is never the focused widget, so it never matched and Tab was dead).
+	return []event.Filter{
+		key.FocusFilter{Target: cm},
+		key.Filter{Focus: cm.walletName.Editor, Name: key.NameTab, Optional: key.ModShift},
+		key.Filter{Focus: cm.extendedPubKey.Editor, Name: key.NameTab, Optional: key.ModShift},
+	}
 }
 
 // HandleKeyPress is called when one or more keys are pressed on the current
 // window that match any of the key combinations returned by KeysToHandle().
 // Satisfies the load.KeyEventHandler interface for receiving key events.
 func (cm *CreateWatchOnlyModal) HandleKeyPress(gtx C, evt *key.Event) {
+	// Switch editors on Press only — Tab fires Press AND Release and
+	// SwitchEditors moves focus each call, so acting on both is a net no-op.
+	if evt.State != key.Press {
+		return
+	}
 	if cm.walletNameEnabled {
 		cryptomaterial.SwitchEditors(gtx, evt, cm.walletName.Editor, cm.extendedPubKey.Editor)
 	}

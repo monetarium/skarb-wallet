@@ -273,6 +273,11 @@ func (pg *Page) advanceOptionsLayout(gtx C) D {
 							}),
 							layout.Rigid(func(gtx C) D {
 								return layout.Inset{Top: values.MarginPadding16}.Layout(gtx, func(gtx C) D {
+									return pg.contentWrapper(gtx, values.String(values.StrSubtractFeeFromRecipient), false, pg.subtractFeeSection)
+								})
+							}),
+							layout.Rigid(func(gtx C) D {
+								return layout.Inset{Top: values.MarginPadding16}.Layout(gtx, func(gtx C) D {
 									return pg.contentWrapper(gtx, values.String(values.StrCoinSelection), true, pg.coinSelectionSection)
 								})
 							}),
@@ -321,6 +326,25 @@ func (pg *Page) customFeeSection(gtx C) D {
 	boundsLbl := pg.Theme.Body2(values.StringF(values.StrFeeRateBounds, minStr, maxStr))
 	boundsLbl.Color = pg.Theme.Color.GrayText2
 
+	// Always show the rate currently in effect — not just when the user types
+	// one. With no override the wallet uses the default (== the min bound:
+	// RelayFeeForCoinType for SKA, DefaultRelayFeePerKb for VAR), which the
+	// user otherwise couldn't see. When an override is applied, show that.
+	override := dcrAsset.FeeRateOverride()
+	effRate := override
+	currentTemplate := values.StrCurrentFeeRateCustom
+	if effRate.IsZero() {
+		effRate = minR
+		currentTemplate = values.StrCurrentFeeRateAuto
+	}
+	var currentLbl cryptomaterial.Label
+	showCurrent := !effRate.IsZero()
+	if showCurrent {
+		effStr := dcr.FormatTxAmountBig(effRate.String(), 0, uint8(ct))
+		currentLbl = pg.Theme.Body2(values.StringF(currentTemplate, effStr))
+		currentLbl.Color = pg.Theme.Color.GrayText2
+	}
+
 	statusLbl := pg.Theme.Body2(pg.customFeeStatus)
 	if pg.customFeeStatusIsErr {
 		statusLbl.Color = pg.Theme.Color.Danger
@@ -340,6 +364,12 @@ func (pg *Page) customFeeSection(gtx C) D {
 					return layout.Inset{Bottom: values.MarginPadding4}.Layout(gtx, boundsLbl.Layout)
 				}),
 				layout.Rigid(func(gtx C) D {
+					if !showCurrent {
+						return D{}
+					}
+					return layout.Inset{Bottom: values.MarginPadding8}.Layout(gtx, currentLbl.Layout)
+				}),
+				layout.Rigid(func(gtx C) D {
 					return layout.Flex{Alignment: layout.Middle}.Layout(gtx,
 						layout.Flexed(0.6, pg.customFeeEditor.Layout),
 						layout.Rigid(func(gtx C) D {
@@ -355,6 +385,32 @@ func (pg *Page) customFeeSection(gtx C) D {
 						return D{}
 					}
 					return layout.Inset{Top: values.MarginPadding6}.Layout(gtx, statusLbl.Layout)
+				}),
+			)
+		})
+	})
+}
+
+// subtractFeeSection renders the advanced-options "take fee from recipient"
+// toggle: a checkbox plus a one-line description. When checked, the network
+// fee is deducted from the recipient's output instead of the sender's change
+// (see TransactionDestination.SubtractFeeFromAmount and the wiring in
+// addSendDestination). Render-only; the toggle is handled in
+// HandleUserInteractions.
+func (pg *Page) subtractFeeSection(gtx C) D {
+	border := widget.Border{
+		Color:        pg.Theme.Color.Gray4,
+		CornerRadius: values.MarginPadding10,
+		Width:        values.MarginPadding2,
+	}
+	return border.Layout(gtx, func(gtx C) D {
+		return layout.UniformInset(values.MarginPadding12).Layout(gtx, func(gtx C) D {
+			return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
+				layout.Rigid(pg.subtractFeeCheckbox.Layout),
+				layout.Rigid(func(gtx C) D {
+					desc := pg.Theme.Body2(values.String(values.StrSubtractFeeFromRecipientDesc))
+					desc.Color = pg.Theme.Color.GrayText2
+					return layout.Inset{Top: values.MarginPadding4, Left: values.MarginPadding28}.Layout(gtx, desc.Layout)
 				}),
 			)
 		})

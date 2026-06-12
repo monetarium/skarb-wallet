@@ -169,7 +169,7 @@ func (pg *TransactionsPage) initCoinTypeDropdown() {
 	if dcrAsset, ok := pg.selectedWallet.(*dcr.Asset); ok {
 		// DisplayableCoinTypes filters by wallet activity so users don't
 		// see SKA-n entries they've never received (bug #7).
-		for _, ct := range dcrAsset.DisplayableCoinTypes() {
+		for _, ct := range dcrAsset.VisibleCoinTypes() {
 			items = append(items, cryptomaterial.DropDownItem{Text: dcr.CoinSymbol(ct)})
 		}
 	} else {
@@ -229,7 +229,7 @@ func (pg *TransactionsPage) selectedCoinType() *cointype.CoinType {
 		return nil
 	}
 	if dcrAsset, ok := pg.selectedWallet.(*dcr.Asset); ok {
-		for _, ct := range dcrAsset.DisplayableCoinTypes() {
+		for _, ct := range dcrAsset.VisibleCoinTypes() {
 			if dcr.CoinSymbol(ct) == picked {
 				ct := ct // capture loop var
 				return &ct

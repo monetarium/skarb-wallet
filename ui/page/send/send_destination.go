@@ -8,6 +8,7 @@ import (
 
 	sharedW "github.com/monetarium/skarb-wallet/libwallet/assets/wallet"
 	libUtil "github.com/monetarium/skarb-wallet/libwallet/utils"
+	"github.com/monetarium/monetarium-node/cointype"
 	"github.com/monetarium/skarb-wallet/ui/cryptomaterial"
 	"github.com/monetarium/skarb-wallet/ui/load"
 	"github.com/monetarium/skarb-wallet/ui/page/components"
@@ -94,6 +95,18 @@ func (dst *destination) initDestinationWalletSelector(assetType libUtil.AssetTyp
 			return true
 		}).
 		Setup(dst.walletDropdown.SelectedWallet())
+}
+
+// setCoinType propagates the actively-sent coin to the destination selectors
+// so the wallet/account rows show the balance of THAT coin — previously they
+// always showed VAR even while sending SKA1.
+func (dst *destination) setCoinType(ct cointype.CoinType) {
+	if dst.walletDropdown != nil {
+		dst.walletDropdown.SetCoinType(ct)
+	}
+	if dst.accountDropdown != nil {
+		dst.accountDropdown.SetCoinType(ct)
+	}
 }
 
 // destinationAddress validates the destination address obtained from the provided

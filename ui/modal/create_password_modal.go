@@ -2,6 +2,8 @@ package modal
 
 import (
 	"strconv"
+	"sync"
+	"sync/atomic"
 
 	"gioui.org/font"
 	"gioui.org/io/event"
@@ -27,13 +29,19 @@ type CreatePasswordModal struct {
 	confirmPasswordEditor cryptomaterial.Editor
 	passwordStrength      cryptomaterial.ProgressBarStyle
 
-	isLoading              bool
+	// isLoading is written by the positive-button goroutine (setLoading(false)
+	// on failure) and read by Handle/Layout on the UI thread every frame —
+	// atomic, per CLAUDE.md §3. serverError is likewise written via SetError
+	// from positiveButtonClicked callbacks running on that goroutine, so its
+	// access is guarded by errMu.
+	isLoading              atomic.Bool
 	isCancelable           bool
 	walletNameEnabled      bool
 	showWalletWarnInfo     bool
 	confirmPasswordEnabled bool
 
 	dialogTitle string
+	errMu       sync.Mutex
 	serverError string
 	description string
 
@@ -158,7 +166,7 @@ func (cm *CreatePasswordModal) SetNegativeButtonCallback(callback func()) *Creat
 }
 
 func (cm *CreatePasswordModal) setLoading(loading bool) {
-	cm.isLoading = loading
+	cm.isLoading.Store(loading)
 }
 
 func (cm *CreatePasswordModal) SetCancelable(min bool) *CreatePasswordModal {
@@ -172,7 +180,9 @@ func (cm *CreatePasswordModal) SetDescription(description string) *CreatePasswor
 }
 
 func (cm *CreatePasswordModal) SetError(err string) {
+	cm.errMu.Lock()
 	cm.serverError = values.TranslateErr(err)
+	cm.errMu.Unlock()
 }
 
 func (cm *CreatePasswordModal) SetPasswordTitleVisibility(show bool) {
@@ -213,7 +223,9 @@ func (cm *CreatePasswordModal) Handle(gtx C) {
 	isSubmit, isChanged := cryptomaterial.HandleEditorEvents(gtx, &cm.passwordEditor, &cm.confirmPasswordEditor, &cm.walletName)
 	if isChanged {
 		// reset all modal errors when any editor is modified
+		cm.errMu.Lock()
 		cm.serverError = ""
+		cm.errMu.Unlock()
 		cm.walletName.SetError("")
 		cm.passwordEditor.SetError("")
 		cm.confirmPasswordEditor.SetError("")
@@ -237,6 +249,14 @@ func (cm *CreatePasswordModal) Handle(gtx C) {
 				cm.confirmPasswordEditor.SetError(values.String(values.StrConfirmSpendingPassword))
 				return
 			}
+			// Refuse mismatched passwords. The Confirm BUTTON is disabled on
+			// mismatch (validToCreate), but isSubmit — pressing Enter in an
+			// editor — reached this point with only emptiness checks, so the
+			// modal dismissed and the wallet got created with the FIRST
+			// field's password while the mismatch error was still on screen.
+			if !cm.passwordsMatch(cm.passwordEditor.Editor, cm.confirmPasswordEditor.Editor) {
+				return
+			}
 		}
 		cm.setLoading(true)
 		go func() {
@@ -248,9 +268,9 @@ func (cm *CreatePasswordModal) Handle(gtx C) {
 		}()
 	}
 
-	cm.btnNegative.SetEnabled(!cm.isLoading)
+	cm.btnNegative.SetEnabled(!cm.isLoading.Load())
 	if cm.btnNegative.Clicked(gtx) {
-		if !cm.isLoading {
+		if !cm.isLoading.Load() {
 			if cm.parent != nil {
 				cm.parent.OnNavigatedTo()
 			}
@@ -260,7 +280,7 @@ func (cm *CreatePasswordModal) Handle(gtx C) {
 	}
 
 	if cm.Modal.BackdropClicked(gtx, cm.isCancelable) {
-		if !cm.isLoading {
+		if !cm.isLoading.Load() {
 			cm.Dismiss()
 		}
 	}
@@ -274,23 +294,83 @@ func (cm *CreatePasswordModal) Handle(gtx C) {
 // that this modal wishes to capture. The HandleKeyPress() method will only be
 // called when any of these key combinations is pressed.
 // Satisfies the load.KeyEventHandler interface for receiving key events.
+// tabEditors returns the editors that Tab cycles through, in order, for the
+// currently-enabled modal fields. Single source of truth shared by
+// KeysToHandle (which registers Tab per editor focus tag) and HandleKeyPress.
+func (cm *CreatePasswordModal) tabEditors() []*widget.Editor {
+	switch {
+	case cm.walletNameEnabled && cm.confirmPasswordEnabled:
+		return []*widget.Editor{cm.walletName.Editor, cm.passwordEditor.Editor, cm.confirmPasswordEditor.Editor}
+	case cm.walletNameEnabled:
+		return []*widget.Editor{cm.walletName.Editor, cm.passwordEditor.Editor}
+	default:
+		return []*widget.Editor{cm.passwordEditor.Editor, cm.confirmPasswordEditor.Editor}
+	}
+}
+
 func (cm *CreatePasswordModal) KeysToHandle() []event.Filter {
-	return []event.Filter{key.FocusFilter{Target: cm}, key.Filter{Focus: cm, Name: key.NameTab, Optional: key.ModShift}}
+	// Register Tab on EACH active editor's focus tag — not on cm. A
+	// key.Filter only matches while its Focus tag is the focused widget, and
+	// the focused widget is whichever editor the user is typing in, never the
+	// modal cm itself. With the old Focus:cm filter, Tab never reached
+	// HandleKeyPress/SwitchEditors, so Gio's DEFAULT focus traversal handled
+	// it — and that chain includes each password field's show/hide ("eye")
+	// IconButton, so the first Tab landed on the eye icon and a second Tab was
+	// needed to reach the next field. Keying the filter to the editors makes
+	// SwitchEditors authoritative AND consumes the Tab, suppressing the
+	// default traversal through the toggle button.
+	filters := []event.Filter{key.FocusFilter{Target: cm}}
+	for _, ed := range cm.tabEditors() {
+		filters = append(filters, key.Filter{Focus: ed, Name: key.NameTab, Optional: key.ModShift})
+	}
+	// Window-level Enter = press the Confirm button (when valid). Focus:nil
+	// so it matches regardless of which widget is focused — focused editors
+	// already submit via their own Submit event, and HandleKeyPress skips
+	// this branch for them to avoid double-firing.
+	filters = append(filters,
+		key.Filter{Name: key.NameReturn},
+		key.Filter{Name: key.NameEnter},
+	)
+	return filters
 }
 
 // HandleKeyPress is called when one or more keys are pressed on the current
 // window that match any of the key combinations returned by KeysToHandle().
 // Satisfies the load.KeyEventHandler interface for receiving key events.
 func (cm *CreatePasswordModal) HandleKeyPress(gtx C, evt *key.Event) {
-	if cm.walletNameEnabled {
-		if cm.confirmPasswordEnabled {
-			cryptomaterial.SwitchEditors(gtx, evt, cm.walletName.Editor, cm.passwordEditor.Editor, cm.confirmPasswordEditor.Editor)
-		} else {
-			cryptomaterial.SwitchEditors(gtx, evt, cm.walletName.Editor, cm.passwordEditor.Editor)
-		}
-	} else {
-		cryptomaterial.SwitchEditors(gtx, evt, cm.passwordEditor.Editor, cm.confirmPasswordEditor.Editor)
+	// A physical Tab press delivers BOTH a key.Press and a key.Release event.
+	// SwitchEditors moves focus to the next editor every time it runs without
+	// checking evt.State, so firing it on both events advances focus on Press
+	// and then immediately moves it back on Release — a net no-op, which is
+	// exactly the "Tab does nothing" symptom. Act on Press only. (The upstream
+	// pattern got away without this guard because its Focus:cm filter never
+	// matched a focused editor, so SwitchEditors never actually ran and Tab
+	// fell through to Gio's default traversal — which stepped through the
+	// password show/hide toggle, the original two-presses bug.)
+	if evt.State != key.Press {
+		return
 	}
+
+	if evt.Name == key.NameReturn || evt.Name == key.NameEnter {
+		if cm.isLoading.Load() {
+			return
+		}
+		// A focused editor already submits via its own Submit event (the
+		// isSubmit path in Handle) — only treat this as "press Confirm" when
+		// focus is elsewhere, so a single Enter never fires the action twice.
+		for _, ed := range cm.tabEditors() {
+			if gtx.Source.Focused(ed) {
+				return
+			}
+		}
+		// Queue a Confirm click; Handle's existing validation (emptiness +
+		// password match) decides whether the modal actually proceeds.
+		cm.btnPositive.Click()
+		cm.ParentWindow().Reload()
+		return
+	}
+
+	cryptomaterial.SwitchEditors(gtx, evt, cm.tabEditors()...)
 }
 
 func (cm *CreatePasswordModal) passwordsMatch(editors ...*widget.Editor) bool {
@@ -354,14 +434,17 @@ func (cm *CreatePasswordModal) LayoutComponents() []layout.Widget {
 		w = append(w, cm.customWidget)
 	}
 
-	if cm.serverError != "" {
+	cm.errMu.Lock()
+	serverError := cm.serverError
+	cm.errMu.Unlock()
+	if serverError != "" {
 		// set wallet name editor error if wallet name already exist
-		if cm.serverError == libutils.ErrExist && cm.walletNameEnabled {
+		if serverError == libutils.ErrExist && cm.walletNameEnabled {
 			cm.walletName.SetError(values.StringF(values.StrWalletExist, cm.walletName.Editor.Text()))
 		} else if !utils.ValidateLengthName(cm.walletName.Editor.Text()) && cm.walletNameEnabled {
 			cm.walletName.SetError(values.String(values.StrWalletNameLengthError))
 		} else {
-			t := cm.Theme.Body2(cm.serverError)
+			t := cm.Theme.Body2(serverError)
 			t.Color = cm.Theme.Color.Danger
 			w = append(w, t.Layout)
 		}
@@ -424,14 +507,14 @@ func (cm *CreatePasswordModal) LayoutComponents() []layout.Widget {
 		return layout.E.Layout(gtx, func(gtx C) D {
 			return layout.Flex{Axis: layout.Horizontal}.Layout(gtx,
 				layout.Rigid(func(gtx C) D {
-					if cm.isLoading {
+					if cm.isLoading.Load() {
 						return D{}
 					}
 
 					return cm.btnNegative.Layout(gtx)
 				}),
 				layout.Rigid(func(gtx C) D {
-					if cm.isLoading {
+					if cm.isLoading.Load() {
 						return cm.materialLoader.Layout(gtx)
 					}
 

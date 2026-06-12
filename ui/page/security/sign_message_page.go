@@ -316,14 +316,27 @@ func (pg *SignMessagePage) HandleUserInteractions(_ C) {
 // called when any of these key combinations is pressed.
 // Satisfies the load.KeyEventHandler interface for receiving key events.
 func (pg *SignMessagePage) KeysToHandle() []event.Filter {
-	return []event.Filter{key.FocusFilter{Target: pg}, key.Filter{Focus: pg, Name: key.NameTab, Optional: key.ModShift}}
+	// Key the Tab filter to each editor's focus tag, NOT Focus:pg. A
+	// key.Filter only matches while its Focus tag is the focused widget, and
+	// the focused widget is whichever editor the user is typing in — pg is
+	// never focused — so Focus:pg never matched and Tab navigation was dead.
+	return []event.Filter{
+		key.FocusFilter{Target: pg},
+		key.Filter{Focus: pg.addressEditor.Editor, Name: key.NameTab, Optional: key.ModShift},
+		key.Filter{Focus: pg.messageEditor.Editor, Name: key.NameTab, Optional: key.ModShift},
+	}
 }
 
 // HandleKeyPress is called when one or more keys are pressed on the current
 // window that match any of the key combinations returned by KeysToHandle().
 // Satisfies the load.KeyEventHandler interface for receiving key events.
 func (pg *SignMessagePage) HandleKeyPress(gtx C, evt *key.Event) {
-	// Switch editors when tab key is pressed.
+	// A Tab press delivers BOTH key.Press and key.Release; SwitchEditors moves
+	// focus every call without checking evt.State, so acting on both is a net
+	// no-op. Switch editors on Press only.
+	if evt.State != key.Press {
+		return
+	}
 	cryptomaterial.SwitchEditors(gtx, evt, pg.addressEditor.Editor, pg.messageEditor.Editor)
 }
 

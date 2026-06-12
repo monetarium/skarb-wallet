@@ -159,6 +159,14 @@ func (win *Window) NewLoad(appInfo *load.AppInfo, window *giouiApp.Window) (*loa
 		if page, ok := win.navigator.CurrentPage().(load.AppSettingsChangeHandler); ok {
 			page.OnLanguageChanged()
 		}
+		// Also forward to the top modal, mirroring DarkModeSettingChanged —
+		// otherwise a modal that caches values.String in struct fields keeps
+		// the previous language after a switch.
+		if modal := win.navigator.TopModal(); modal != nil {
+			if modal, ok := modal.(load.AppSettingsChangeHandler); ok {
+				modal.OnLanguageChanged()
+			}
+		}
 	}
 
 	l.CurrencySettingChanged = func() {
