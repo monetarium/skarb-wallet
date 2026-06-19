@@ -14,6 +14,7 @@ import (
 	"gioui.org/text"
 	"gioui.org/widget"
 
+	"github.com/monetarium/monetarium-node/cointype"
 	"github.com/monetarium/skarb-wallet/app"
 	"github.com/monetarium/skarb-wallet/libwallet/assets/dcr"
 	sharedW "github.com/monetarium/skarb-wallet/libwallet/assets/wallet"
@@ -23,7 +24,6 @@ import (
 	"github.com/monetarium/skarb-wallet/ui/modal"
 	"github.com/monetarium/skarb-wallet/ui/page/components"
 	"github.com/monetarium/skarb-wallet/ui/values"
-	"github.com/monetarium/monetarium-node/cointype"
 	qrcode "github.com/yeqown/go-qrcode"
 	"golang.org/x/exp/shiny/materialdesign/icons"
 )
@@ -112,10 +112,20 @@ func NewReceivePage(l *load.Load, wallet sharedW.Asset) *Page {
 	pg.coinTypeDropdown = components.NewCoinTypeDropdown(l).
 		SetChangedCallback(func(ct cointype.CoinType) {
 			pg.expectedCoinType = ct
+			// Show the picked coin's balance in the wallet/account rows.
+			if pg.walletDropdown != nil {
+				pg.walletDropdown.SetCoinType(ct)
+			}
+			if pg.accountDropdown != nil {
+				pg.accountDropdown.SetCoinType(ct)
+			}
 		})
 	if dcrAsset, ok := pg.selectedWallet.(*dcr.Asset); ok {
 		pg.coinTypeDropdown.Setup(dcrAsset)
 		pg.expectedCoinType = pg.coinTypeDropdown.Selected()
+		// Reflect the initial coin in the wallet/account dropdown balances.
+		pg.walletDropdown.SetCoinType(pg.expectedCoinType)
+		pg.accountDropdown.SetCoinType(pg.expectedCoinType)
 	}
 
 	return pg

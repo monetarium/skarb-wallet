@@ -9,6 +9,12 @@ import (
 	"math/big"
 	"time"
 
+	"github.com/monetarium/monetarium-node/chaincfg/chainhash"
+	"github.com/monetarium/monetarium-node/cointype"
+	"github.com/monetarium/monetarium-node/dcrutil"
+	"github.com/monetarium/monetarium-node/txscript"
+	"github.com/monetarium/monetarium-node/txscript/stdaddr"
+	"github.com/monetarium/monetarium-node/wire"
 	"github.com/monetarium/monetarium-wallet/errors"
 	w "github.com/monetarium/monetarium-wallet/wallet"
 	"github.com/monetarium/monetarium-wallet/wallet/txauthor"
@@ -17,12 +23,6 @@ import (
 	sharedW "github.com/monetarium/skarb-wallet/libwallet/assets/wallet"
 	"github.com/monetarium/skarb-wallet/libwallet/txhelper"
 	"github.com/monetarium/skarb-wallet/libwallet/utils"
-	"github.com/monetarium/monetarium-node/chaincfg/chainhash"
-	"github.com/monetarium/monetarium-node/cointype"
-	"github.com/monetarium/monetarium-node/dcrutil"
-	"github.com/monetarium/monetarium-node/txscript"
-	"github.com/monetarium/monetarium-node/txscript/stdaddr"
-	"github.com/monetarium/monetarium-node/wire"
 )
 
 type TxAuthor struct {

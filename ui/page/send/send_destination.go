@@ -6,9 +6,9 @@ import (
 
 	"gioui.org/widget"
 
+	"github.com/monetarium/monetarium-node/cointype"
 	sharedW "github.com/monetarium/skarb-wallet/libwallet/assets/wallet"
 	libUtil "github.com/monetarium/skarb-wallet/libwallet/utils"
-	"github.com/monetarium/monetarium-node/cointype"
 	"github.com/monetarium/skarb-wallet/ui/cryptomaterial"
 	"github.com/monetarium/skarb-wallet/ui/load"
 	"github.com/monetarium/skarb-wallet/ui/page/components"

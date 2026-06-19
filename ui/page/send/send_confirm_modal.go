@@ -30,7 +30,7 @@ type sendConfirmModal struct {
 	confirmButton                cryptomaterial.Button
 	passwordEditor               cryptomaterial.Editor
 
-	txSent    func()
+	txSent func()
 	// txBroadcastSuccess fires from the broadcast goroutine the instant
 	// Broadcast() returns nil, BEFORE the success modal is shown. The page
 	// uses it to nudge the underlying Send form out of its pre-broadcast

@@ -6,10 +6,10 @@ import (
 
 	"github.com/asdine/storm"
 	"github.com/asdine/storm/q"
+	"github.com/monetarium/monetarium-node/chaincfg/chainhash"
 	sharedW "github.com/monetarium/skarb-wallet/libwallet/assets/wallet"
 	"github.com/monetarium/skarb-wallet/libwallet/txhelper"
 	"github.com/monetarium/skarb-wallet/libwallet/utils"
-	"github.com/monetarium/monetarium-node/chaincfg/chainhash"
 )
 
 const (

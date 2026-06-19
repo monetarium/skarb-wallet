@@ -226,6 +226,9 @@ func (s *Scroll[T]) fetchScrollData(isScrollUp bool, window app.WindowNavigator)
 func (s *Scroll[T]) FetchedData() []T {
 	defer s.mu.RUnlock()
 	s.mu.RLock()
+	if s.data == nil {
+		return nil
+	}
 	return s.data.items
 }
 

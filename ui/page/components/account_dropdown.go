@@ -7,13 +7,13 @@ import (
 
 	"gioui.org/font"
 	"gioui.org/layout"
+	"github.com/monetarium/monetarium-node/cointype"
 	"github.com/monetarium/skarb-wallet/app"
 	"github.com/monetarium/skarb-wallet/libwallet/assets/dcr"
 	sharedW "github.com/monetarium/skarb-wallet/libwallet/assets/wallet"
 	"github.com/monetarium/skarb-wallet/ui/cryptomaterial"
 	"github.com/monetarium/skarb-wallet/ui/load"
 	"github.com/monetarium/skarb-wallet/ui/values"
-	"github.com/monetarium/monetarium-node/cointype"
 )
 
 type AccountDropdown struct {

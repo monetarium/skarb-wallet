@@ -1,10 +1,10 @@
 package dcr
 
 import (
+	"github.com/monetarium/monetarium-node/txscript/stdaddr"
 	"github.com/monetarium/monetarium-wallet/errors"
 	w "github.com/monetarium/monetarium-wallet/wallet"
 	"github.com/monetarium/skarb-wallet/libwallet/utils"
-	"github.com/monetarium/monetarium-node/txscript/stdaddr"
 )
 
 func (asset *Asset) SignMessage(passphrase, address, message string) ([]byte, error) {

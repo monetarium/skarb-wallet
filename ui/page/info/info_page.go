@@ -12,6 +12,7 @@ import (
 	"gioui.org/widget"
 	"gioui.org/widget/material"
 
+	"github.com/monetarium/monetarium-node/dcrutil"
 	"github.com/monetarium/skarb-wallet/app"
 	"github.com/monetarium/skarb-wallet/libwallet/assets/dcr"
 	sharedW "github.com/monetarium/skarb-wallet/libwallet/assets/wallet"
@@ -21,7 +22,6 @@ import (
 	"github.com/monetarium/skarb-wallet/ui/page/components"
 	"github.com/monetarium/skarb-wallet/ui/page/transaction"
 	"github.com/monetarium/skarb-wallet/ui/values"
-	"github.com/monetarium/monetarium-node/dcrutil"
 )
 
 const InfoID = "Info"
@@ -185,6 +185,9 @@ func (pg *WalletInfo) Layout(gtx C) D {
 		}
 		if len(pg.snapshotTxs()) > 0 {
 			items = append(items, layout.Rigid(pg.recentTransactionLayout))
+		} else if !pg.loaderShown() {
+			// Nothing to show (no txs, or every tx belongs to a hidden coin).
+			items = append(items, layout.Rigid(pg.noTransactionsLayout))
 		}
 
 		if len(pg.snapshotStakes()) > 0 {
@@ -208,6 +211,39 @@ func (pg *WalletInfo) mixerLayout(gtx C) D {
 			Width:          cryptomaterial.MatchParent,
 			Height:         cryptomaterial.WrapContent,
 		}.MixerLayout(gtx)
+	})
+}
+
+// filterVisibleCoinTxs drops transactions whose coin type the user hid via
+// the visibility filter, so the recent-transactions list never surfaces a
+// hidden coin's activity.
+func filterVisibleCoinTxs(wallet sharedW.Asset, txs []*sharedW.Transaction) []*sharedW.Transaction {
+	dcrAsset, ok := wallet.(*dcr.Asset)
+	if !ok {
+		return txs
+	}
+	visible := make(map[uint8]bool)
+	for _, ct := range dcrAsset.VisibleCoinTypes() {
+		visible[uint8(ct)] = true
+	}
+	out := txs[:0]
+	for _, tx := range txs {
+		if visible[tx.CoinType] {
+			out = append(out, tx)
+		}
+	}
+	return out
+}
+
+// noTransactionsLayout renders the empty-state message for the recent-
+// transactions section.
+func (pg *WalletInfo) noTransactionsLayout(gtx C) D {
+	return pg.pageContentWrapper(gtx, values.String(values.StrRecentTransactions), pg.viewAllTxButton.Layout, func(gtx C) D {
+		txt := pg.Theme.Body1(values.String(values.StrNoTransactions))
+		txt.Color = pg.Theme.Color.GrayText3
+		return layout.Center.Layout(gtx, func(gtx C) D {
+			return layout.Inset{Top: values.MarginPadding16, Bottom: values.MarginPadding16}.Layout(gtx, txt.Layout)
+		})
 	})
 }
 
@@ -384,10 +420,18 @@ func (pg *WalletInfo) loadTransactions() {
 		return
 	}
 
-	txs, err := pg.wallet.GetTransactionsRaw(0, 3, mapInfo[values.String(values.StrAll)], true, "")
+	// Fetch a wider window than the 3 shown, then drop hidden-coin txs and
+	// keep the newest 3 visible ones — a recent tx of a coin the user hid
+	// must not appear here, and filtering after a 3-row fetch could leave
+	// fewer than 3 visible rows.
+	txs, err := pg.wallet.GetTransactionsRaw(0, 30, mapInfo[values.String(values.StrAll)], true, "")
 	if err != nil {
 		log.Errorf("error loading transactions: %v", err)
 		return
+	}
+	txs = filterVisibleCoinTxs(pg.wallet, txs)
+	if len(txs) > 3 {
+		txs = txs[:3]
 	}
 	// Diagnostic log: surfaces what's in storm DB at the moment Info
 	// page (re)mounts. If the user reports "I sent a tx but it doesn't

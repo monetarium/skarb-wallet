@@ -655,9 +655,9 @@ func (pg *ManualCoinSelectionPage) accountListItemsSection(gtx C, utxos []*UTXOI
 							// channel surfaces the actual atom value with the right
 							// "SKA1"/"SKA2"/"VAR" suffix.
 							amountLabel := pg.generateLabel(dcr.FormatTxAmountBig(v.SKAAmountAtoms, v.Amount.ToInt(), v.CoinType), nil, false) // component 2
-							addresslabel := pg.generateLabel(v.Address, nil, true)                                                       // Component 3
-							confirmationsLabel := pg.generateLabel(v.Confirmations, nil, false)                                          // Component 4
-							dateLabel := pg.generateLabel(libutils.FormatUTCShortTime(v.ReceiveTime.Unix()), nil, false)                 // Component 5
+							addresslabel := pg.generateLabel(v.Address, nil, true)                                                             // Component 3
+							confirmationsLabel := pg.generateLabel(v.Confirmations, nil, false)                                                // Component 4
+							dateLabel := pg.generateLabel(libutils.FormatUTCShortTime(v.ReceiveTime.Unix()), nil, false)                       // Component 5
 
 							// copy destination Address
 							if v.addressCopy.Clicked(gtx) {

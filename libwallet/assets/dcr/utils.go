@@ -7,10 +7,10 @@ import (
 	"strings"
 	"time"
 
-	sharedW "github.com/monetarium/skarb-wallet/libwallet/assets/wallet"
-	"github.com/monetarium/skarb-wallet/libwallet/utils"
 	"github.com/monetarium/monetarium-node/cointype"
 	"github.com/monetarium/monetarium-node/dcrutil"
+	sharedW "github.com/monetarium/skarb-wallet/libwallet/assets/wallet"
+	"github.com/monetarium/skarb-wallet/libwallet/utils"
 )
 
 const (

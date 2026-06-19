@@ -12,6 +12,7 @@ import (
 	"gioui.org/layout"
 	"gioui.org/widget"
 
+	"github.com/monetarium/monetarium-node/cointype"
 	"github.com/monetarium/skarb-wallet/app"
 	"github.com/monetarium/skarb-wallet/libwallet/assets/dcr"
 	sharedW "github.com/monetarium/skarb-wallet/libwallet/assets/wallet"
@@ -23,7 +24,6 @@ import (
 	txpage "github.com/monetarium/skarb-wallet/ui/page/transaction"
 	"github.com/monetarium/skarb-wallet/ui/utils"
 	"github.com/monetarium/skarb-wallet/ui/values"
-	"github.com/monetarium/monetarium-node/cointype"
 )
 
 const (
@@ -303,10 +303,10 @@ func (pg *Page) applyCoinType(ct cointype.CoinType) {
 // + some SKA isn't stuck on a VAR-default dropdown that immediately errors.
 //
 // Decision tree:
-//   • selected coin has spendable atoms → keep it (no-op);
-//   • otherwise iterate DisplayableCoinTypes (already filtered by activity
+//   - selected coin has spendable atoms → keep it (no-op);
+//   - otherwise iterate DisplayableCoinTypes (already filtered by activity
 //     on this wallet) and pick the first with spendable > 0;
-//   • if no coin has any spendable, leave the selection alone — the user
+//   - if no coin has any spendable, leave the selection alone — the user
 //     genuinely has nothing to send, and downstream messaging will say so.
 //
 // Propagation goes through applyCoinType so SetTxCoinType, the recipient
@@ -340,7 +340,13 @@ func (pg *Page) autoDefaultCoinTypeFromBalance() {
 	if hasSpendable(pg.coinTypeDropdown.Selected()) {
 		return
 	}
-	for _, ct := range dcrAsset.DisplayableCoinTypes() {
+	// Iterate VISIBLE coins only — never auto-select a coin the user hid via
+	// the visibility filter. DisplayableCoinTypes ignores that filter, so it
+	// could force-select a hidden coin: the dropdown (built from
+	// VisibleCoinTypes) then falls back to VAR while applyCoinType drives the
+	// whole form + authored tx in the hidden coin — a leak AND a coin/label
+	// desync that can mis-denominate a send.
+	for _, ct := range dcrAsset.VisibleCoinTypes() {
 		if ct == pg.coinTypeDropdown.Selected() {
 			continue
 		}

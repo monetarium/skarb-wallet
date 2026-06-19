@@ -157,6 +157,15 @@ func (hp *HomePage) showOverview() {
 // place.
 func (hp *HomePage) openWallet(w sharedW.Asset) {
 	hp.selectedWalletID = w.GetWalletID()
+	// PushAndNavigate silently drops a Display() whose new page shares the
+	// current top's ID — and every SingleWalletMasterPage uses the same
+	// MainPageID. So when one wallet's detail page is already showing, clicking
+	// a different wallet (sidebar or Overview) was a no-op: the switch never
+	// happened. Close the open wallet page first so the new wallet's page
+	// actually replaces it.
+	if hp.CurrentPageID() == walletpage.MainPageID {
+		hp.CloseCurrentPage()
+	}
 	hp.Display(walletpage.NewSingleWalletMasterPage(hp.Load, w, hp.showOverview))
 }
 

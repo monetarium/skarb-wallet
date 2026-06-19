@@ -6,13 +6,13 @@ import (
 	"path/filepath"
 	"sync"
 
+	"github.com/monetarium/monetarium-node/chaincfg"
 	dcrW "github.com/monetarium/monetarium-wallet/wallet"
 	"github.com/monetarium/monetarium-wallet/wallet/txrules"
 	sharedW "github.com/monetarium/skarb-wallet/libwallet/assets/wallet"
 	"github.com/monetarium/skarb-wallet/libwallet/internal/loader"
 	"github.com/monetarium/skarb-wallet/libwallet/internal/loader/dcr"
 	"github.com/monetarium/skarb-wallet/libwallet/utils"
-	"github.com/monetarium/monetarium-node/chaincfg"
 )
 
 type Asset struct {
@@ -30,7 +30,12 @@ type Asset struct {
 
 	TxAuthoredInfo *TxAuthor
 
-	// VSP data
+	// VSP data (restored with the staking section). vspClients is lazily
+	// initialised in VSPClient(); vsps is the known-VSP list maintained by
+	// SaveVSP/ReloadVSPList.
+	vspClients map[string]*dcrW.VSPClient
+	vspMu      sync.RWMutex
+	vsps       []*VSP
 
 	notificationListenersMu           sync.RWMutex
 	syncData                          *SyncData

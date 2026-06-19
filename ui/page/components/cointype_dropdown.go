@@ -4,11 +4,11 @@ import (
 	"gioui.org/font"
 	"gioui.org/layout"
 
+	"github.com/monetarium/monetarium-node/cointype"
 	"github.com/monetarium/skarb-wallet/libwallet/assets/dcr"
 	"github.com/monetarium/skarb-wallet/ui/cryptomaterial"
 	"github.com/monetarium/skarb-wallet/ui/load"
 	"github.com/monetarium/skarb-wallet/ui/values"
-	"github.com/monetarium/monetarium-node/cointype"
 )
 
 // CoinTypeDropdown lets the user pick which Monetarium asset (VAR or one of

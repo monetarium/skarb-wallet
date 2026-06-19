@@ -19,7 +19,7 @@ type Icons struct {
 	ReceiveIcon, Transferred, TransactionsIcon, TransactionsIconInactive, SendIcon,
 	PendingIcon, Logo, RedirectIcon, ConfirmIcon, NewWalletIcon, ArrowForward, AccountIcon,
 	EditIcon, expandIcon, MixedTx, Mixer, SettingsIcon,
-	ArrowDownIcon, SyncingIcon, TransactionFingerprint, DocumentationIcon, TimerIcon, StakeIcon, StakeIconInactive,
+	ArrowDownIcon, SyncingIcon, TransactionFingerprint, DocumentationIcon, TimerIcon, StakeIcon, StakeIconInactive, StakeyIcon,
 	GovernanceActiveIcon, GovernanceInactiveIcon, LogoDarkMode, TimerDarkMode, Rebroadcast, Notification, SuccessIcon, FailedIcon,
 	MixedTxIcon, UnmixedTxIcon, MixerIcon, NotSynced, InfoAction, LightMode, DarkMode, AddExchange, FlypMeIcon, ChangellyIcon,
 	SimpleSwapIcon, SwapzoneIcon, ShapeShiftIcon, GodexIcon, CoinSwitchIcon, ChangeNowIcon, TrocadorIcon,
@@ -110,6 +110,7 @@ func (i *Icons) DefaultIcons() *Icons {
 	i.TradeIconInactive = NewImage(decredIcons["ic_trade_inactive"])
 	i.StakeIcon = NewImage(decredIcons["ic_stake"])
 	i.StakeIconInactive = NewImage(decredIcons["ic_stake_inactive"])
+	i.StakeyIcon = NewImage(decredIcons["ic_stakey"])
 	i.TicketImmatureIcon = NewImage(decredIcons["ic_ticket_immature"])
 	i.TicketUnminedIcon = NewImage(decredIcons["ic_ticket_unmined"])
 	i.TicketLiveIcon = NewImage(decredIcons["ic_ticket_live"])

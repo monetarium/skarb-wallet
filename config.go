@@ -10,12 +10,12 @@ import (
 	"strings"
 
 	"gioui.org/app"
+	"github.com/decred/slog"
+	flags "github.com/jessevdk/go-flags"
+	"github.com/monetarium/monetarium-node/dcrutil"
 	"github.com/monetarium/skarb-wallet/appos"
 	libutils "github.com/monetarium/skarb-wallet/libwallet/utils"
 	"github.com/monetarium/skarb-wallet/version"
-	"github.com/monetarium/monetarium-node/dcrutil"
-	"github.com/decred/slog"
-	flags "github.com/jessevdk/go-flags"
 )
 
 const (

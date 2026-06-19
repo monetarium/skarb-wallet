@@ -17,12 +17,12 @@ import (
 	"github.com/monetarium/skarb-wallet/app"
 	"github.com/monetarium/skarb-wallet/appos"
 	"github.com/monetarium/skarb-wallet/libwallet"
+	"github.com/monetarium/skarb-wallet/libwallet/assets/dcr"
 	sharedW "github.com/monetarium/skarb-wallet/libwallet/assets/wallet"
 	libutils "github.com/monetarium/skarb-wallet/libwallet/utils"
 	"github.com/monetarium/skarb-wallet/ui/cryptomaterial"
 	"github.com/monetarium/skarb-wallet/ui/load"
 	"github.com/monetarium/skarb-wallet/ui/modal"
-	"github.com/monetarium/skarb-wallet/libwallet/assets/dcr"
 	"github.com/monetarium/skarb-wallet/ui/page/components"
 	"github.com/monetarium/skarb-wallet/ui/page/root"
 	"github.com/monetarium/skarb-wallet/ui/page/seedbackup"
@@ -235,9 +235,9 @@ func (sp *startPage) refreshLocalizedStrings() {
 // option labels, skip button) when the page is constructed. RefreshTheme
 // fires these callbacks when the user changes locale / dark mode / currency
 // from anywhere in the app, so we re-read the cached strings on demand.
-func (sp *startPage) OnLanguageChanged() { sp.refreshLocalizedStrings() }
+func (sp *startPage) OnLanguageChanged()       { sp.refreshLocalizedStrings() }
 func (sp *startPage) OnDarkModeChanged(_ bool) {}
-func (sp *startPage) OnCurrencyChanged() {}
+func (sp *startPage) OnCurrencyChanged()       {}
 
 func (sp *startPage) unlock() {
 	startupPasswordModal := modal.NewCreatePasswordModal(sp.Load).
