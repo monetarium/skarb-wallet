@@ -8,6 +8,7 @@ import (
 	"gioui.org/layout"
 	"gioui.org/widget"
 
+	"github.com/monetarium/monetarium-node/cointype"
 	"github.com/monetarium/skarb-wallet/app"
 	sharedW "github.com/monetarium/skarb-wallet/libwallet/assets/wallet"
 	libUtil "github.com/monetarium/skarb-wallet/libwallet/utils"
@@ -15,7 +16,6 @@ import (
 	"github.com/monetarium/skarb-wallet/ui/load"
 	"github.com/monetarium/skarb-wallet/ui/modal"
 	"github.com/monetarium/skarb-wallet/ui/values"
-	"github.com/monetarium/monetarium-node/cointype"
 )
 
 type recipient struct {
@@ -263,11 +263,11 @@ func (rp *recipient) recipientLayout(index int, showIcon bool) layout.Widget {
 			layout.Rigid(func(gtx C) D {
 				layoutBody := func(gtx C) D {
 					// Single localised key so Ukrainian gets noun-adjective
-				// order ("Адреса призначення") instead of the literal EN
-				// concat ("Призначення Адреса") that two values.String
-				// calls produce.
-				txt := values.String(values.StrDestinationLabelAddress)
-				return rp.contentWrapper(gtx, txt, rp.sendDestination.destinationAddressEditor.Layout)
+					// order ("Адреса призначення") instead of the literal EN
+					// concat ("Призначення Адреса") that two values.String
+					// calls produce.
+					txt := values.String(values.StrDestinationLabelAddress)
+					return rp.contentWrapper(gtx, txt, rp.sendDestination.destinationAddressEditor.Layout)
 				}
 
 				if !rp.isShowSendToWallet() {

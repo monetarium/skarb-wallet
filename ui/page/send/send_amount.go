@@ -9,13 +9,13 @@ import (
 	"gioui.org/io/key"
 	"gioui.org/layout"
 	"gioui.org/widget"
+	"github.com/monetarium/monetarium-node/cointype"
+	"github.com/monetarium/monetarium-node/dcrutil"
 	"github.com/monetarium/skarb-wallet/libwallet/assets/dcr"
 	libUtil "github.com/monetarium/skarb-wallet/libwallet/utils"
 	"github.com/monetarium/skarb-wallet/ui/cryptomaterial"
 	"github.com/monetarium/skarb-wallet/ui/utils"
 	"github.com/monetarium/skarb-wallet/ui/values"
-	"github.com/monetarium/monetarium-node/cointype"
-	"github.com/monetarium/monetarium-node/dcrutil"
 )
 
 // unitLabel returns the user-facing coin symbol ("VAR" or "SKA1"…"SKA255")

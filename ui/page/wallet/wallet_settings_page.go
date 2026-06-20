@@ -12,6 +12,7 @@ import (
 	"gioui.org/layout"
 	"gioui.org/widget"
 
+	"github.com/monetarium/monetarium-node/cointype"
 	"github.com/monetarium/skarb-wallet/app"
 	"github.com/monetarium/skarb-wallet/libwallet/assets/dcr"
 	sharedW "github.com/monetarium/skarb-wallet/libwallet/assets/wallet"
@@ -20,13 +21,11 @@ import (
 	"github.com/monetarium/skarb-wallet/ui/load"
 	"github.com/monetarium/skarb-wallet/ui/modal"
 	"github.com/monetarium/skarb-wallet/ui/page/components"
-	"github.com/monetarium/skarb-wallet/ui/page/info"
 	"github.com/monetarium/skarb-wallet/ui/page/security"
 	"github.com/monetarium/skarb-wallet/ui/page/seedbackup"
 	s "github.com/monetarium/skarb-wallet/ui/page/settings"
 	"github.com/monetarium/skarb-wallet/ui/utils"
 	"github.com/monetarium/skarb-wallet/ui/values"
-	"github.com/monetarium/monetarium-node/cointype"
 )
 
 const WalletSettingsPageID = "WalletSettings"
@@ -65,7 +64,7 @@ type SettingsPage struct {
 	infoButton cryptomaterial.IconButton
 
 	spendUnconfirmed *cryptomaterial.Switch
-	connectToPeer     *cryptomaterial.Switch
+	connectToPeer    *cryptomaterial.Switch
 
 	// Coin-visibility filter (#6): one switch per coin emitted on chain
 	// (VAR included). Off = the coin is hidden from every wallet surface
@@ -103,7 +102,7 @@ func NewSettingsPage(l *load.Load, wallet sharedW.Asset, walletCallbackFunc func
 		updateConnectToPeer: l.Theme.NewClickable(false),
 
 		spendUnconfirmed: l.Theme.Switch(),
-		connectToPeer:     l.Theme.Switch(),
+		connectToPeer:    l.Theme.Switch(),
 
 		pageContainer: &widget.List{
 			List: layout.List{Axis: layout.Vertical},
@@ -745,7 +744,13 @@ func (pg *SettingsPage) HandleUserInteractions(gtx C) {
 					}
 
 					im.Dismiss()
-					pg.changeTab(info.InfoID)
+					// changeTab matches against the tab translation KEY
+					// (values.StrInfo == "info"), not the page ID. The `info`
+					// identifier here is the imported package (its `:=` local is
+					// not yet in scope inside its own initializer), and
+					// info.InfoID == "Info" never matches a segment, leaving the
+					// user stuck on Settings. Pass the segment key directly.
+					pg.changeTab(values.StrInfo)
 					return true
 				})
 

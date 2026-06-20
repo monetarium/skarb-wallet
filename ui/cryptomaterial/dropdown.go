@@ -512,8 +512,15 @@ func (d *DropDown) renderItemLabel(text string) layout.Widget {
 	return func(gtx C) D {
 		lbl := d.theme.Body2(text)
 		lbl.MaxLines = 1
-		if !d.expanded && len(text) > d.maxTextLeng {
-			lbl.Text = text[:d.maxTextLeng-3 /* subtract space for the ellipsis */] + "..."
+		// maxTextLeng is a CHARACTER budget, so measure/slice by runes, not bytes.
+		// len()/byte-slicing truncated Cyrillic (2 bytes/rune) at ~half the visible
+		// characters and could split a rune mid-way (rendering a � replacement),
+		// so the collapsed selected label showed e.g. "Сід із 12 с..." instead of
+		// the full "Сід із 12 слів" that easily fits the dropdown width.
+		if !d.expanded {
+			if r := []rune(text); len(r) > d.maxTextLeng {
+				lbl.Text = string(r[:d.maxTextLeng-3 /* subtract space for the ellipsis */]) + "..."
+			}
 		}
 		lbl.Font.Weight = d.FontWeight
 		lbl.TextSize = d.getTextSize(values.TextSize14)

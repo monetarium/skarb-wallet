@@ -17,6 +17,7 @@ import (
 	"gioui.org/widget"
 	"gioui.org/widget/material"
 
+	"github.com/monetarium/monetarium-node/cointype"
 	"github.com/monetarium/skarb-wallet/app"
 	"github.com/monetarium/skarb-wallet/libwallet/assets/dcr"
 	sharedW "github.com/monetarium/skarb-wallet/libwallet/assets/wallet"
@@ -27,14 +28,18 @@ import (
 	"github.com/monetarium/skarb-wallet/ui/modal"
 	"github.com/monetarium/skarb-wallet/ui/page/components"
 	"github.com/monetarium/skarb-wallet/ui/values"
-	"github.com/monetarium/monetarium-node/cointype"
 )
 
 const (
 	TransactionsPageID = "Transactions"
 
 	// pageSize defines the number of transactions that can be fetched at ago.
-	pageSize = int32(30)
+	// 100 (was 30): the infinite-scroll component slides a 2×pageSize window over
+	// the tx list and force-repositions on each page fetch, which is janky on
+	// wallets with many txs. A larger page means the whole list fits in the
+	// initial 2×pageSize load for typical wallets, so the slide/reposition never
+	// engages and the native (virtualized) list scrolls smoothly to the top.
+	pageSize = int32(100)
 )
 
 type (
@@ -47,13 +52,14 @@ type multiWalletTx struct {
 	walletID int
 }
 
-// txTabs holds the transaction-category tabs. Staking (StrStakingTx) was
-// removed in Skarb v1 — Monetarium has no staking — leaving a single
-// "regular" category, so the tab bar itself is hidden in Layout when only
-// one category remains. Kept as a slice (not a constant) so re-introducing
-// categories later is a one-line change.
+// txTabs holds the transaction-category tabs: "Regular Transactions" and
+// "Staking Transactions" (as in Cryptopower). The staking tab is only shown for
+// DCR wallets (see Layout) and surfaces ticket/vote/revocation txs via the
+// tabIndex==1 filter set in components.TxPageDropDownFields. The tab bar hides
+// itself when only one category is present (len(txTabs) == 1).
 var txTabs = []string{
 	values.StrTxRegular,
+	values.StrStakingTx,
 }
 
 // TransactionsPage shows transactions for a specific wallet or for all wallets.
@@ -74,10 +80,10 @@ type TransactionsPage struct {
 	orderDropDown    *cryptomaterial.DropDown
 	walletDropDown   *cryptomaterial.DropDown
 	coinTypeDropDown *cryptomaterial.DropDown
-	filterBtn      *cryptomaterial.Clickable
-	exportBtn      *cryptomaterial.Clickable
-	isFilterOpen   bool
-	searchEditor   cryptomaterial.Editor
+	filterBtn        *cryptomaterial.Clickable
+	exportBtn        *cryptomaterial.Clickable
+	isFilterOpen     bool
+	searchEditor     cryptomaterial.Editor
 
 	transactionList *cryptomaterial.ClickableList
 	txFilter,
@@ -129,7 +135,7 @@ func NewTransactionsPage(l *load.Load, wallet sharedW.Asset) *TransactionsPage {
 		{Text: values.String(values.StrNewest)},
 		{Text: values.String(values.StrOldest)},
 	}, values.ProposalDropdownGroup, 1, 0, false)
-	pg.orderDropDown.Width = values.MarginPadding100
+	pg.orderDropDown.Width = values.MarginPadding140 // fit "Найновіші"/"Найстаріші"
 	pg.materialLoader = material.Loader(pg.Theme.Base)
 	pg.orderDropDown.CollapsedLayoutTextDirection = layout.E
 	settingCommonDropdown(pg.Theme, pg.orderDropDown)
@@ -198,7 +204,7 @@ func (pg *TransactionsPage) initCoinTypeDropdown() {
 	}
 
 	pg.coinTypeDropDown = pg.Theme.DropdownWithCustomPos(items, values.CoinTypeDropdownGroup, 2, 0, false)
-	pg.coinTypeDropDown.Width = values.MarginPadding100
+	pg.coinTypeDropDown.Width = values.MarginPadding130 // fit "Усі активи"
 	pg.coinTypeDropDown.CollapsedLayoutTextDirection = layout.E
 	pg.coinTypeDropDown.SetConvertTextSize(pg.ConvertTextSize)
 	settingCommonDropdown(pg.Theme, pg.coinTypeDropDown)
@@ -282,7 +288,7 @@ func NewTransactionsPageWithType(l *load.Load, selectedTab int, wallet sharedW.A
 		{Text: values.String(values.StrNewest)},
 		{Text: values.String(values.StrOldest)},
 	}, values.ProposalDropdownGroup, 1, 0, false)
-	pg.orderDropDown.Width = values.MarginPadding100
+	pg.orderDropDown.Width = values.MarginPadding140 // fit "Найновіші"/"Найстаріші"
 	pg.materialLoader = material.Loader(pg.Theme.Base)
 	pg.orderDropDown.CollapsedLayoutTextDirection = layout.E
 	settingCommonDropdown(pg.Theme, pg.orderDropDown)
@@ -354,13 +360,20 @@ func (pg *TransactionsPage) refreshAvailableTxType() {
 		items = append(items, cryptomaterial.DropDownItem{Text: name})
 	}
 	pg.statusDropDown = pg.Theme.DropdownWithCustomPos(items, values.TxDropdownGroup, 0, 2, false)
-	pg.statusDropDown.Width = values.DP118
+	// Wide enough for the longest localized status label, incl. the "(NNN)" count
+	// suffix on the regular tab ("Переказано (123)"). At explicit widths the
+	// expanded list is drawn at exactly this width, so a too-narrow value clips
+	// the option text (Gio MaxLines=1) — the truncation the user kept seeing.
+	pg.statusDropDown.Width = values.MarginPadding218
 	pg.statusDropDown.CollapsedLayoutTextDirection = layout.E
 	pg.statusDropDown.SetConvertTextSize(pg.ConvertTextSize)
 	settingCommonDropdown(pg.Theme, pg.statusDropDown)
 
-	// only show tx count for regular txs, not staking
-	if pg.txCategoryTab.SelectedSegment() == values.StrTxOverview {
+	// Populate the per-status tx counts for the only existing tab. The guard
+	// previously compared against StrTxOverview, which no tab ever uses (txTabs
+	// holds only StrTxRegular since staking categories were dropped), so the
+	// count branch was dead and the status filter never showed "Sent (N)".
+	if pg.txCategoryTab.SelectedSegment() == values.StrTxRegular {
 		pg.showLoader = true
 
 		wallets := pg.assetWallets
@@ -386,7 +399,10 @@ func (pg *TransactionsPage) refreshAvailableTxType() {
 			}
 
 			pg.statusDropDown = pg.Theme.DropdownWithCustomPos(items, values.TxDropdownGroup, 0, 2, false)
-			pg.statusDropDown.Width = values.DP118
+			// Match the non-count build above (218): with the "(N)" suffix the
+			// labels are longest here, so this width must fit "Переказано (NNN)"
+			// or the expanded list clips the option text.
+			pg.statusDropDown.Width = values.MarginPadding218
 			pg.statusDropDown.CollapsedLayoutTextDirection = layout.E
 			pg.statusDropDown.SetConvertTextSize(pg.ConvertTextSize)
 			settingCommonDropdown(pg.Theme, pg.statusDropDown)
@@ -428,15 +444,57 @@ func (pg *TransactionsPage) fetchTransactions(offset, pageSize int32) (txs []*mu
 // the list would render as empty).
 func (pg *TransactionsPage) filterByCoinType(in []*multiWalletTx) []*multiWalletTx {
 	picked := pg.selectedCoinType()
+	// "All assets" still excludes coins the user hid via the visibility
+	// filter — hidden coins must not surface anywhere, including here. Build
+	// the visible set for the selected wallet (single-wallet view); when no
+	// single wallet is selected (multi-wallet) we can't scope per coin
+	// reliably, so fall through to no filtering.
+	var visible map[cointype.CoinType]bool                 // single-wallet visible set
+	var visibleByWallet map[int]map[cointype.CoinType]bool // multi-wallet, keyed by walletID
 	if picked == nil {
-		return in
+		if dcrAsset, ok := pg.selectedWallet.(*dcr.Asset); ok {
+			visible = make(map[cointype.CoinType]bool)
+			for _, ct := range dcrAsset.VisibleCoinTypes() {
+				visible[ct] = true
+			}
+		} else {
+			// Multi-wallet "All wallets" view: the hide filter is per-wallet,
+			// so scope each tx against its OWN wallet's visible set.
+			visibleByWallet = make(map[int]map[cointype.CoinType]bool)
+			for _, wal := range pg.assetWallets {
+				dcrAsset, ok := wal.(*dcr.Asset)
+				if !ok {
+					continue
+				}
+				set := make(map[cointype.CoinType]bool)
+				for _, ct := range dcrAsset.VisibleCoinTypes() {
+					set[ct] = true
+				}
+				visibleByWallet[wal.GetWalletID()] = set
+			}
+		}
 	}
 	out := in[:0]
 	for _, mw := range in {
 		if mw.Transaction == nil {
 			continue
 		}
-		if cointype.CoinType(mw.CoinType) == *picked {
+		ct := cointype.CoinType(mw.CoinType)
+		if picked != nil {
+			if ct == *picked {
+				out = append(out, mw)
+			}
+			continue
+		}
+		if visible != nil {
+			if visible[ct] {
+				out = append(out, mw)
+			}
+			continue
+		}
+		// multi-wallet: a wallet with no known visible set (non-DCR) passes
+		// through; otherwise the tx must be a visible coin of its own wallet.
+		if set, ok := visibleByWallet[mw.walletID]; !ok || set[ct] {
 			out = append(out, mw)
 		}
 	}
@@ -543,10 +601,14 @@ func (pg *TransactionsPage) layoutContent(gtx C) D {
 
 	pageElements = append(pageElements, layout.Expanded(pg.dropdownLayout))
 
-	// display tx dropdown if selected wallet is ready and showLoader is false
-	if !pg.walletNotReady() && !pg.showLoader {
-		pg.ParentWindow().Reload() //refresh UI to display updated txType dropdown
-	}
+	// NOTE: a per-frame pg.ParentWindow().Reload() used to live here "to display
+	// the updated txType dropdown". It forced a relayout EVERY frame, and since
+	// txListLayout calls scroll.OnScrollChangeListener each frame — and the scroll
+	// component force-sets list.Position.Offset to mid-list on every fetch — the
+	// two fed each other: the user was yanked deeper and the page "reloaded"
+	// endlessly, making it impossible to reach the newest (top) transactions. The
+	// status-dropdown counts already trigger their own Reload from the counting
+	// goroutine (refreshAvailableTxType), so this per-frame Reload was redundant.
 
 	return layout.Stack{}.Layout(gtx, pageElements...)
 }

@@ -57,7 +57,7 @@ type TxDetailsPage struct {
 	transactionInputsContainer  layout.List
 	transactionOutputsContainer layout.List
 
-	destAddressClickables     []*cryptomaterial.Clickable
+	destAddressClickables []*cryptomaterial.Clickable
 	// senderAddressClickables backs the click-to-copy on the "From" panel
 	// for received transactions. One stable Clickable per unique sender
 	// address (derived from input sigScripts in TxInput.SenderAddress).

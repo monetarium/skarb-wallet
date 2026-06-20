@@ -27,12 +27,12 @@ import (
 	sharedW "github.com/monetarium/skarb-wallet/libwallet/assets/wallet"
 	"github.com/monetarium/skarb-wallet/libwallet/txhelper"
 
+	"github.com/monetarium/monetarium-node/cointype"
 	libutils "github.com/monetarium/skarb-wallet/libwallet/utils"
 	"github.com/monetarium/skarb-wallet/ui/cryptomaterial"
 	"github.com/monetarium/skarb-wallet/ui/load"
 	pageutils "github.com/monetarium/skarb-wallet/ui/utils"
 	"github.com/monetarium/skarb-wallet/ui/values"
-	"github.com/monetarium/monetarium-node/cointype"
 )
 
 const (
@@ -608,19 +608,19 @@ func TxPageDropDownFields(wType libutils.AssetType, tabIndex int) (mapInfo map[s
 		}
 	case wType == libutils.DCRWalletAsset && tabIndex == 0:
 		// DCR Transactions Activities dropdown fields.
+		// "Mixed" (CoinShuffle++) is intentionally omitted — the mixer was removed
+		// from Skarb, so a Mixed tx filter would always be empty and just confuses.
 		mapInfo = map[string]int32{
 			values.String(values.StrAll):         libutils.TxFilterAll,
 			values.String(values.StrSent):        libutils.TxFilterSent,
 			values.String(values.StrReceived):    libutils.TxFilterReceived,
 			values.String(values.StrTransferred): libutils.TxFilterTransferred,
-			values.String(values.StrMixed):       libutils.TxFilterMixed,
 		}
 		keysInfo = []string{
 			values.String(values.StrAll),
 			values.String(values.StrSent),
 			values.String(values.StrReceived),
 			values.String(values.StrTransferred),
-			values.String(values.StrMixed),
 		}
 	case wType == libutils.DCRWalletAsset && tabIndex == 1:
 		// DCR staking Activities dropdown fields.

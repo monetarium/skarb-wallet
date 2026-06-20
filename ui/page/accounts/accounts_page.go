@@ -3,11 +3,12 @@ package accounts
 import (
 	"fmt"
 	"math/big"
+	"sync/atomic"
 
 	"gioui.org/font"
 	"gioui.org/layout"
-	"gioui.org/unit"
 	"gioui.org/widget"
+	"github.com/monetarium/monetarium-node/cointype"
 	"github.com/monetarium/skarb-wallet/app"
 	"github.com/monetarium/skarb-wallet/libwallet/assets/dcr"
 	sharedW "github.com/monetarium/skarb-wallet/libwallet/assets/wallet"
@@ -16,9 +17,7 @@ import (
 	"github.com/monetarium/skarb-wallet/ui/load"
 	"github.com/monetarium/skarb-wallet/ui/modal"
 	"github.com/monetarium/skarb-wallet/ui/page/components"
-	"github.com/monetarium/skarb-wallet/ui/utils"
 	"github.com/monetarium/skarb-wallet/ui/values"
-	"github.com/monetarium/monetarium-node/cointype"
 )
 
 const AccountsPageID = "Accounts"
@@ -40,28 +39,42 @@ type Page struct {
 
 	container     *widget.List
 	addAccountBtn *cryptomaterial.Clickable
-	accountsList  *cryptomaterial.ClickableList
 	accounts      []*sharedW.Account
-	// skaBalances caches each account's pre-formatted SKA token rows, computed
-	// once in loadWalletAccount. The Layout closure previously called
-	// GetAccountCoinBalances (one walletdb.View per active coin type) on EVERY
-	// frame for EVERY account row, causing scroll/redraw jank.
-	skaBalances map[int32][]skaRow
+	// accountNameClicks: clicking an account's NAME row opens its detail
+	// page. The card itself is no longer one big clickable (that conflicted
+	// with the per-coin expand clickables); only the name row navigates.
+	accountNameClicks map[int32]*cryptomaterial.Clickable
+	// coinBreakdowns caches, per account, one pre-formatted row per VISIBLE
+	// coin (VAR + each shown SKA). Computed once in loadWalletAccount — the
+	// Layout closure must not query balances per frame. A hidden coin (the
+	// settings filter) is simply absent here, so its data appears nowhere on
+	// this screen, including VAR.
+	coinBreakdowns map[int32][]*coinBreakdown
 
-	exchangeRate   float64
-	usdExchangeSet bool
+	// expandedCoins remembers which coin rows are expanded (showing
+	// locked/immature). Keyed "<accountNumber>:<coinType>" so the state
+	// survives the cache rebuilds in loadWalletAccount.
+	expandedCoins map[string]bool
+
+	// pendingBalanceRefresh is set by the tx/block notification listener
+	// (a wallet goroutine) and drained on the UI thread in
+	// HandleUserInteractions to re-run loadWalletAccount — so the displayed
+	// balances update live on new/confirmed txs without leaving the page
+	// (CLAUDE.md §3: never rebuild Layout-read caches from a goroutine).
+	pendingBalanceRefresh atomic.Bool
 }
 
-// skaRow is a pre-formatted per-coin balance breakdown cached per account:
-// the coin's total plus the same available/locked/immature split the VAR
-// section shows — SKA coins can be locked or immature too (emission
-// maturity), not just VAR.
-type skaRow struct {
+// coinBreakdown is a pre-formatted per-coin balance line for one account:
+// the coin's total + available (always shown) and locked + immature (shown
+// when the row is expanded). VAR and SKA coins both carry the full split.
+type coinBreakdown struct {
+	coinType  cointype.CoinType
 	symbol    string
 	total     string
 	spendable string
 	locked    string
 	immature  string
+	click     *cryptomaterial.Clickable
 }
 
 func NewAccountPage(l *load.Load, wallet sharedW.Asset) *Page {
@@ -71,13 +84,11 @@ func NewAccountPage(l *load.Load, wallet sharedW.Asset) *Page {
 		container: &widget.List{
 			List: layout.List{Axis: layout.Vertical},
 		},
-		addAccountBtn: l.Theme.NewClickable(false),
-		accountsList:  l.Theme.NewClickableList(layout.Vertical),
-		wallet:        wallet,
+		addAccountBtn:     l.Theme.NewClickable(false),
+		wallet:            wallet,
+		expandedCoins:     make(map[string]bool),
+		accountNameClicks: make(map[int32]*cryptomaterial.Clickable),
 	}
-	pg.accountsList.Radius = cryptomaterial.Radius(8)
-	pg.accountsList.CompleteRadius = true
-	pg.accountsList.ClickableInset = cryptomaterial.ClickableInset{Bottom: values.MarginPadding20}
 
 	return pg
 }
@@ -99,60 +110,97 @@ func (pg *Page) loadWalletAccount() {
 
 	pg.accounts = walletAccounts
 
-	// Pre-compute SKA balance rows once per load (here, not per frame). This
-	// is the only place the per-account coin balances are queried now.
-	cache := make(map[int32][]skaRow)
+	// Pre-compute the per-coin breakdown rows once per load (here, not per
+	// frame). This is the only place the per-account coin balances are
+	// queried. One row per VISIBLE coin (VAR + each shown SKA); a coin hidden
+	// via the settings filter is absent, so nothing about it renders here.
+	cache := make(map[int32][]*coinBreakdown)
 	if dcrAsset, ok := pg.wallet.(*dcr.Asset); ok {
 		for _, acct := range walletAccounts {
+			if pg.accountNameClicks[acct.Number] == nil {
+				pg.accountNameClicks[acct.Number] = pg.Theme.NewClickable(true)
+			}
 			balances, err := dcrAsset.GetAccountCoinBalances(acct.Number)
 			if err != nil {
 				log.Errorf("accounts: GetAccountCoinBalances(%d): %v", acct.Number, err)
 				continue
 			}
-			var rows []skaRow
-			// Every user-visible coin gets a row — including zero balances,
-			// so a freshly emitted coin (SKA2) is visible to the user; the
-			// settings coin filter hides unwanted ones.
+			var rows []*coinBreakdown
 			for _, ct := range dcrAsset.VisibleCoinTypes() {
-				if !ct.IsSKA() {
-					continue
-				}
-				bal := balances[ct] // zero-value CoinBalance when absent
-				fmtAtoms := func(b *big.Int) string {
-					if b == nil {
-						b = new(big.Int)
+				var cb *coinBreakdown
+				if ct.IsVAR() {
+					// VAR uses the account's int64 Balance (the proven path);
+					// the dcrW CoinBalance VAR fields are equivalent but this
+					// keeps parity with the legacy display.
+					b := acct.Balance
+					var total, spendable, locked, immature int64
+					if b != nil {
+						total = b.Total.ToInt()
+						spendable = b.Spendable.ToInt()
+						if b.Locked != nil {
+							locked += b.Locked.ToInt()
+						}
+						if b.LockedByTickets != nil {
+							locked += b.LockedByTickets.ToInt()
+						}
+						if b.ImmatureReward != nil {
+							immature += b.ImmatureReward.ToInt()
+						}
+						if b.ImmatureStakeGeneration != nil {
+							immature += b.ImmatureStakeGeneration.ToInt()
+						}
 					}
-					return dcr.FormatTxAmountBig(b.String(), 0, uint8(ct))
-				}
-				atoms := func(a cointype.SKAAmount) *big.Int {
-					if b := a.BigInt(); b != nil {
-						return b
+					cb = &coinBreakdown{
+						coinType:  ct,
+						symbol:    dcr.CoinSymbol(ct),
+						total:     dcr.FormatTxAmount(total, uint8(ct)),
+						spendable: dcr.FormatTxAmount(spendable, uint8(ct)),
+						locked:    dcr.FormatTxAmount(locked, uint8(ct)),
+						immature:  dcr.FormatTxAmount(immature, uint8(ct)),
 					}
-					return new(big.Int)
+				} else {
+					bal := balances[ct] // zero-value CoinBalance when absent
+					atoms := func(a cointype.SKAAmount) *big.Int {
+						if v := a.BigInt(); v != nil {
+							return v
+						}
+						return new(big.Int)
+					}
+					fmtAtoms := func(b *big.Int) string {
+						return dcr.FormatTxAmountBig(b.String(), 0, uint8(ct))
+					}
+					total := atoms(bal.SKATotal)
+					spendable := atoms(bal.SKASpendable)
+					immature := new(big.Int).Add(atoms(bal.SKAImmatureCoinbaseRewards), atoms(bal.SKAImmatureStakeGeneration))
+					// Locked = total minus spendable, immature and still-
+					// unconfirmed (clamped at zero).
+					locked := new(big.Int).Sub(total, spendable)
+					locked.Sub(locked, immature)
+					locked.Sub(locked, atoms(bal.SKAUnconfirmed))
+					if locked.Sign() < 0 {
+						locked.SetInt64(0)
+					}
+					cb = &coinBreakdown{
+						coinType:  ct,
+						symbol:    dcr.CoinSymbol(ct),
+						total:     fmtAtoms(total),
+						spendable: fmtAtoms(spendable),
+						locked:    fmtAtoms(locked),
+						immature:  fmtAtoms(immature),
+					}
 				}
-				total := atoms(bal.SKATotal)
-				spendable := atoms(bal.SKASpendable)
-				immature := new(big.Int).Add(atoms(bal.SKAImmatureCoinbaseRewards), atoms(bal.SKAImmatureStakeGeneration))
-				// Locked = whatever of the total is neither spendable nor
-				// immature nor still unconfirmed (clamped at zero).
-				locked := new(big.Int).Sub(total, spendable)
-				locked.Sub(locked, immature)
-				locked.Sub(locked, atoms(bal.SKAUnconfirmed))
-				if locked.Sign() < 0 {
-					locked.SetInt64(0)
-				}
-				rows = append(rows, skaRow{
-					symbol:    dcr.CoinSymbol(ct),
-					total:     fmtAtoms(total),
-					spendable: fmtAtoms(spendable),
-					locked:    fmtAtoms(locked),
-					immature:  fmtAtoms(immature),
-				})
+				cb.click = pg.Theme.NewClickable(true)
+				rows = append(rows, cb)
 			}
 			cache[acct.Number] = rows
 		}
 	}
-	pg.skaBalances = cache
+	pg.coinBreakdowns = cache
+}
+
+// coinRowKey is the expandedCoins map key for one (account, coin) pair.
+func coinRowKey(accountNumber int32, ct cointype.CoinType) string {
+	return fmt.Sprintf("%d:%d", accountNumber, uint8(ct))
 }
 
 // OnNavigatedTo is called when the page is about to be displayed and
@@ -161,10 +209,26 @@ func (pg *Page) loadWalletAccount() {
 // Part of the load.Page interface.
 func (pg *Page) OnNavigatedTo() {
 	pg.loadWalletAccount()
-	pg.usdExchangeSet = false
-	if pg.AssetsManager.ExchangeRateFetchingEnabled() {
-		pg.usdExchangeSet = pg.AssetsManager.RateSource.Ready()
-		go pg.fetchExchangeRate()
+	pg.listenForTxNotifications()
+}
+
+// listenForTxNotifications refreshes the displayed balances when a tx arrives
+// or a block confirms one. The callbacks run on a wallet goroutine, so they
+// only STAGE a refresh (atomic flag + Reload); the actual loadWalletAccount
+// rebuild happens on the UI thread in HandleUserInteractions (CLAUDE.md §3).
+func (pg *Page) listenForTxNotifications() {
+	listener := &sharedW.TxAndBlockNotificationListener{
+		OnTransaction: func(_ int, _ *sharedW.Transaction) {
+			pg.pendingBalanceRefresh.Store(true)
+			pg.ParentWindow().Reload()
+		},
+		OnBlockAttached: func(_ int, _ int32) {
+			pg.pendingBalanceRefresh.Store(true)
+			pg.ParentWindow().Reload()
+		},
+	}
+	if err := pg.wallet.AddTxAndBlockNotificationListener(listener, AccountsPageID); err != nil {
+		log.Errorf("accounts: add tx/block notification listener: %v", err)
 	}
 }
 
@@ -175,22 +239,8 @@ func (pg *Page) OnNavigatedTo() {
 // OnNavigatedTo() will be called again. This method should not destroy UI
 // components unless they'll be recreated in the OnNavigatedTo() method.
 // Part of the load.Page interface.
-func (pg *Page) OnNavigatedFrom() {}
-
-func (pg *Page) fetchExchangeRate() {
-	market, err := utils.USDMarketFromAsset(pg.wallet.GetAssetType())
-	if err != nil {
-		log.Errorf("Unsupported asset type: %s", pg.wallet.GetAssetType())
-		return
-	}
-
-	rate := pg.AssetsManager.RateSource.GetTicker(market, true) // okay to fetch latest rate, this is a goroutine
-	if rate == nil || rate.LastTradePrice <= 0 {
-		return
-	}
-
-	pg.exchangeRate = rate.LastTradePrice
-	pg.ParentWindow().Reload()
+func (pg *Page) OnNavigatedFrom() {
+	pg.wallet.RemoveTxAndBlockNotificationListener(AccountsPageID)
 }
 
 // Layout draws the page UI components into the provided layout context
@@ -212,11 +262,19 @@ func (pg *Page) Layout(gtx C) D {
 func (pg *Page) bodyLayout(gtx C) D {
 	dp24 := values.MarginPaddingTransform(pg.IsMobileView(), values.MarginPadding24)
 	return layout.Inset{Top: dp24, Bottom: dp24}.Layout(gtx, func(gtx C) D {
-		return pg.accountsList.Layout(gtx, len(pg.accounts), func(gtx C, i int) D {
-			return layout.Inset{Bottom: values.MarginPadding20}.Layout(gtx, func(gtx C) D {
-				return pg.accountItemLayout(gtx, pg.accounts[i])
-			})
-		})
+		// Plain Flex (not a ClickableList): each account card owns its own
+		// per-coin expand clickables, so the whole card must NOT be one big
+		// clickable. The outer page list (Layout) supplies scrolling.
+		children := make([]layout.FlexChild, 0, len(pg.accounts))
+		for i := range pg.accounts {
+			account := pg.accounts[i]
+			children = append(children, layout.Rigid(func(gtx C) D {
+				return layout.Inset{Bottom: values.MarginPadding20}.Layout(gtx, func(gtx C) D {
+					return pg.accountItemLayout(gtx, account)
+				})
+			}))
+		}
+		return layout.Flex{Axis: layout.Vertical}.Layout(gtx, children...)
 	})
 }
 
@@ -262,7 +320,43 @@ func (pg *Page) addAccountBtnLayout(gtx C) D {
 
 func (pg *Page) accountItemLayout(gtx C, account *sharedW.Account) D {
 	dp10 := values.MarginPadding10
-	bal := account.Balance
+	children := []layout.FlexChild{
+		// Header row: the account NAME only (nothing else). Per the redesign
+		// the per-coin totals live in the rows below, not next to the name.
+		// The name row is clickable — it opens the account detail page.
+		layout.Rigid(func(gtx C) D {
+			return cryptomaterial.LinearLayout{
+				Width:     cryptomaterial.MatchParent,
+				Height:    cryptomaterial.WrapContent,
+				Clickable: pg.accountNameClicks[account.Number],
+				Padding:   layout.Inset{Top: values.MarginPadding4, Bottom: values.MarginPadding4},
+			}.Layout(gtx,
+				layout.Rigid(func(gtx C) D {
+					lbl := pg.Theme.Label(pg.ConvertTextSize(values.TextSize18), account.AccountName)
+					lbl.Font.Weight = font.SemiBold
+					return lbl.Layout(gtx)
+				}),
+			)
+		}),
+	}
+	rows := pg.coinBreakdowns[account.Number]
+	for i := range rows {
+		cb := rows[i]
+		expanded := pg.expandedCoins[coinRowKey(account.Number, cb.coinType)]
+		children = append(children,
+			layout.Rigid(func(gtx C) D {
+				return layout.Inset{Top: dp10, Bottom: values.MarginPadding6}.Layout(gtx, pg.Theme.Separator().Layout)
+			}),
+			layout.Rigid(func(gtx C) D { return pg.coinRowLayout(gtx, cb, expanded) }),
+		)
+		if expanded {
+			children = append(children,
+				layout.Rigid(layout.Spacer{Height: values.MarginPadding4}.Layout),
+				layout.Rigid(pg.labelledAmountRow(values.String(values.StrLocked), cb.locked)),
+				layout.Rigid(pg.labelledAmountRow(values.String(values.StrImmature), cb.immature)),
+			)
+		}
+	}
 	return cryptomaterial.LinearLayout{
 		Width:       cryptomaterial.MatchParent,
 		Height:      cryptomaterial.WrapContent,
@@ -273,121 +367,60 @@ func (pg *Page) accountItemLayout(gtx C, account *sharedW.Account) D {
 			Color:  pg.Theme.Color.Gray3,
 			Radius: cryptomaterial.Radius(8),
 		},
-	}.Layout(gtx,
-		// Only the header row (account name + its total) is bold; the
-		// breakdown rows below render in regular weight.
-		layout.Rigid(pg.accountBalanceLayout(account.AccountName, account.Balance.Total, layout.Vertical, true)),
-		layout.Rigid(func(gtx C) D {
-			return layout.Inset{Top: dp10, Bottom: dp10}.Layout(gtx, pg.Theme.Separator().Layout)
-		}),
-		layout.Rigid(func(gtx C) D {
-			locked := bal.Locked
-			if bal.LockedByTickets != nil {
-				locked = pg.wallet.ToAmount(locked.ToInt() + bal.LockedByTickets.ToInt())
-			}
-			children := []layout.FlexChild{
-				layout.Rigid(pg.accountBalanceLayout(values.String(values.StrLabelSpendable), bal.Spendable, layout.Horizontal, false)),
-				layout.Rigid(pg.accountBalanceLayout(values.String(values.StrLocked), locked, layout.Horizontal, false)),
-				layout.Rigid(func(gtx C) D {
-					if pg.wallet.GetAssetType() != libutils.DCRWalletAsset {
-						return D{}
-					}
+	}.Layout(gtx, children...)
+}
 
-					// Display immature for only DCR.
-					immature := pg.wallet.ToAmount(bal.ImmatureReward.ToInt() + bal.ImmatureStakeGeneration.ToInt())
-					return pg.accountBalanceLayout(values.String(values.StrImmature), immature, layout.Horizontal, false)(gtx)
+// coinRowLayout renders one collapsible coin row: the symbol + expand
+// triangle on the left, and the coin's total + available (right-aligned) on
+// the right. The whole row is clickable to toggle the locked/immature detail.
+func (pg *Page) coinRowLayout(gtx C, cb *coinBreakdown, expanded bool) D {
+	icon := pg.Theme.Icons.ArrowDropDown
+	if expanded {
+		icon = pg.Theme.Icons.ArrowDropUp
+	}
+	return cryptomaterial.LinearLayout{
+		Width:       cryptomaterial.MatchParent,
+		Height:      cryptomaterial.WrapContent,
+		Clickable:   cb.click,
+		Padding:     layout.Inset{Top: values.MarginPadding4, Bottom: values.MarginPadding4},
+		Alignment:   layout.Middle,
+		Orientation: layout.Horizontal,
+	}.Layout(gtx,
+		layout.Rigid(func(gtx C) D {
+			sym := pg.Theme.Label(pg.ConvertTextSize(values.TextSize16), cb.symbol)
+			sym.Font.Weight = font.SemiBold
+			return layout.Flex{Alignment: layout.Middle}.Layout(gtx,
+				layout.Rigid(sym.Layout),
+				layout.Rigid(func(gtx C) D {
+					return pg.Theme.NewIcon(icon).Layout20dp(gtx)
 				}),
-			}
-			// Append a breakdown group per visible SKA coin. The VAR rows
-			// above come from the legacy int64 Balance struct, which has no
-			// SKA fields; SKA balances are read from the dcr asset's per-coin
-			// big.Int channel — available/locked/immature apply to SKA too.
-			children = append(children, pg.skaBalanceRows(account)...)
-			return layout.Flex{Axis: layout.Vertical}.Layout(gtx, children...)
+			)
+		}),
+		layout.Flexed(1, func(gtx C) D {
+			return layout.E.Layout(gtx, func(gtx C) D {
+				return layout.Flex{Axis: layout.Vertical, Alignment: layout.End}.Layout(gtx,
+					layout.Rigid(pg.labelledAmountRow(values.String(values.StrTotal), cb.total)),
+					layout.Rigid(pg.labelledAmountRow(values.String(values.StrLabelSpendable), cb.spendable)),
+				)
+			})
 		}),
 	)
 }
 
-// skaBalanceRows returns one balance row per SKA coin type the account
-// holds. VAR is rendered through accountBalanceLayout above; this surfaces
-// the SKA token balances the VAR-only Balance struct can't express. Only
-// coins with a non-zero balance in *this* account are listed (mirrors the
-// wallet-wide DisplayableCoinTypes filter so users don't see SKA-n entries
-// they have never received).
-func (pg *Page) skaBalanceRows(account *sharedW.Account) []layout.FlexChild {
-	// Read from the per-load cache (populated in loadWalletAccount) — no
-	// walletdb queries from inside this per-frame Layout closure.
-	var rows []layout.FlexChild
-	for _, r := range pg.skaBalances[account.Number] {
-		r := r
-		rows = append(rows,
-			layout.Rigid(pg.skaBalanceRow(r.symbol, r.total, 0)),
-			layout.Rigid(pg.skaBalanceRow(values.String(values.StrLabelSpendable), r.spendable, values.MarginPadding12)),
-			layout.Rigid(pg.skaBalanceRow(values.String(values.StrLocked), r.locked, values.MarginPadding12)),
-			layout.Rigid(pg.skaBalanceRow(values.String(values.StrImmature), r.immature, values.MarginPadding12)),
-		)
-	}
-	return rows
-}
-
-// skaBalanceRow renders a single "title .... amount" line. Regular weight —
-// per the design only the account header total is bold. leftInset indents
-// the available/locked/immature sub-rows under their coin's symbol row.
-func (pg *Page) skaBalanceRow(title, amount string, leftInset unit.Dp) func(gtx C) D {
-	label := pg.Theme.Label(pg.ConvertTextSize(values.TextSize16), title)
-	amountTxt := pg.Theme.Label(pg.ConvertTextSize(values.TextSize16), amount)
+// labelledAmountRow renders a right-aligned "Title: amount" line (regular
+// weight; per the design only the account-name header is bold).
+func (pg *Page) labelledAmountRow(title, amount string) func(gtx C) D {
 	return func(gtx C) D {
-		return layout.Inset{Left: leftInset}.Layout(gtx, func(gtx C) D {
-			return layout.Flex{Spacing: layout.SpaceBetween}.Layout(gtx,
-				layout.Rigid(label.Layout),
-				layout.Flexed(1, func(gtx C) D {
-					return layout.E.Layout(gtx, amountTxt.Layout)
-				}),
+		return layout.E.Layout(gtx, func(gtx C) D {
+			titleLbl := pg.Theme.Label(pg.ConvertTextSize(values.TextSize14), title)
+			titleLbl.Color = pg.Theme.Color.GrayText2
+			amtLbl := pg.Theme.Label(pg.ConvertTextSize(values.TextSize14), amount)
+			return layout.Flex{Alignment: layout.Middle}.Layout(gtx,
+				layout.Rigid(titleLbl.Layout),
+				layout.Rigid(layout.Spacer{Width: values.MarginPadding6}.Layout),
+				layout.Rigid(amtLbl.Layout),
 			)
 		})
-	}
-}
-
-// accountBalanceLayout is VAR-only. `bal` arrives as a sharedW.AssetAmount
-// (the int64 + .ToCoin() channel), which by Monetarium convention carries
-// VAR atoms (1e8/coin). All current call sites in this page pass VAR
-// balances (Total, Spendable, Locked, immature/staking). If a future
-// refactor pipes a SKA AssetAmount through here, the .String() row and
-// the .ToCoin()→USD conversion below will both silently misformat — SKA
-// values > 9.22 hit the int64 clamp upstream and .ToCoin() divides by
-// 1e8 instead of 1e18. SKA balances are surfaced through a different
-// path (GetCoinBalance().SKATotal → FormatTxAmountBig / FormatCoinAmount),
-// not this layout.
-func (pg *Page) accountBalanceLayout(title string, bal sharedW.AssetAmount, balAxis layout.Axis, bold bool) func(gtx C) D {
-	weight := font.Normal
-	if bold {
-		weight = font.SemiBold
-	}
-	label := pg.Theme.Label(pg.ConvertTextSize(values.TextSize16), title)
-	label.Font.Weight = weight
-	balanceTxt := pg.Theme.Label(pg.ConvertTextSize(values.TextSize16), bal.String())
-	balanceTxt.Font.Weight = weight
-	return func(gtx C) D {
-		return layout.Flex{Spacing: layout.SpaceBetween}.Layout(gtx,
-			layout.Rigid(label.Layout), // Title
-			layout.Flexed(1, func(gtx C) D { // Balances
-				return layout.E.Layout(gtx, func(gtx C) D {
-					return layout.Flex{Axis: balAxis, Alignment: layout.End}.Layout(gtx,
-						layout.Rigid(balanceTxt.Layout),
-						layout.Rigid(func(gtx C) D {
-							if !pg.usdExchangeSet || pg.exchangeRate <= 0 || bal.ToCoin() == 0 {
-								return D{}
-							}
-
-							balanceUSD := fmt.Sprintf(" (%v)", utils.FormatAsUSDString(pg.Printer, utils.CryptoToUSD(pg.exchangeRate, bal.ToCoin())))
-							usdAmtLabel := pg.Theme.Label(pg.ConvertTextSize(values.TextSize16), balanceUSD)
-							usdAmtLabel.Font.Weight = font.SemiBold
-							return usdAmtLabel.Layout(gtx)
-						}),
-					)
-				})
-			}),
-		)
 	}
 }
 
@@ -397,6 +430,13 @@ func (pg *Page) accountBalanceLayout(title string, bal sharedW.AssetAmount, balA
 // displayed.
 // Part of the load.Page interface.
 func (pg *Page) HandleUserInteractions(gtx C) {
+	// Apply a balance refresh staged by the tx/block notification listener
+	// (CLAUDE.md §3 — the rebuild of pg.accounts/pg.coinBreakdowns, read by
+	// Layout, must happen here on the UI thread, not in the goroutine).
+	if pg.pendingBalanceRefresh.CompareAndSwap(true, false) {
+		pg.loadWalletAccount()
+	}
+
 	if pg.addAccountBtn.Clicked(gtx) {
 		createAccountModal := modal.NewCreatePasswordModal(pg.Load).
 			Title(values.String(values.StrCreateNewAccount)).
@@ -421,9 +461,20 @@ func (pg *Page) HandleUserInteractions(gtx C) {
 		pg.ParentWindow().ShowModal(createAccountModal)
 	}
 
-	if clicked, selectedItem := pg.accountsList.ItemClicked(); clicked {
-		if pg.wallet.GetAssetType() == libutils.DCRWalletAsset {
-			pg.ParentNavigator().Display(NewDCRAcctDetailsPage(pg.Load, pg.wallet, pg.accounts[selectedItem]))
+	for i := range pg.accounts {
+		account := pg.accounts[i]
+		// Name-row click → account detail page.
+		if click := pg.accountNameClicks[account.Number]; click != nil && click.Clicked(gtx) {
+			if pg.wallet.GetAssetType() == libutils.DCRWalletAsset {
+				pg.ParentNavigator().Display(NewDCRAcctDetailsPage(pg.Load, pg.wallet, account))
+			}
+		}
+		// Coin-row clicks → toggle the locked/immature detail for that coin.
+		for _, cb := range pg.coinBreakdowns[account.Number] {
+			if cb.click != nil && cb.click.Clicked(gtx) {
+				key := coinRowKey(account.Number, cb.coinType)
+				pg.expandedCoins[key] = !pg.expandedCoins[key]
+			}
 		}
 	}
 }

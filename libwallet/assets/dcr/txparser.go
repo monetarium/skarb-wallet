@@ -5,9 +5,9 @@ import (
 	"math"
 	"math/big"
 
+	"github.com/monetarium/monetarium-node/chaincfg/chainhash"
 	w "github.com/monetarium/monetarium-wallet/wallet"
 	sharedW "github.com/monetarium/skarb-wallet/libwallet/assets/wallet"
-	"github.com/monetarium/monetarium-node/chaincfg/chainhash"
 )
 
 // skaOrVARAtoms returns the atom count for a wallet input/output as int64,

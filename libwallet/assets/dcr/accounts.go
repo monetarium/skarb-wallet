@@ -8,13 +8,13 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/monetarium/monetarium-node/chaincfg"
+	"github.com/monetarium/monetarium-node/dcrutil"
 	"github.com/monetarium/monetarium-wallet/errors"
 	w "github.com/monetarium/monetarium-wallet/wallet"
 	"github.com/monetarium/skarb-wallet/libwallet/addresshelper"
 	sharedW "github.com/monetarium/skarb-wallet/libwallet/assets/wallet"
 	"github.com/monetarium/skarb-wallet/libwallet/utils"
-	"github.com/monetarium/monetarium-node/chaincfg"
-	"github.com/monetarium/monetarium-node/dcrutil"
 )
 
 func (asset *Asset) GetAccounts() (string, error) {

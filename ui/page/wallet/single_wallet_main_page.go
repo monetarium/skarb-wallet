@@ -15,6 +15,8 @@ import (
 	"gioui.org/widget"
 	"gioui.org/widget/material"
 
+	"github.com/gen2brain/beeep"
+	"github.com/monetarium/monetarium-node/cointype"
 	"github.com/monetarium/skarb-wallet/app"
 	"github.com/monetarium/skarb-wallet/libwallet/assets/dcr"
 	sharedW "github.com/monetarium/skarb-wallet/libwallet/assets/wallet"
@@ -28,11 +30,10 @@ import (
 	"github.com/monetarium/skarb-wallet/ui/page/receive"
 	"github.com/monetarium/skarb-wallet/ui/page/seedbackup"
 	"github.com/monetarium/skarb-wallet/ui/page/send"
+	"github.com/monetarium/skarb-wallet/ui/page/staking"
 	"github.com/monetarium/skarb-wallet/ui/page/transaction"
 	"github.com/monetarium/skarb-wallet/ui/utils"
 	"github.com/monetarium/skarb-wallet/ui/values"
-	"github.com/gen2brain/beeep"
-	"github.com/monetarium/monetarium-node/cointype"
 )
 
 const (
@@ -51,6 +52,7 @@ var PageNavigationMap = map[string]string{
 	values.StrSend:         send.SendPageID,
 	values.StrReceive:      receive.ReceivePageID,
 	values.StrTransactions: transaction.TransactionsPageID,
+	values.StrStaking:      staking.OverviewPageID,
 	values.StrSettings:     WalletSettingsPageID,
 }
 
@@ -183,6 +185,12 @@ func (swmp *SingleWalletMasterPage) ID() string {
 // the page is displayed.
 // Part of the load.Page interface.
 func (swmp *SingleWalletMasterPage) OnNavigatedTo() {
+	// Rebuild the header wallet-selector so a wallet created since this page was
+	// constructed appears immediately (createWalletDropdown re-reads
+	// AssetWallets()). Without this a freshly created wallet only showed up in
+	// the header after navigating away and back via Overview.
+	swmp.walletDropdown = swmp.createWalletDropdown()
+
 	// load wallet account balance first before rendering page contents.
 	// It loads balance for the current selected wallet.
 	swmp.updateBalance()
@@ -261,10 +269,19 @@ func (swmp *SingleWalletMasterPage) initTabOptions() {
 		commonTabs = append(commonTabs[:1], append(sendTab, commonTabs[1:]...)...)
 	}
 
-	// Decred-only StakeShuffle / Staking tabs are intentionally NOT added in
-	// the Monetarium fork — the v1 wallet does not surface PoS staking or
-	// CoinShuffle++ mixing UI. Re-introduce these blocks when those features
-	// are added back.
+	// Staking tab for DCR wallets that can sign (not watch-only). Inserted just
+	// before 'Accounts', mirroring Cryptopower's tab order. CoinShuffle++ mixing
+	// (StakeShuffle) stays out — only PoS staking is restored.
+	if swmp.selectedWallet.GetAssetType() == libutils.DCRWalletAsset && !swmp.selectedWallet.IsWatchingOnlyWallet() {
+		withStaking := make([]string, 0, len(commonTabs)+1)
+		for _, t := range commonTabs {
+			if t == values.StrAccounts {
+				withStaking = append(withStaking, values.StrStaking)
+			}
+			withStaking = append(withStaking, t)
+		}
+		commonTabs = withStaking
+	}
 
 	// SegmentTypeGroupMax distributes width evenly across all tabs
 	// instead of laying them out in a horizontal scroller. Split mode
@@ -386,6 +403,12 @@ func (swmp *SingleWalletMasterPage) computeSKABalanceLines() []string {
 		if !ok {
 			continue
 		}
+		// Only non-zero balances, matching this function's doc and the account-
+		// details page — a visible-but-empty SKA coin shouldn't add a "0.00
+		// SKAx" line under the VAR total.
+		if bal.SKATotal.Sign() <= 0 && bal.SKASpendable.Sign() <= 0 && bal.SKAUnconfirmed.Sign() <= 0 {
+			continue
+		}
 		bal.CoinType = ct // ensure FormatCoinAmount picks the SKA branch
 		lines = append(lines, dcr.FormatCoinAmount(bal))
 	}
@@ -421,6 +444,16 @@ func (swmp *SingleWalletMasterPage) changeTab(tab string) {
 // displayed.
 // Part of the load.Page interface.
 func (swmp *SingleWalletMasterPage) HandleUserInteractions(gtx C) {
+	// Keep the header wallet-selector in sync with the wallet set. A wallet
+	// created via the in-app "create wallet" flow returns here through
+	// ClosePagesAfter, which doesn't reliably re-fire OnNavigatedTo, so a fresh
+	// wallet otherwise wouldn't appear in the dropdown until the next navigation.
+	// Rebuild (cheap length check per frame, like the sidebar's refreshWalletList)
+	// whenever the count changes — covers both creation and deletion.
+	if len(swmp.AssetsManager.AssetWallets()) != len(swmp.allWallets) {
+		swmp.walletDropdown = swmp.createWalletDropdown()
+	}
+
 	if swmp.checkBox.CheckBox.Update(gtx) {
 		swmp.ParentWindow().Reload()
 	}
@@ -494,6 +527,10 @@ func (swmp *SingleWalletMasterPage) navigateToSelectedTab() {
 		txPage := transaction.NewTransactionsPage(swmp.Load, swmp.selectedWallet)
 		txPage.DisableUniformTab()
 		pg = txPage
+	case values.StrStaking:
+		if dcrW, ok := swmp.selectedWallet.(*dcr.Asset); ok {
+			pg = staking.NewStakingPage(swmp.Load, dcrW)
+		}
 	case values.StrAccounts:
 		pg = accounts.NewAccountPage(swmp.Load, swmp.selectedWallet)
 	case values.StrSettings:

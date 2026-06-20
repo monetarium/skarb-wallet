@@ -5,10 +5,7 @@ import (
 	"math"
 	"math/big"
 
-	w "github.com/monetarium/monetarium-wallet/wallet"
-	sharedW "github.com/monetarium/skarb-wallet/libwallet/assets/wallet"
-	"github.com/monetarium/skarb-wallet/libwallet/addresshelper"
-	"github.com/monetarium/skarb-wallet/libwallet/txhelper"
+	"github.com/monetarium/monetarium-explorer/txhelpers"
 	"github.com/monetarium/monetarium-node/blockchain/stake"
 	"github.com/monetarium/monetarium-node/chaincfg"
 	"github.com/monetarium/monetarium-node/chaincfg/chainhash"
@@ -16,7 +13,10 @@ import (
 	"github.com/monetarium/monetarium-node/txscript/stdaddr"
 	"github.com/monetarium/monetarium-node/txscript/stdscript"
 	"github.com/monetarium/monetarium-node/wire"
-	"github.com/monetarium/monetarium-explorer/txhelpers"
+	w "github.com/monetarium/monetarium-wallet/wallet"
+	"github.com/monetarium/skarb-wallet/libwallet/addresshelper"
+	sharedW "github.com/monetarium/skarb-wallet/libwallet/assets/wallet"
+	"github.com/monetarium/skarb-wallet/libwallet/txhelper"
 )
 
 const BlockValid = 1 << 0
@@ -670,8 +670,8 @@ func (asset *Asset) augmentWalletOutputs(msgTx *wire.MsgTx, walletOutputs []*sha
 		}
 
 		// Resolve the actual account + branch for the owned address.
-		internal := true        // conservative fallback: change-shaped
-		acctNum := int32(0)     // legacy fallback account
+		internal := true    // conservative fallback: change-shaped
+		acctNum := int32(0) // legacy fallback account
 		acctName := ""
 		if ka, kerr := asset.Internal().DCR.KnownAddress(ctx, ownedStdAddr); kerr == nil && ka != nil {
 			acctName = ka.AccountName()

@@ -81,7 +81,10 @@ func NewRestorePage(l *load.Load, walletName string, walletType libutils.AssetTy
 		Text: values.String(values.Str33WordSeed),
 	}
 
-	pg.seedTypeDropdown = pg.Theme.NewCommonDropDown(GetWordSeedTypeDropdownItems(), defaultWordSeedType, values.MarginPadding130, values.TxDropdownGroup, false)
+	// MarginPadding180 (was 130) so the full Ukrainian seed-type label
+	// ("Сід із 33 слів") fits — at 130dp it was clipped to an unreadable
+	// "Сід із 33 сл…".
+	pg.seedTypeDropdown = pg.Theme.NewCommonDropDown(GetWordSeedTypeDropdownItems(), defaultWordSeedType, values.MarginPadding180, values.TxDropdownGroup, false)
 
 	pg.seedRestorePage = NewSeedRestorePage(l, walletName, walletType, onRestoreComplete, pg.getWordSeedType)
 

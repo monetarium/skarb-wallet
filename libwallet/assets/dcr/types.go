@@ -3,12 +3,12 @@ package dcr
 import (
 	"fmt"
 
+	vspd "github.com/decred/vspd/types/v2"
+	"github.com/monetarium/monetarium-node/chaincfg"
+	"github.com/monetarium/monetarium-node/dcrutil"
 	"github.com/monetarium/monetarium-wallet/wallet"
 	"github.com/monetarium/monetarium-wallet/wallet/udb"
 	sharedW "github.com/monetarium/skarb-wallet/libwallet/assets/wallet"
-	"github.com/monetarium/monetarium-node/chaincfg"
-	"github.com/monetarium/monetarium-node/dcrutil"
-	vspd "github.com/decred/vspd/types/v2"
 )
 
 // Amount implements the Asset amount interface for the DCR asset
@@ -90,6 +90,9 @@ type TicketBuyerConfig struct {
 	PurchaseAccount   int32
 	BalanceToMaintain int64
 
+	// VspClient is the live VSP client used by the auto ticket buyer; it is
+	// populated at runtime (not persisted) in PurchaseTickets.
+	VspClient *wallet.VSPClient
 }
 
 // VSPFeeStatus represents the current fee status of a ticket.
@@ -137,6 +140,10 @@ type VSPTicketInfo struct {
 	// VoteChoices is only set if the ticket status was obtained from the
 	// VSP.
 	VoteChoices map[string]string
+
+	// Client is the live VSP client for this ticket, used by the staking UI
+	// to process the fee for an unprocessed ticket.
+	Client *wallet.VSPClient
 
 	VSPTicket *wallet.VSPTicket
 }

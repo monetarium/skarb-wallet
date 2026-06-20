@@ -77,6 +77,15 @@ type CreateWallet struct {
 	stagedNameErr   string
 	stagedXpubErr   string
 	pendingErrApply atomic.Bool
+
+	// createdWallet + pendingCreateSuccess move the wallet-created success
+	// callback OFF the create/import goroutine and onto the UI thread. That
+	// callback navigates into the seed-backup → verify-seed flow; doing the
+	// navigation from the goroutine (CLAUDE.md §3) races the UI thread and can
+	// drop the push to the backup flow, so the verify step never appears and a
+	// freshly created wallet looks like it was created without any seed check.
+	createdWallet        sharedW.Asset
+	pendingCreateSuccess atomic.Bool
 }
 
 func NewCreateWallet(l *load.Load, walletCreationSuccessCallback func(newWallet sharedW.Asset), assetType ...libutils.AssetType) *CreateWallet {
@@ -130,7 +139,9 @@ func NewCreateWallet(l *load.Load, walletCreationSuccessCallback func(newWallet 
 		Text: values.String(values.Str12WordSeed),
 	}
 
-	pg.seedTypeDropdown = pg.Theme.NewCommonDropDown(GetWordSeedTypeDropdownItems(), defaultWordSeedType, values.MarginPadding130, values.TxDropdownGroup, false)
+	// MarginPadding180 (was 130) so the full Ukrainian seed-type label
+	// ("Сід із 33 слів") fits instead of being clipped mid-word.
+	pg.seedTypeDropdown = pg.Theme.NewCommonDropDown(GetWordSeedTypeDropdownItems(), defaultWordSeedType, values.MarginPadding180, values.TxDropdownGroup, false)
 
 	pg.backButton = GetBackButton(l)
 
@@ -453,12 +464,32 @@ func (pg *CreateWallet) handleEditorEvents(gtx C) {
 		pg.watchOnlyWalletHex.SetError("")
 	}
 
+	// Enter (an editor Submit event) is routed to the action for the CURRENTLY
+	// selected mode only. Previously isSubmit fired BOTH the create branch
+	// (which then errored on the empty password fields) AND the watch-only
+	// import branch while restoring, so pressing Enter on the restore screen did
+	// the wrong thing. Now: create mode → Continue; restore mode → Restore (or
+	// Import for a watch-only wallet). restoreBtn is handled in
+	// HandleUserInteractions, so translate Enter into a button click it picks up.
+	if isSubmit {
+		switch pg.selectedWalletAction {
+		case 0: // create new wallet
+			pg.continueBtn.Click()
+		case 1: // restore / import existing wallet
+			if pg.watchOnlyCheckBox.CheckBox.Value {
+				pg.importBtn.Click()
+			} else {
+				pg.restoreBtn.Click()
+			}
+		}
+		pg.ParentWindow().Reload()
+	}
+
 	// create wallet action
-	continueClicked := pg.continueBtn.Clicked(gtx)
-	if continueClicked || isSubmit {
+	if pg.continueBtn.Clicked(gtx) {
 		valid := pg.validCreateWalletInputs()
-		log.Infof("CreateWallet: continue clicked=%v submit=%v action=%d valid=%v name=%q",
-			continueClicked, isSubmit, pg.selectedWalletAction, valid, pg.walletName.Editor.Text())
+		log.Infof("CreateWallet: continue clicked action=%d valid=%v name=%q",
+			pg.selectedWalletAction, valid, pg.walletName.Editor.Text())
 		if valid {
 			if pg.checkWalletNameExists() {
 				return
@@ -467,8 +498,8 @@ func (pg *CreateWallet) handleEditorEvents(gtx C) {
 		}
 	}
 
-	// imported wallet click action control
-	if (pg.importBtn.Clicked(gtx) || isSubmit) && pg.validRestoreWalletInputs() {
+	// imported (watch-only) wallet click action control
+	if pg.importBtn.Clicked(gtx) && pg.validRestoreWalletInputs() {
 		pg.showLoader.Store(true)
 		var err error
 		var newWallet sharedW.Asset
@@ -503,7 +534,11 @@ func (pg *CreateWallet) handleEditorEvents(gtx C) {
 				pg.ParentWindow().Reload()
 				return
 			}
-			pg.walletCreationSuccessCallback(newWallet)
+			// Fire the success callback on the UI thread (see createdWallet).
+			pg.createdWallet = newWallet
+			pg.pendingCreateSuccess.Store(true)
+			pg.showLoader.Store(false)
+			pg.ParentWindow().Reload()
 		}()
 	}
 }
@@ -549,7 +584,12 @@ func (pg *CreateWallet) createWallet() {
 	}
 
 	log.Infof("CreateWallet: created wallet name=%q id=%d", walletName, newWallet.GetWalletID())
-	pg.walletCreationSuccessCallback(newWallet)
+	// Stage the success for the UI thread — the callback navigates into the
+	// seed-backup/verify flow and must not run on this goroutine (see
+	// createdWallet doc; same reason the staged errors above don't).
+	pg.createdWallet = newWallet
+	pg.pendingCreateSuccess.Store(true)
+	pg.ParentWindow().Reload()
 }
 
 // HandleUserInteractions is called just before Layout() to determine
@@ -568,6 +608,17 @@ func (pg *CreateWallet) HandleUserInteractions(gtx C) {
 		if pg.stagedXpubErr != "" {
 			pg.watchOnlyWalletHex.SetError(pg.stagedXpubErr)
 			pg.stagedXpubErr = ""
+		}
+	}
+
+	// Fire the wallet-created success callback on the UI thread (staged by the
+	// create/import goroutine). It navigates into the seed-backup → verify-seed
+	// flow, which must not be driven from the goroutine — see createdWallet.
+	if pg.pendingCreateSuccess.CompareAndSwap(true, false) {
+		w := pg.createdWallet
+		pg.createdWallet = nil
+		if pg.walletCreationSuccessCallback != nil {
+			pg.walletCreationSuccessCallback(w)
 		}
 	}
 
@@ -693,17 +744,16 @@ func (pg *CreateWallet) activeTabEditors() []*widget.Editor {
 // what makes the filter match and Tab actually move between the fields.
 func (pg *CreateWallet) KeysToHandle() []event.Filter {
 	eds := pg.activeTabEditors()
-	if len(eds) < 2 {
-		return nil
-	}
 	filters := make([]event.Filter, 0, len(eds)+3)
 	filters = append(filters, key.FocusFilter{Target: pg})
 	for _, ed := range eds {
 		filters = append(filters, key.Filter{Focus: ed, Name: key.NameTab, Optional: key.ModShift})
 	}
-	// Window-level Enter = press Continue (create form). Focused editors
-	// already submit via their own Submit event; HandleKeyPress skips this
-	// branch for them so Enter never double-fires.
+	// Window-level Enter triggers the primary action for the current mode
+	// (Continue when creating, Restore/Import when restoring) — so the restore
+	// screen, which has a single editor and thus no Tab filters, still reacts to
+	// Enter. Focused editors submit via their own Submit event; HandleKeyPress
+	// skips this branch for them so Enter never double-fires.
 	filters = append(filters,
 		key.Filter{Name: key.NameReturn},
 		key.Filter{Name: key.NameEnter},
@@ -720,18 +770,27 @@ func (pg *CreateWallet) HandleKeyPress(gtx C, evt *key.Event) {
 	}
 
 	if evt.Name == key.NameReturn || evt.Name == key.NameEnter {
-		if pg.isLoading.Load() || pg.selectedWalletAction != 0 {
+		if pg.isLoading.Load() {
 			return
 		}
 		// Focused editors submit through their own Submit event (isSubmit in
-		// handleEditorEvents); only press Continue when focus is elsewhere so
-		// a single Enter never fires the create action twice.
+		// handleEditorEvents); only act on window-level Enter so a single Enter
+		// never fires the action twice.
 		for _, ed := range pg.activeTabEditors() {
 			if gtx.Source.Focused(ed) {
 				return
 			}
 		}
-		pg.continueBtn.Click()
+		switch pg.selectedWalletAction {
+		case 0: // create new wallet
+			pg.continueBtn.Click()
+		case 1: // restore / import existing wallet
+			if pg.watchOnlyCheckBox.CheckBox.Value {
+				pg.importBtn.Click()
+			} else {
+				pg.restoreBtn.Click()
+			}
+		}
 		pg.ParentWindow().Reload()
 		return
 	}

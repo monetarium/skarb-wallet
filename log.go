@@ -27,6 +27,7 @@ import (
 	"github.com/monetarium/skarb-wallet/ui/page/receive"
 	"github.com/monetarium/skarb-wallet/ui/page/root"
 	"github.com/monetarium/skarb-wallet/ui/page/send"
+	"github.com/monetarium/skarb-wallet/ui/page/staking"
 	"github.com/monetarium/skarb-wallet/ui/page/transaction"
 	"github.com/monetarium/skarb-wallet/ui/page/wallet"
 
@@ -92,6 +93,7 @@ func init() {
 	account.UseLogger(winLog)
 	wallet.UseLogger(winLog)
 	receive.UseLogger(winLog)
+	staking.UseLogger(winLog)
 
 	logger.New(subsystemSLoggers)
 	// SPV used to be muted to ERROR-only — that hid the "Headers synced

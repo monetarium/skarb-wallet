@@ -9,16 +9,16 @@ import (
 	"strings"
 	"time"
 
-	"github.com/monetarium/monetarium-wallet/pgpwordlist"
 	"gioui.org/layout"
 	"gioui.org/unit"
+	"github.com/monetarium/monetarium-wallet/pgpwordlist"
 
+	"github.com/monetarium/monetarium-node/dcrutil"
 	sharedW "github.com/monetarium/skarb-wallet/libwallet/assets/wallet"
 	libutils "github.com/monetarium/skarb-wallet/libwallet/utils"
 	"github.com/monetarium/skarb-wallet/ui/cryptomaterial"
 	"github.com/monetarium/skarb-wallet/ui/load"
 	"github.com/monetarium/skarb-wallet/ui/values"
-	"github.com/monetarium/monetarium-node/dcrutil"
 	"github.com/tyler-smith/go-bip39"
 )
 

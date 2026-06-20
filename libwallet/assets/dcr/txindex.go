@@ -1,10 +1,10 @@
 package dcr
 
 import (
+	"github.com/monetarium/monetarium-node/chaincfg/chainhash"
 	w "github.com/monetarium/monetarium-wallet/wallet"
 	sharedW "github.com/monetarium/skarb-wallet/libwallet/assets/wallet"
 	"github.com/monetarium/skarb-wallet/libwallet/utils"
-	"github.com/monetarium/monetarium-node/chaincfg/chainhash"
 )
 
 // txParserVersionConfigKey + currentTxParserVersion drive a one-shot

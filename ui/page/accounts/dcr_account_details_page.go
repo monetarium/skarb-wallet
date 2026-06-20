@@ -11,7 +11,6 @@ import (
 	"gioui.org/widget"
 
 	"github.com/monetarium/skarb-wallet/app"
-	"github.com/monetarium/skarb-wallet/libwallet/assets/dcr"
 	sharedW "github.com/monetarium/skarb-wallet/libwallet/assets/wallet"
 	"github.com/monetarium/skarb-wallet/ui/cryptomaterial"
 	"github.com/monetarium/skarb-wallet/ui/load"
@@ -43,26 +42,11 @@ type AcctDetailsPage struct {
 	showExtendedKeyButton    *cryptomaterial.Clickable
 	infoButton               cryptomaterial.IconButton
 
-	lockedBalance    string
-	totalBalance     string
-	spendableBalance string
-	immatureBalance  string
-	hdPath           string
-	keys             string
-	extendedKey      string
-
-	// skaBalances holds the SKA token balances for this account, computed
-	// in OnNavigatedTo. The legacy VAR-only Balance struct can't express
-	// them, so they are read from the dcr asset's big.Int per-coin channel.
-	skaBalances []acctCoinBalance
+	hdPath      string
+	keys        string
+	extendedKey string
 
 	isHiddenExtendedxPubkey bool
-}
-
-// acctCoinBalance is a pre-formatted SKA balance line for the details page.
-type acctCoinBalance struct {
-	symbol string
-	amount string
 }
 
 func NewDCRAcctDetailsPage(l *load.Load, wallet sharedW.Asset, account *sharedW.Account) *AcctDetailsPage {
@@ -94,23 +78,8 @@ func NewDCRAcctDetailsPage(l *load.Load, wallet sharedW.Asset, account *sharedW.
 // the page is displayed.
 // Part of the load.Page interface.
 func (pg *AcctDetailsPage) OnNavigatedTo() {
-	bal := pg.account.Balance
-	// All six balance lines below are VAR-only by convention. The DCR
-	// account-details page exposes the wallet's primary-coin (VAR)
-	// balances; SKA balances are surfaced via the SKA-aware GetCoinBalance
-	// path on the Overview/Accounts pages, not here. ImmatureReward and
-	// ImmatureStakeGeneration are stake-related, which Skarb v1 disables
-	// for SKA outright (staking-stub guard in decodetx.go::DecodeTransaction),
-	// so the int64 sum below is bounded by VAR's 21M × 1e8 = 2.1e15-atom
-	// supply cap — three orders of magnitude under int64-max. If a future
-	// rework wires SKA staking through this page, switch to FormatTxAmountBig
-	// with the big.Int companion fields before the sum here overflows.
-	pg.lockedBalance = bal.Locked.String()
-	pg.totalBalance = bal.Total.String()
-	pg.spendableBalance = bal.Spendable.String()
-	pg.immatureBalance = pg.wallet.ToAmount(bal.ImmatureReward.ToInt() + bal.ImmatureStakeGeneration.ToInt()).String()
-	pg.skaBalances = pg.loadSKABalances()
-
+	// Balances are intentionally NOT loaded here — this page shows only service
+	// info (see Layout). Per-coin balances live on the Accounts list page.
 	pg.hdPath = pg.AssetsManager.DCRHDPrefix() + strconv.Itoa(int(pg.account.Number)) + "'"
 
 	ext := pg.account.ExternalKeyCount
@@ -126,21 +95,22 @@ func (pg *AcctDetailsPage) OnNavigatedTo() {
 // Part of the load.Page interface.
 func (pg *AcctDetailsPage) Layout(gtx C) D {
 	m := values.MarginPadding10
-	widgets := []func(gtx C) D{
-		func(gtx C) D {
-			return pg.accountBalanceLayout(gtx)
-		},
-		func(gtx C) D {
-			return layout.Inset{Top: m, Bottom: m}.Layout(gtx, pg.theme.Separator().Layout)
-		},
+	separator := func(gtx C) D {
+		return layout.Inset{Top: m, Bottom: m}.Layout(gtx, pg.theme.Separator().Layout)
+	}
+	var widgets []func(gtx C) D
+	// This page intentionally shows ONLY the account's service info (number, HD
+	// path, key counts, extended pubkey) — never balances, regardless of the
+	// coin-visibility filter. Per-coin balances (VAR + each SKA) are shown on the
+	// Accounts list page; duplicating them here was the source of the
+	// "balances appear when not all coins are hidden" bug.
+	widgets = append(widgets,
 		pg.accountInfoLayout,
-		func(gtx C) D {
-			return layout.Inset{Top: m, Bottom: m}.Layout(gtx, pg.theme.Separator().Layout)
-		},
+		separator,
 		func(gtx C) D {
 			return layout.Inset{Bottom: m}.Layout(gtx, pg.extendedPubkey)
 		},
-	}
+	)
 	if pg.Load.IsMobileView() {
 		return pg.layoutMobile(gtx, widgets)
 	}
@@ -221,123 +191,6 @@ func (pg *AcctDetailsPage) layoutMobile(gtx layout.Context, widgets []func(gtx C
 		return sp.Layout(pg.ParentWindow(), gtx)
 	}
 	return components.UniformMobile(gtx, false, true, body)
-}
-
-func (pg *AcctDetailsPage) accountBalanceLayout(gtx C) D {
-	return pg.pageSections(gtx, func(gtx C) D {
-		return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
-			layout.Rigid(func(gtx C) D {
-				return layout.Flex{Axis: layout.Horizontal}.Layout(gtx,
-					layout.Rigid(func(gtx C) D {
-
-						accountIcon := pg.Theme.Icons.AccountIcon
-						if pg.account.Number == load.MaxInt32 {
-							accountIcon = pg.Theme.Icons.ImportedAccountIcon
-						}
-
-						m := values.MarginPadding10
-						return layout.Inset{
-							Right: m,
-							Top:   m,
-						}.Layout(gtx, accountIcon.Layout24dp)
-					}),
-					layout.Rigid(func(gtx C) D {
-						return pg.acctBalLayout(gtx, values.String(values.StrTotalBalance), pg.totalBalance, true)
-					}),
-				)
-			}),
-			layout.Rigid(func(gtx C) D {
-				return pg.acctBalLayout(gtx, values.String(values.StrLabelSpendable), pg.spendableBalance, false)
-			}),
-			layout.Rigid(func(gtx C) D {
-				children := []layout.FlexChild{
-					layout.Rigid(func(gtx C) D {
-						return pg.acctBalLayout(gtx, values.String(values.StrLocked), pg.lockedBalance, false)
-					}),
-					layout.Rigid(func(gtx C) D {
-						return pg.acctBalLayout(gtx, values.String(values.StrImmature), pg.immatureBalance, false)
-					}),
-				}
-				// LockedByTickets / VotingAuthority rows were staking-only
-				// (removed in Skarb v1) and always rendered "0" — dropped.
-				// SKA token balances are appended instead so this page shows
-				// the account's real multi-coin holdings.
-				for _, line := range pg.skaBalances {
-					line := line
-					children = append(children, layout.Rigid(func(gtx C) D {
-						return pg.acctBalLayout(gtx, line.symbol, line.amount, false)
-					}))
-				}
-				return layout.Flex{Axis: layout.Vertical}.Layout(gtx, children...)
-			}),
-		)
-	})
-}
-
-// loadSKABalances reads this account's SKA token balances from the dcr
-// asset's big.Int per-coin channel and returns one pre-formatted line per
-// coin with a non-zero balance. VAR is shown through the VAR-only fields
-// above; this fills the gap the legacy Balance struct leaves for SKA.
-func (pg *AcctDetailsPage) loadSKABalances() []acctCoinBalance {
-	dcrAsset, ok := pg.wallet.(*dcr.Asset)
-	if !ok {
-		return nil
-	}
-	balances, err := dcrAsset.GetAccountCoinBalances(pg.account.Number)
-	if err != nil {
-		log.Errorf("account-details: GetAccountCoinBalances(%d): %v", pg.account.Number, err)
-		return nil
-	}
-	var lines []acctCoinBalance
-	for _, ct := range dcrAsset.VisibleCoinTypes() {
-		if !ct.IsSKA() {
-			continue
-		}
-		bal, ok := balances[ct]
-		if !ok {
-			continue
-		}
-		if bal.SKATotal.Sign() <= 0 && bal.SKASpendable.Sign() <= 0 && bal.SKAUnconfirmed.Sign() <= 0 {
-			continue
-		}
-		bal.CoinType = ct // ensure FormatCoinAmount picks the SKA branch
-		lines = append(lines, acctCoinBalance{
-			symbol: dcr.CoinSymbol(ct),
-			amount: dcr.FormatCoinAmount(bal),
-		})
-	}
-	return lines
-}
-
-func (pg *AcctDetailsPage) acctBalLayout(gtx C, balType string, balance string, isTotalBalance bool) D {
-
-	marginTop := values.MarginPadding16
-	marginLeft := values.MarginPadding35
-
-	if isTotalBalance {
-		marginTop = values.MarginPadding0
-		marginLeft = values.MarginPadding0
-	}
-	return layout.Inset{
-		Right: values.MarginPadding10,
-		Top:   marginTop,
-		Left:  marginLeft,
-	}.Layout(gtx, func(gtx C) D {
-		return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
-			layout.Rigid(func(gtx C) D {
-				if isTotalBalance {
-					return components.LayoutBalanceSize(gtx, pg.Load, balance, values.TextSize34)
-				}
-
-				return components.LayoutBalanceWithUnit(gtx, pg.Load, balance)
-			}),
-			layout.Rigid(func(gtx C) D {
-				txt := pg.theme.Body2(balType)
-				txt.Color = pg.theme.Color.GrayText2
-				return txt.Layout(gtx)
-			}),
-		)
-	})
 }
 
 func (pg *AcctDetailsPage) accountInfoLayout(gtx C) D {
