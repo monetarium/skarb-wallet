@@ -9,6 +9,7 @@ import (
 	"runtime"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"gioui.org/font"
@@ -90,6 +91,13 @@ type TransactionsPage struct {
 	previousTxFilter int32
 	scroll *components.Scroll[*multiWalletTx]
 
+	// txRefreshInFlight coalesces the burst of tx/block notifications a new
+	// block produces (OnTransactionConfirmed fires per confirmed tx, each in its
+	// own goroutine) into a single in-flight list refresh. Without it, the
+	// concurrent loadNewItem resets race the scroll component's data / offset /
+	// list.Position and break scrolling until the app is restarted.
+	txRefreshInFlight atomic.Bool
+
 	txCategoryTab *cryptomaterial.SegmentedControl
 
 	materialLoader material.LoaderStyle
@@ -135,7 +143,7 @@ func NewTransactionsPage(l *load.Load, wallet sharedW.Asset) *TransactionsPage {
 		{Text: values.String(values.StrNewest)},
 		{Text: values.String(values.StrOldest)},
 	}, values.ProposalDropdownGroup, 1, 0, false)
-	pg.orderDropDown.Width = values.MarginPadding140 // fit "Найновіші"/"Найстаріші"
+	pg.orderDropDown.Width = values.MarginPadding180 // 140 clipped "Найстаріші" in the expanded list
 	pg.materialLoader = material.Loader(pg.Theme.Base)
 	pg.orderDropDown.CollapsedLayoutTextDirection = layout.E
 	settingCommonDropdown(pg.Theme, pg.orderDropDown)
@@ -204,7 +212,7 @@ func (pg *TransactionsPage) initCoinTypeDropdown() {
 	}
 
 	pg.coinTypeDropDown = pg.Theme.DropdownWithCustomPos(items, values.CoinTypeDropdownGroup, 2, 0, false)
-	pg.coinTypeDropDown.Width = values.MarginPadding130 // fit "Усі активи"
+	pg.coinTypeDropDown.Width = values.MarginPadding180 // 130 clipped "Усі активи" in the expanded list
 	pg.coinTypeDropDown.CollapsedLayoutTextDirection = layout.E
 	pg.coinTypeDropDown.SetConvertTextSize(pg.ConvertTextSize)
 	settingCommonDropdown(pg.Theme, pg.coinTypeDropDown)
@@ -288,7 +296,7 @@ func NewTransactionsPageWithType(l *load.Load, selectedTab int, wallet sharedW.A
 		{Text: values.String(values.StrNewest)},
 		{Text: values.String(values.StrOldest)},
 	}, values.ProposalDropdownGroup, 1, 0, false)
-	pg.orderDropDown.Width = values.MarginPadding140 // fit "Найновіші"/"Найстаріші"
+	pg.orderDropDown.Width = values.MarginPadding180 // 140 clipped "Найстаріші" in the expanded list
 	pg.materialLoader = material.Loader(pg.Theme.Base)
 	pg.orderDropDown.CollapsedLayoutTextDirection = layout.E
 	settingCommonDropdown(pg.Theme, pg.orderDropDown)
@@ -984,11 +992,25 @@ func exportTxs(assets []sharedW.Asset, fileName string) error {
 	return nil
 }
 
-// Update transaction list when there is new tx or new confirmed status
+// Update transaction list when there is new tx or new confirmed status.
+//
+// This is invoked once per tx/block notification, each in its own goroutine
+// (single_wallet_main_page.listenForNotifications -> ListenNewTxForSubPage). A
+// new block confirms many txs at once, so this fires in a burst of concurrent
+// goroutines. FetchScrollDataHandler(loadNewItem=true) resets and re-fetches
+// the whole list; running several of those at once races the scroll
+// component's data / offset / list.Position and leaves scrolling broken until
+// the app is restarted — exactly the "scroll breaks after a new block" report.
+// Coalesce the burst: let one refresh run to completion and drop the rest (the
+// surviving refresh re-queries the latest state anyway).
 func (pg *TransactionsPage) ListenForTxNotification(walletID int) {
 	if pg.selectedWallet != nil && pg.selectedWallet.GetWalletID() != walletID {
 		return
 	}
+	if !pg.txRefreshInFlight.CompareAndSwap(false, true) {
+		return
+	}
+	defer pg.txRefreshInFlight.Store(false)
 	pg.scroll.FetchScrollDataHandler(false, pg.ParentWindow(), false, true)
 }
 
