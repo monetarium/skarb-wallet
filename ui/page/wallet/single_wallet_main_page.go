@@ -680,13 +680,10 @@ func (swmp *SingleWalletMasterPage) LayoutTopBar(gtx C) D {
 					Bottom: v,
 				},
 			}.GradientLayout(gtx, assetType,
-				layout.Rigid(func(gtx C) D {
-					return cryptomaterial.LinearLayout{
-						Width:       cryptomaterial.WrapContent,
-						Height:      cryptomaterial.WrapContent,
-						Orientation: layout.Horizontal,
-					}.Layout2(gtx, swmp.openWalletSelector.Layout)
-				}),
+				// Back-nav arrow removed: it sat next to the wallet name and was
+				// easy to click by accident. Navigation back to Overview is via the
+				// sidebar. (openWalletSelector + showNavigationFunc are kept but no
+				// longer surfaced here.)
 				layout.Flexed(1, func(gtx C) D {
 					return layout.Center.Layout(gtx, func(gtx C) D {
 						return cryptomaterial.LinearLayout{

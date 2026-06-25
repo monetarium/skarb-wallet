@@ -229,6 +229,14 @@ func (asset *Asset) DecodeTransaction(walletTx *sharedW.TxInfoFromWallet, netPar
 		txFee = dcrutil.Amount(totalWalletUnmixedInputs - (totalWalletMixedOutputs + mixChange))
 	}
 
+	// Stake-fee (SSFee) detection. SSFee is the payout that distributes the
+	// non-VAR (SKA) fee a ticket committed at purchase to the voters. By
+	// consensus its Type is still "Regular" (it is not one of the VAR-only
+	// stake constructs), so we keep txType as-is and only raise a flag the
+	// reclassification filters can key off. Pure structural check on the raw
+	// msgTx — computed here at decode so no DB reindex is required.
+	isStakeFee := stake.IsSSFee(msgTx)
+
 	// All outputs in a Monetarium tx share the same CoinType.
 	var txCoinType uint8
 	if len(msgTx.TxOut) > 0 {
@@ -379,11 +387,12 @@ func (asset *Asset) DecodeTransaction(walletTx *sharedW.TxInfoFromWallet, netPar
 		AmountAtoms: amountAtoms,
 		FeeAtoms:    feeAtoms,
 
-		Direction: direction,
-		Amount:    amount,
-		Inputs:    inputs,
-		Outputs:   outputs,
-		CoinType:  txCoinType,
+		Direction:  direction,
+		Amount:     amount,
+		Inputs:     inputs,
+		Outputs:    outputs,
+		CoinType:   txCoinType,
+		IsStakeFee: isStakeFee,
 
 		VoteVersion:     int32(ssGenVersion),
 		LastBlockValid:  lastBlockValid,

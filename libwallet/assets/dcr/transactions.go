@@ -31,6 +31,14 @@ const (
 	TxFilterExpired     = utils.TxFilterExpired
 	TxFilterTickets     = utils.TxFilterTickets
 
+	TxFilterSplit       = utils.TxFilterSplit
+	TxFilterStakeFee    = utils.TxFilterStakeFee
+	TxFilterTicketVoted = utils.TxFilterTicketVoted
+	TxFilterRegularList = utils.TxFilterRegularList
+	TxFilterStakingList = utils.TxFilterStakingList
+	TxFilterRewardList  = utils.TxFilterRewardList
+	TxFilterMissed      = utils.TxFilterMissed
+
 	TxDirectionInvalid     = txhelper.TxDirectionInvalid
 	TxDirectionSent        = txhelper.TxDirectionSent
 	TxDirectionReceived    = txhelper.TxDirectionReceived
@@ -250,11 +258,75 @@ func (asset *Asset) TxMatchesFilter(tx *sharedW.Transaction, txFilter int32) boo
 			tx.BlockHeight <= expiryBlock
 	case TxFilterTickets:
 		return tx.Type == TxTypeTicketPurchase
+	case TxFilterSplit:
+		// A "split" tx is a plain Regular spend, mined, that both funds from
+		// and returns to the default account (0) only — i.e. it just splits
+		// the default account's own coins (e.g. preparing ticket-sized
+		// outputs) without touching any other account or an external party.
+		return isSplitTx(tx)
+	case TxFilterStakeFee:
+		return tx.IsStakeFee
+	case TxFilterTicketVoted:
+		// A ticket purchase whose spender turned out to be a Vote. Requires a
+		// per-tx spender lookup in the wallet DB (TicketSpender mirrors
+		// ui/page/staking/utils.go). The lookup is a single indexed FindOne on
+		// TicketSpentHash, but note it runs once per candidate tx, so callers
+		// filtering large lists pay one DB read per ticket.
+		if tx.Type != TxTypeTicketPurchase {
+			return false
+		}
+		spender, err := asset.TicketSpender(tx.Hash)
+		if err != nil {
+			log.Errorf("TxMatchesFilter(TxFilterTicketVoted) spender lookup for %s: %v", tx.Hash, err)
+			return false
+		}
+		return spender != nil && spender.Type == TxTypeVote
+	case TxFilterRegularList:
+		return (tx.Type == TxTypeRegular || tx.Type == TxTypeMixed) &&
+			!isSplitTx(tx) && !tx.IsStakeFee
+	case TxFilterStakingList:
+		return tx.Type == TxTypeTicketPurchase || isSplitTx(tx)
+	case TxFilterRewardList:
+		return tx.Type == TxTypeCoinBase || tx.IsStakeFee ||
+			tx.Type == TxTypeVote || tx.Type == TxTypeRevocation
+	case TxFilterMissed:
+		// Missed tickets aren't detectable over SPV; the filter exists so the
+		// UI can keep a "Missed" entry that always yields an empty list.
+		return false
 	case TxFilterAll:
 		return true
 	}
 
 	return false
+}
+
+// isSplitTx reports whether tx is a "split" transaction: a mined Regular spend
+// whose every input and every output belongs to the default account (account
+// 0). Used by TxFilterSplit, TxFilterRegularList and TxFilterStakingList.
+//
+// It relies on tx being a fully-decoded sharedW.Transaction with Inputs and
+// Outputs populated (each carrying an AccountNumber, with -1 meaning the
+// in/out is not owned by this wallet). TxMatchesFilter is only ever called on
+// such decoded transactions (the UI passes the result of DecodeTransaction /
+// GetTransactionsRaw), so the account fields are available here.
+func isSplitTx(tx *sharedW.Transaction) bool {
+	if tx.Type != TxTypeRegular || tx.BlockHeight < 0 {
+		return false
+	}
+	if len(tx.Inputs) == 0 || len(tx.Outputs) == 0 {
+		return false
+	}
+	for _, in := range tx.Inputs {
+		if in.AccountNumber != DefaultAccountNum {
+			return false
+		}
+	}
+	for _, out := range tx.Outputs {
+		if out.AccountNumber != DefaultAccountNum {
+			return false
+		}
+	}
+	return true
 }
 
 func (asset *Asset) TxMatchesFilter2(direction, blockHeight int32, txType, ticketSpender string, txFilter int32) bool {

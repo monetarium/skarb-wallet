@@ -72,6 +72,21 @@ const (
 	TxFilterExpired     int32 = 13
 	TxFilterTickets     int32 = 14
 
+	// Reclassification filters (Skarb). These derive their result from a
+	// fully-decoded transaction (Type + Inputs/Outputs accounts + the
+	// IsStakeFee flag), not from a single stored field, so they are evaluated
+	// in TxMatchesFilter rather than the storm DB query layer.
+	TxFilterSplit       int32 = 15 // Regular, mined, every in & out on the default (0) account.
+	TxFilterStakeFee    int32 = 16 // SSFee stake-fee distribution (tx.IsStakeFee).
+	TxFilterTicketVoted int32 = 17 // Ticket whose spender is a Vote (spender lookup).
+	TxFilterRegularList int32 = 18 // Regular/Mixed, not a Split, not a stake-fee.
+	TxFilterStakingList int32 = 19 // Ticket purchase or Split.
+	TxFilterRewardList  int32 = 20 // Coinbase, stake-fee, vote or revocation.
+	// TxFilterMissed always returns false: missed tickets are not detectable
+	// over SPV, but the filter exists so the UI can keep a "Missed" item that
+	// simply yields an empty list.
+	TxFilterMissed int32 = 21
+
 	TypeFilter          = "Type"
 	DirectionFilter     = "Direction"
 	HeightFilter        = "BlockHeight"

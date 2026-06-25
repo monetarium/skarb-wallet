@@ -4,10 +4,10 @@ import (
 	"time"
 
 	"github.com/asdine/storm"
-	"github.com/monetarium/skarb-wallet/libwallet/assets/wallet/wordlist"
-	"github.com/monetarium/skarb-wallet/libwallet/utils"
 	"github.com/monetarium/monetarium-node/dcrutil"
 	"github.com/monetarium/monetarium-node/hdkeychain"
+	"github.com/monetarium/skarb-wallet/libwallet/assets/wallet/wordlist"
+	"github.com/monetarium/skarb-wallet/libwallet/utils"
 )
 
 type AssetAmount interface {
@@ -345,11 +345,20 @@ type Transaction struct {
 	// pre-fork behaviour for migrated rows.
 	CoinType uint8 `storm:"index" json:"coin_type,omitempty"`
 
+	// IsStakeFee marks a stake-fee distribution transaction (SSFee): the
+	// payout that distributes the non-VAR (SKA) fee a ticket committed at
+	// purchase time to the voters. Its consensus Type stays "Regular" (it is
+	// not one of the VAR-only stake constructs), so this flag is the only way
+	// to single it out. Computed at decode (stake.IsSSFee on the raw msgTx) —
+	// no DB reindex needed; rows decoded before this field existed simply
+	// read back false until next decode.
+	IsStakeFee bool `json:"is_stake_fee,omitempty"`
+
 	// Vote Info (DCR fields)
-	VoteVersion        int32  `json:"vote_version,omitempty"`
-	LastBlockValid     bool   `json:"last_block_valid,omitempty"`
-	VoteBits           string `json:"vote_bits,omitempty"`
-	VoteReward         int64  `json:"vote_reward,omitempty"`
+	VoteVersion    int32  `json:"vote_version,omitempty"`
+	LastBlockValid bool   `json:"last_block_valid,omitempty"`
+	VoteBits       string `json:"vote_bits,omitempty"`
+	VoteReward     int64  `json:"vote_reward,omitempty"`
 	// TicketSpentHash is the hash of the ticket-purchase tx this vote /
 	// revocation refers to (empty for non-stake txs). The upstream tag was
 	// `storm:"unique"` — that's a foot-gun: Storm v1 treats the empty
