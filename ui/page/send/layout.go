@@ -272,6 +272,14 @@ func (pg *Page) advanceOptionsLayout(gtx C) D {
 								return pg.contentWrapper(gtx, values.String(values.StrCustomFeeTitle), false, pg.customFeeSection)
 							}),
 							layout.Rigid(func(gtx C) D {
+								// "Subtract fee from recipient" only makes sense with a
+								// single recipient — with several outputs there's no one
+								// "recipient amount" to take the fee from. Hide the card
+								// for >1 recipient; the fee then always comes from the
+								// sender (HandleUserInteractions clears the toggle).
+								if len(pg.recipients) > 1 {
+									return D{}
+								}
 								return layout.Inset{Top: values.MarginPadding16}.Layout(gtx, func(gtx C) D {
 									return pg.contentWrapper(gtx, values.String(values.StrSubtractFeeFromRecipient), false, pg.subtractFeeSection)
 								})

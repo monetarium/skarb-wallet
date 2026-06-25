@@ -607,11 +607,14 @@ func TxPageDropDownFields(wType libutils.AssetType, tabIndex int) (mapInfo map[s
 			values.String(values.StrReceived),
 		}
 	case wType == libutils.DCRWalletAsset && tabIndex == 0:
-		// DCR Transactions Activities dropdown fields.
+		// DCR Regular Transactions dropdown fields.
 		// "Mixed" (CoinShuffle++) is intentionally omitted — the mixer was removed
 		// from Skarb, so a Mixed tx filter would always be empty and just confuses.
+		// "All" uses TxFilterRegularList (regular sends/receives only, excluding
+		// the staking/reward types that live on the other tabs) rather than
+		// TxFilterAll.
 		mapInfo = map[string]int32{
-			values.String(values.StrAll):         libutils.TxFilterAll,
+			values.String(values.StrAll):         libutils.TxFilterRegularList,
 			values.String(values.StrSent):        libutils.TxFilterSent,
 			values.String(values.StrReceived):    libutils.TxFilterReceived,
 			values.String(values.StrTransferred): libutils.TxFilterTransferred,
@@ -623,16 +626,38 @@ func TxPageDropDownFields(wType libutils.AssetType, tabIndex int) (mapInfo map[s
 			values.String(values.StrTransferred),
 		}
 	case wType == libutils.DCRWalletAsset && tabIndex == 1:
-		// DCR staking Activities dropdown fields.
+		// DCR Staking Transactions dropdown fields. "All" uses TxFilterStakingList
+		// (ticket purchases and splits). "Missed" maps to TxFilterMissed, which is
+		// currently always empty (missed tickets are not detectable over SPV — see
+		// TxMatchesFilter), but is kept for parity with the staking categories.
 		mapInfo = map[string]int32{
-			values.String(values.StrAll):        libutils.TxFilterStaking,
-			values.String(values.StrVote):       libutils.TxFilterVoted,
-			values.String(values.StrRevocation): libutils.TxFilterRevoked,
+			values.String(values.StrAll):      libutils.TxFilterStakingList,
+			values.String(values.StrSplit):    libutils.TxFilterSplit,
+			values.String(values.StrUmined):   libutils.TxFilterUnmined,
+			values.String(values.StrImmature): libutils.TxFilterImmature,
+			values.String(values.StrLive):     libutils.TxFilterLive,
+			values.String(values.StrMissed):   libutils.TxFilterMissed,
+			values.String(values.StrExpired):  libutils.TxFilterExpired,
+			values.String(values.StrVoted):    libutils.TxFilterTicketVoted,
 		}
 		keysInfo = []string{
 			values.String(values.StrAll),
-			values.String(values.StrVote),
-			values.String(values.StrRevocation),
+			values.String(values.StrSplit),
+			values.String(values.StrUmined),
+			values.String(values.StrImmature),
+			values.String(values.StrLive),
+			values.String(values.StrMissed),
+			values.String(values.StrExpired),
+			values.String(values.StrVoted),
+		}
+	case wType == libutils.DCRWalletAsset && tabIndex == 2:
+		// DCR Reward Transactions dropdown fields. A single "All" item backed by
+		// TxFilterRewardList (coinbase, stake-fee, vote and revocation txs).
+		mapInfo = map[string]int32{
+			values.String(values.StrAll): libutils.TxFilterRewardList,
+		}
+		keysInfo = []string{
+			values.String(values.StrAll),
 		}
 	}
 	return

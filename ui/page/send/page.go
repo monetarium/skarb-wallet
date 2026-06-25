@@ -1318,6 +1318,16 @@ func (pg *Page) HandleUserInteractions(gtx C) {
 		pg.validateAndConstructTx()
 	}
 
+	// The subtract-fee card is hidden for multiple recipients (see layout.go), so
+	// the fee must always come from the sender then. If the toggle was enabled
+	// while there was a single recipient and the user then adds another, clear it
+	// (and re-estimate). Fires once on the 1->2 transition; idempotent after.
+	if len(pg.recipients) > 1 && pg.subtractFeeFromRecipient {
+		pg.subtractFeeFromRecipient = false
+		pg.subtractFeeCheckbox.CheckBox.Value = false
+		pg.validateAndConstructTx()
+	}
+
 	if pg.customFeeApplyBtn.Clicked(gtx) {
 		if dcrAsset, ok := pg.selectedWallet.(*dcr.Asset); ok {
 			text := strings.TrimSpace(pg.customFeeEditor.Editor.Text())
