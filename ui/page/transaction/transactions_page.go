@@ -36,12 +36,12 @@ import (
 const (
 	TransactionsPageID = "Transactions"
 
-	// pageSize defines the number of transactions that can be fetched at ago.
-	// 100 (was 30): the infinite-scroll component slides a 2×pageSize window over
-	// the tx list and force-repositions on each page fetch, which is janky on
-	// wallets with many txs. A larger page means the whole list fits in the
-	// initial 2×pageSize load for typical wallets, so the slide/reposition never
-	// engages and the native (virtualized) list scrolls smoothly to the top.
+	// pageSize is the scroll component's window unit. fetchTransactions no longer
+	// pages against it: it loads the COMPLETE post-filtered set and hands it back
+	// on the first page (see fetchTransactions / loadAllTransactions), so the
+	// component's slide/reposition stays disengaged (window anchored at
+	// idxStart==0) and Gio virtualizes the full list. Kept at 100 because the
+	// component still uses it for internal scroll-view bookkeeping.
 	pageSize = int32(100)
 )
 
@@ -76,32 +76,17 @@ type txCacheKey struct {
 	searchKey   string
 }
 
-// txCacheWindow is a single cached (offset,pageSize) page result, holding the
-// already coin-/regular-filtered slice exactly as fetchTransactions would
-// return it for that window. Caching the post-filter slice (rather than the raw
-// GetTransactionsRaw output) means a hit reproduces the uncached path verbatim,
-// so paging/infinite-scroll semantics are preserved.
-type txCacheWindow struct {
-	txs []*multiWalletTx
-}
-
-// txDecodedCache memoizes the decoded tx windows for the current view key. It
-// lives only on the UI thread: every read/write happens inside
-// fetchTransactions (driven by the scroll component) or the notification path's
-// dirty-flag handshake, never concurrently. Notification goroutines therefore
-// never touch the slice Layout reads — they only set txCacheDirty (atomic), and
-// the next UI-thread fetch rebuilds from scratch.
+// txDecodedCache memoizes the COMPLETE post-filtered transaction set for the
+// current view key. fetchTransactions loads the whole set once (paging the DB
+// in chunks via loadAllTransactions) and serves it from here on every
+// subsequent page request, so reopening the page or scrolling within it never
+// re-reads & re-decodes the already-validated local DB. A notification marks it
+// dirty (atomic) and the next UI-thread fetch rebuilds; any key change
+// (tab/status/coin/order/search/wallet) is an automatic miss.
 type txDecodedCache struct {
-	key     txCacheKey
-	valid   bool
-	windows map[txCacheWindowKey]txCacheWindow
-}
-
-// txCacheWindowKey indexes a cached page by its (offset,pageSize) so the scroll
-// component's exact request can be served back verbatim.
-type txCacheWindowKey struct {
-	offset   int32
-	pageSize int32
+	key   txCacheKey
+	valid bool
+	all   []*multiWalletTx
 }
 
 // txTabs holds the transaction-category tabs: "Regular Transactions" and
@@ -139,9 +124,7 @@ type TransactionsPage struct {
 	searchEditor     cryptomaterial.Editor
 
 	transactionList *cryptomaterial.ClickableList
-	txFilter,
-	previousTxFilter int32
-	scroll *components.Scroll[*multiWalletTx]
+	scroll          *components.Scroll[*multiWalletTx]
 
 	// txRefreshInFlight coalesces the burst of tx/block notifications a new
 	// block produces (OnTransactionConfirmed fires per confirmed tx, each in its
@@ -150,24 +133,40 @@ type TransactionsPage struct {
 	// list.Position and break scrolling until the app is restarted.
 	txRefreshInFlight atomic.Bool
 
-	// txCache memoizes already-decoded tx windows so reopening the Transactions
-	// page (and paging within it) doesn't re-read & re-decode the full set from
-	// the local, already-validated DB on every open. It is read/written only on
-	// the UI thread (inside fetchTransactions). §3: notification goroutines must
-	// NOT mutate it; they set txCacheDirty instead and the next UI-thread fetch
-	// discards the cache, so the slice Layout reads is never raced.
+	// txCache memoizes the complete decoded+post-filtered tx set so reopening the
+	// Transactions page (and scrolling within it) doesn't re-read & re-decode the
+	// set from the local, already-validated DB on every open. §3: notification
+	// goroutines must NOT mutate it; they set txCacheDirty instead and the next
+	// UI-thread fetch discards the cache, so the slice Layout reads is never raced.
 	txCache txDecodedCache
 
 	// txCacheMu guards txCache. fetchTransactions is the scroll component's
 	// queryFunc and is invoked from scroll goroutines (items_scroll.go), NOT
-	// only the UI thread, so two fetches can overlap and race the windows map.
+	// only the UI thread, so two fetches can overlap and race the cached slice.
 	txCacheMu sync.Mutex
 
 	// txCacheDirty is set from the tx/block notification goroutines to mark the
-	// memoized windows stale (new tx => append/changed rows; new block => reorg
-	// safe full invalidate). It is cleared on the UI thread in fetchTransactions,
-	// which then rebuilds the cache from the freshly fetched DB rows.
+	// memoized set stale (new tx => changed rows; new block => reorg-safe full
+	// invalidate). It is cleared in fetchTransactions, which then rebuilds the
+	// cache from the freshly fetched DB rows.
 	txCacheDirty atomic.Bool
+
+	// fetchMu serializes fetchTransactions. The scroll component does NOT
+	// serialize its queryFunc (items_scroll.go never sets isLoadingItems=true), so
+	// a notification refresh and a scroll-triggered load can both call it at
+	// offset 0; without this each would return the full set and the component
+	// would append BOTH, duplicating the whole list. Serializing also removes any
+	// cross-fetch cache clobber. fetchTransactions runs only on goroutines (never
+	// the UI thread), so holding this never blocks rendering.
+	fetchMu sync.Mutex
+
+	// pendingFetchErr carries a loadAllTransactions failure from the fetch
+	// goroutine to the UI thread, which shows it as a modal in
+	// HandleUserInteractions. The scroll component swallows a (nil,err) result
+	// (its empty-slice early return precedes its error-modal path), so the page
+	// surfaces the error itself. Guarded by fetchErrMu.
+	fetchErrMu      sync.Mutex
+	pendingFetchErr error
 
 	txCategoryTab *cryptomaterial.SegmentedControl
 
@@ -460,13 +459,13 @@ func (pg *TransactionsPage) refreshAvailableTxType() {
 // trailing-" (N)"-stripping loadTransactions applies before resolving the
 // backend txFilter, so the label fully identifies the filter without first
 // touching the DB.
-func (pg *TransactionsPage) currentTxCacheKey(orderNewest bool) txCacheKey {
+func currentTxCacheKey(v txView) txCacheKey {
 	var walletIDs string
-	if pg.selectedWallet != nil {
-		walletIDs = strconv.Itoa(pg.selectedWallet.GetWalletID())
+	if v.selectedWallet != nil {
+		walletIDs = strconv.Itoa(v.selectedWallet.GetWalletID())
 	} else {
-		ids := make([]int, 0, len(pg.assetWallets))
-		for _, wal := range pg.assetWallets {
+		ids := make([]int, 0, len(v.assetWallets))
+		for _, wal := range v.assetWallets {
 			ids = append(ids, wal.GetWalletID())
 		}
 		sort.Ints(ids)
@@ -476,125 +475,261 @@ func (pg *TransactionsPage) currentTxCacheKey(orderNewest bool) txCacheKey {
 		}
 		walletIDs = strings.Join(parts, ",")
 	}
-
-	var statusLabel string
-	if pg.statusDropDown != nil {
-		statusLabel = pg.statusDropDown.Selected()
-		if i := strings.LastIndex(statusLabel, " ("); i != -1 {
-			statusLabel = statusLabel[:i]
-		}
-	}
-
-	var coinSymbol string
-	if pg.coinTypeDropDown != nil {
-		coinSymbol = pg.coinTypeDropDown.Selected()
-	}
-
 	return txCacheKey{
 		walletIDs:   walletIDs,
-		categoryTab: pg.selectedTxCategoryTab,
-		statusLabel: statusLabel,
-		coinSymbol:  coinSymbol,
-		orderNewest: orderNewest,
-		searchKey:   pg.searchEditor.Editor.Text(),
+		categoryTab: v.categoryTab,
+		statusLabel: v.statusLabel,
+		coinSymbol:  v.coinSymbol,
+		orderNewest: v.orderNewest,
+		searchKey:   v.searchKey,
 	}
 }
 
-func (pg *TransactionsPage) fetchTransactions(offset, pageSize int32) (txs []*multiWalletTx, totalTxs int, isReset bool, err error) {
-	isReset = pg.previousTxFilter != pg.txFilter
-	if isReset {
-		// reset the offset to zero
-		offset = 0
-		pg.previousTxFilter = pg.txFilter
+// txView is an immutable snapshot of the page state that defines the current
+// transaction view (which wallet(s), tab, status filter, coin filter, sort
+// order, search). fetchTransactions captures it ONCE per fetch — on the calling
+// scroll/notification goroutine — and threads it through the whole build, so a
+// concurrent fetch (the scroll component does NOT serialize its queryFunc) or a
+// UI-thread mutation in HandleUserInteractions cannot change the view mid-build.
+// Reading pg.* repeatedly deep in the scan instead would race those fields and
+// could cache wrong-tab rows (CLAUDE.md §3).
+type txView struct {
+	selectedWallet sharedW.Asset
+	assetWallets   []sharedW.Asset // copy; populated only for the multi-wallet view
+	categoryTab    int
+	txFilter       int32 // logical filter resolved from (assetType, tab, statusLabel)
+	coinType       *cointype.CoinType
+	orderNewest    bool
+	statusLabel    string
+	coinSymbol     string
+	searchKey      string
+}
+
+// snapshotView reads every view-defining field exactly once and returns an
+// immutable snapshot. See txView.
+func (pg *TransactionsPage) snapshotView() txView {
+	v := txView{
+		selectedWallet: pg.selectedWallet,
+		categoryTab:    pg.selectedTxCategoryTab,
+		orderNewest:    pg.orderDropDown.Selected() != values.String(values.StrOldest),
+		coinType:       pg.selectedCoinType(),
+		searchKey:      pg.searchEditor.Editor.Text(),
 	}
+	if pg.selectedWallet == nil {
+		v.assetWallets = append([]sharedW.Asset(nil), pg.assetWallets...)
+	}
+	if pg.statusDropDown != nil {
+		v.statusLabel = pg.statusDropDown.Selected()
+		// Strip the trailing " (N)" count suffix the regular tab used to append,
+		// keeping internal spaces so multi-word labels still match a mapInfo key.
+		if i := strings.LastIndex(v.statusLabel, " ("); i != -1 {
+			v.statusLabel = v.statusLabel[:i]
+		}
+	}
+	if pg.coinTypeDropDown != nil {
+		v.coinSymbol = pg.coinTypeDropDown.Selected()
+	}
+	v.txFilter = pg.resolveTxFilter(v)
+	return v
+}
 
-	orderNewest := pg.orderDropDown.Selected() != values.String(values.StrOldest)
+// resolveTxFilter maps the snapshot's (tab, statusLabel) to the logical tx
+// filter via the same dropdown-field table the dropdown was built from. The
+// asset type comes from the selected wallet (DCR for the multi-wallet view,
+// where the only tabs that consult txFilter — Staking/Reward — are DCR-only).
+func (pg *TransactionsPage) resolveTxFilter(v txView) int32 {
+	assetType := utils.DCRWalletAsset
+	if v.selectedWallet != nil {
+		assetType = v.selectedWallet.GetAssetType()
+	}
+	mapInfo, _ := components.TxPageDropDownFields(assetType, v.categoryTab)
+	if f, ok := mapInfo[v.statusLabel]; ok {
+		return f
+	}
+	return utils.TxFilterAll
+}
 
-	// Cache lookup (UI thread only). A pending notification marks the cache dirty
-	// (see ListenForTxNotification); clearing the flag here and invalidating the
-	// cache means the next fetch re-queries the freshly validated DB rows. A key
-	// mismatch (tab/status/coin/order/search/wallet changed) is an automatic miss
-	// and rebuilds, so no stale cross-filter data is served.
-	key := pg.currentTxCacheKey(orderNewest)
+func (pg *TransactionsPage) fetchTransactions(offset, pageSize int32) (txs []*multiWalletTx, totalTxs int, isReset bool, err error) {
+	// Serialize fetches (see fetchMu): the scroll component does not serialize its
+	// queryFunc, so a notification refresh and a scroll-triggered load can both
+	// run at offset 0 and the component would append BOTH full sets, duplicating
+	// the list. This runs on goroutines only, so it never blocks rendering.
+	pg.fetchMu.Lock()
+	defer pg.fetchMu.Unlock()
+
+	// Snapshot the whole view ONCE so nothing downstream reads pg.* (which the UI
+	// thread mutates) deep in the scan — that would race and could cache wrong-tab
+	// rows. Everything downstream reads v.
+	v := pg.snapshotView()
+	key := currentTxCacheKey(v)
+
+	// Cache lookup (see txDecodedCache). A pending notification marks the cache
+	// dirty; clearing the flag here forces a rebuild from the freshly validated
+	// DB rows. A key mismatch (tab/status/coin/order/search/wallet changed) is an
+	// automatic miss.
 	pg.txCacheMu.Lock()
 	if pg.txCacheDirty.CompareAndSwap(true, false) {
 		pg.txCache.valid = false
-		pg.txCache.windows = nil
+		pg.txCache.all = nil
 	}
-	if pg.txCache.valid && pg.txCache.key == key && pg.txCache.windows != nil {
-		if win, ok := pg.txCache.windows[txCacheWindowKey{offset: offset, pageSize: pageSize}]; ok {
-			// Serve the memoized window verbatim — identical to the uncached path
-			// for this exact (offset,pageSize), so paging semantics are preserved
-			// and GetTransactionsRaw is skipped entirely.
-			pg.txCacheMu.Unlock()
-			return win.txs, len(win.txs), isReset, nil
-		}
-	} else {
-		// Key changed (or invalidated): drop the stale windows and start fresh.
-		pg.txCache = txDecodedCache{key: key, valid: true, windows: make(map[txCacheWindowKey]txCacheWindow)}
+	hit := pg.txCache.valid && pg.txCache.key == key
+	var full []*multiWalletTx
+	if hit {
+		full = pg.txCache.all
 	}
 	pg.txCacheMu.Unlock()
 
-	wal := pg.selectedWallet
-	if wal == nil {
-		txs, totalTxs, err = pg.multiWalletTxns(offset, pageSize, orderNewest)
-	} else {
-		txs, totalTxs, err = pg.loadTransactions(wal, offset, pageSize, orderNewest)
-	}
-
-	txs = pg.filterByCoinType(txs)
-	// Reclassify into the selected sub-tab (Regular / Staking / Reward). The DB
-	// fetch above used a COARSE filter (coarseFetchFilter) because the reclass
-	// predicates — default->default "split", the {coinbase,SF,vote,revocation}
-	// reward union, and "ticket that voted" (spender lookup) — can't be a single
-	// storm query. The exact set is cut here, over the decoded rows, for ALL
-	// three tabs (the previous code only post-filtered the Regular tab, so the
-	// Staking/Reward tabs leaked the full tx set).
-	txs = pg.reclassifyByTab(txs)
-
-	// Store the post-filter window under the current key. loadTransactions set
-	// pg.txFilter (statusLabel -> txFilter) during the fetch; the label already in
-	// the key tracks that 1:1, so the cache entry stays consistent. On error we
-	// don't cache (so a later retry re-queries).
-	if err == nil {
+	if !hit {
+		// Load the COMPLETE post-filtered set for this view (the DB is paged in
+		// chunks, decoded, coin-filtered and reclassified). Done OUTSIDE txCacheMu.
+		var lerr error
+		full, lerr = pg.loadAllTransactions(v)
+		if lerr != nil {
+			// The scroll component swallows a (nil,err) result, so surface the
+			// failure ourselves on the UI thread (see pendingFetchErr) instead of
+			// silently rendering an empty "No transactions" list.
+			pg.stageFetchError(lerr)
+			return nil, 0, false, nil
+		}
 		pg.txCacheMu.Lock()
-		if pg.txCache.valid && pg.txCache.key == key {
-			if pg.txCache.windows == nil {
-				pg.txCache.windows = make(map[txCacheWindowKey]txCacheWindow)
-			}
-			pg.txCache.windows[txCacheWindowKey{offset: offset, pageSize: pageSize}] = txCacheWindow{txs: txs}
+		// Commit unless a notification invalidated the data mid-scan (then leave
+		// the cache invalid so the next fetch rebuilds). We still render `full`.
+		if !pg.txCacheDirty.Load() {
+			pg.txCache = txDecodedCache{key: key, valid: true, all: full}
+		} else {
+			pg.txCache.valid = false
 		}
 		pg.txCacheMu.Unlock()
 	}
 
-	return txs, len(txs), isReset, err
+	// Deliver the COMPLETE set to the scroll window only on a fresh load (cache
+	// MISS) at offset 0. Every reset trigger (a tab/status/coin/order/search change
+	// or a tx/block notification) invalidates the cache, so a cache HIT at offset 0
+	// means NO reset happened and the window already holds this data — returning it
+	// again would double-append the whole list. offset>0 always returns nil, so the
+	// component's window stays anchored at idxStart==0 (its slide/reposition math
+	// never engages — tasks 1 & 2). Gio virtualizes the full slice, so it's cheap.
+	if offset == 0 && !hit {
+		return full, len(full), false, nil
+	}
+	return nil, 0, false, nil
+}
+
+// stageFetchError records a background load failure for the UI thread to surface
+// (HandleUserInteractions shows it once as a modal) and requests a redraw. §3:
+// the modal is shown on the UI thread, not from this fetch goroutine.
+func (pg *TransactionsPage) stageFetchError(err error) {
+	pg.fetchErrMu.Lock()
+	pg.pendingFetchErr = err
+	pg.fetchErrMu.Unlock()
+	pg.ParentWindow().Reload()
+}
+
+// loadAllTransactions reads, decodes and post-filters the COMPLETE transaction
+// set for the current view. The DB is paged in fixed chunks until exhausted
+// (loadTransactions -> GetTransactionsRaw with the coarse DB filter), then the
+// accumulated rows are coin-filtered and reclassified into the selected sub-tab
+// exactly once. For the multi-wallet ("All wallets") view it scans every synced
+// wallet and merges by timestamp. fetchTransactions caches the result.
+//
+// This deliberately walks the whole wallet rather than a single page: the
+// reclassification post-filter (split/reward-union/voted) can shrink a DB page
+// to a handful of rows, which the scroll component would misread as end-of-list
+// — so older matching txs would be unreachable (tasks 1 & 3). Validation/SPV
+// sync is untouched; this only reads already-validated local DB rows.
+func (pg *TransactionsPage) loadAllTransactions(v txView) ([]*multiWalletTx, error) {
+	const dbChunk = int32(200)
+	var raw []*multiWalletTx
+	scan := func(wal sharedW.Asset) error {
+		var dbOffset int32
+		for {
+			chunk, _, err := pg.loadTransactions(v, wal, dbOffset, dbChunk)
+			if err != nil {
+				return err
+			}
+			raw = append(raw, chunk...)
+			if int32(len(chunk)) < dbChunk {
+				break // DB exhausted for this wallet
+			}
+			dbOffset += int32(len(chunk))
+		}
+		return nil
+	}
+
+	if v.selectedWallet != nil {
+		if err := scan(v.selectedWallet); err != nil {
+			return nil, err
+		}
+	} else {
+		for _, wal := range v.assetWallets {
+			if !wal.IsSynced() {
+				continue // skip wallets that are not synced
+			}
+			if err := scan(wal); err != nil {
+				return nil, err
+			}
+		}
+	}
+
+	raw = pg.filterByCoinType(v, raw)
+	// Reclassify into the selected sub-tab (Regular / Staking / Reward) over the
+	// decoded rows. The DB fetch used a COARSE filter (coarseFetchFilter) because
+	// the reclass predicates — default->default "split", the reward union, the
+	// PoW/PoS split and "ticket that voted" (spender lookup) — can't be a single
+	// storm query.
+	raw = pg.reclassifyByTab(v, raw)
+
+	// Multi-wallet view: rows were appended wallet-by-wallet, so re-establish the
+	// global newest/oldest ordering across wallets.
+	if v.selectedWallet == nil {
+		sort.SliceStable(raw, func(i, j int) bool {
+			if v.orderNewest {
+				return raw[i].Timestamp > raw[j].Timestamp
+			}
+			return raw[i].Timestamp < raw[j].Timestamp
+		})
+	}
+	return raw, nil
 }
 
 // coarseFetchFilter maps a logical (tab,status) filter to a DB-supported filter
-// for the GetTransactionsRaw fetch. prepareTxQuery (walletdata) only understands
-// the legacy filters (0-14); the reclassification filters (Split / StakeFee /
-// *List / TicketVoted / Missed) fall through to "return everything" there, so we
-// fetch a coarse superset and let reclassifyByTab cut the exact set over the
-// decoded rows (split = default->default, the reward union, and "ticket that
-// voted" via a spender lookup can't be a single storm query).
+// for the GetTransactionsRaw fetch. prepareTxQuery (walletdata/filter.go) only
+// understands the legacy filters (0-14); the reclassification filters (15-23)
+// are unknown to it and hit its `default: q.True()` branch, which returns EVERY
+// stored row — the true all-types superset. reclassifyByTab then cuts the exact
+// set over the decoded rows.
+//
+// CRITICAL: the stake-bearing reclass filters must NOT be routed onto
+// TxFilterAll. In filter.go TxFilterAll is `Type ∈ {Regular, Mixed, Coinbase}` —
+// it EXCLUDES ticket purchases, votes and revocations. Collapsing
+// StakingList/RewardList/RewardPoS onto it silently drops every ticket from the
+// Staking tab and every vote/revocation from the Reward tab (the original
+// "Staking All shows only Split" bug). Those filters fall through to q.True().
 func coarseFetchFilter(logical int32) int32 {
 	switch logical {
 	case utils.TxFilterTicketVoted:
-		return utils.TxFilterTickets // narrow to ticket purchases; voted-spender refined in UI
-	case utils.TxFilterSplit, utils.TxFilterStakeFee, utils.TxFilterRegularList,
-		utils.TxFilterStakingList, utils.TxFilterRewardList, utils.TxFilterMissed:
+		return utils.TxFilterTickets // voted ⊆ tickets; spender==vote refined in UI
+	case utils.TxFilterSplit, utils.TxFilterStakeFee, utils.TxFilterRegularList:
+		// Split, stake-fee and the Regular-tab "All" are all Regular/Mixed-typed
+		// (an SSFee keeps Type=Regular), fully covered by TxFilterAll — no need to
+		// scan the stake rows.
 		return utils.TxFilterAll
+	case utils.TxFilterStakingList, utils.TxFilterRewardList, utils.TxFilterRewardPoW,
+		utils.TxFilterRewardPoS, utils.TxFilterMissed:
+		// Need ticket / vote / revocation rows that TxFilterAll omits. Pass the
+		// logical value through so prepareTxQuery's default returns q.True().
+		return logical
 	default:
 		return logical // 0-14 are DB-supported and already exact
 	}
 }
 
-// reclassifyByTab keeps only the txs that belong in the currently selected
-// sub-tab + status. pg.txFilter holds the logical filter set by loadTransactions.
-func (pg *TransactionsPage) reclassifyByTab(in []*multiWalletTx) []*multiWalletTx {
+// reclassifyByTab keeps only the txs that belong in the selected sub-tab +
+// status. v.txFilter holds the logical filter resolved for this view.
+func (pg *TransactionsPage) reclassifyByTab(v txView, in []*multiWalletTx) []*multiWalletTx {
 	out := in[:0]
 	for _, mw := range in {
-		if mw.Transaction != nil && pg.keepForTab(mw) {
+		if mw.Transaction != nil && pg.keepForTab(v, mw) {
 			out = append(out, mw)
 		}
 	}
@@ -605,9 +740,9 @@ func (pg *TransactionsPage) reclassifyByTab(in []*multiWalletTx) []*multiWalletT
 // core for tasks 7-12). Regular = everything that isn't a reward or a split;
 // Staking = tickets + splits (votes/revocations moved to Reward); Reward =
 // coinbase + stake-fee + vote + revocation.
-func (pg *TransactionsPage) keepForTab(mw *multiWalletTx) bool {
+func (pg *TransactionsPage) keepForTab(v txView, mw *multiWalletTx) bool {
 	tx := mw.Transaction
-	switch pg.selectedTxCategoryTab {
+	switch v.categoryTab {
 	case 0: // Regular: only plain regular/mixed movements. Tickets, votes,
 		// revocations and coinbase have their own tx types (Staking/Reward);
 		// stake-fees (SF) and split self-transfers are excluded explicitly. This
@@ -616,7 +751,7 @@ func (pg *TransactionsPage) keepForTab(mw *multiWalletTx) bool {
 		return (tx.Type == txhelper.TxTypeRegular || tx.Type == txhelper.TxTypeMixed) &&
 			!tx.IsStakeFee && !isRegularTabSplitTx(tx)
 	case 1: // Staking
-		switch pg.txFilter {
+		switch v.txFilter {
 		case utils.TxFilterSplit:
 			return isRegularTabSplitTx(tx)
 		case utils.TxFilterMissed:
@@ -629,13 +764,20 @@ func (pg *TransactionsPage) keepForTab(mw *multiWalletTx) bool {
 			return tx.Type == txhelper.TxTypeTicketPurchase
 		}
 	case 2: // Reward
-		return isRewardTx(tx)
+		switch v.txFilter {
+		case utils.TxFilterRewardPoW:
+			return isPoWReward(tx)
+		case utils.TxFilterRewardPoS:
+			return isPoSReward(tx)
+		default: // "All"
+			return isRewardTx(tx)
+		}
 	}
 	return true
 }
 
-// isRewardTx reports whether tx belongs to the Reward tab: PoW coinbase,
-// stake-fee (SF), vote, or revocation.
+// isRewardTx reports whether tx belongs to the Reward tab: a consensus reward —
+// PoW coinbase, a stake-fee distribution (SF or MF), a vote or a revocation.
 func isRewardTx(tx *sharedW.Transaction) bool {
 	if tx.IsStakeFee {
 		return true
@@ -645,6 +787,21 @@ func isRewardTx(tx *sharedW.Transaction) bool {
 		return true
 	}
 	return false
+}
+
+// isPoWReward reports whether tx is a proof-of-work reward: the coinbase block
+// reward, or a miner-fee (MF) stake-fee distribution.
+func isPoWReward(tx *sharedW.Transaction) bool {
+	return tx.Type == txhelper.TxTypeCoinBase || (tx.IsStakeFee && tx.StakeFeeKind == "MF")
+}
+
+// isPoSReward reports whether tx is a proof-of-stake reward: a vote, a
+// revocation, or a staker-fee (SF) stake-fee distribution.
+func isPoSReward(tx *sharedW.Transaction) bool {
+	if tx.Type == txhelper.TxTypeVote || tx.Type == txhelper.TxTypeRevocation {
+		return true
+	}
+	return tx.IsStakeFee && tx.StakeFeeKind == "SF"
 }
 
 // ticketVoted reports whether a ticket-purchase tx's spender is a vote (the
@@ -663,11 +820,15 @@ func (pg *TransactionsPage) ticketVoted(mw *multiWalletTx) bool {
 	return spender.Type == txhelper.TxTypeVote
 }
 
-// isRegularTabSplitTx reports whether tx is a split transaction: mined and with
-// every input and output on the wallet's default account (number 0). Mirrors the
-// backend isSplitTx classifier used by TxFilterSplit / TxFilterRegularList.
+// isRegularTabSplitTx reports whether tx is a split transaction: every input and
+// output on the wallet's default account (number 0). Mirrors the backend
+// isSplitTx classifier used by TxFilterSplit / TxFilterRegularList. Confirmation
+// is NOT required — an unmined (or not-yet-resync'd, BlockHeight still -1)
+// default->default self-transfer still belongs on the Staking tab, not Regular
+// (tasks 4 & 5). A send to an external party is excluded: its recipient output
+// carries AccountNumber == -1, failing the all-outputs-on-account-0 test below.
 func isRegularTabSplitTx(tx *sharedW.Transaction) bool {
-	if tx.Type != txhelper.TxTypeRegular || tx.BlockHeight < 0 {
+	if tx.Type != txhelper.TxTypeRegular {
 		return false
 	}
 	if len(tx.Inputs) == 0 || len(tx.Outputs) == 0 {
@@ -695,8 +856,8 @@ func isRegularTabSplitTx(tx *sharedW.Transaction) bool {
 // label is `values.String(StrAllAssets)`, which is "Усі активи" in
 // Ukrainian — the string comparison would never match the sentinel and
 // the list would render as empty).
-func (pg *TransactionsPage) filterByCoinType(in []*multiWalletTx) []*multiWalletTx {
-	picked := pg.selectedCoinType()
+func (pg *TransactionsPage) filterByCoinType(v txView, in []*multiWalletTx) []*multiWalletTx {
+	picked := v.coinType
 	// "All assets" still excludes coins the user hid via the visibility
 	// filter — hidden coins must not surface anywhere, including here. Build
 	// the visible set for the selected wallet (single-wallet view); when no
@@ -705,7 +866,7 @@ func (pg *TransactionsPage) filterByCoinType(in []*multiWalletTx) []*multiWallet
 	var visible map[cointype.CoinType]bool                 // single-wallet visible set
 	var visibleByWallet map[int]map[cointype.CoinType]bool // multi-wallet, keyed by walletID
 	if picked == nil {
-		if dcrAsset, ok := pg.selectedWallet.(*dcr.Asset); ok {
+		if dcrAsset, ok := v.selectedWallet.(*dcr.Asset); ok {
 			visible = make(map[cointype.CoinType]bool)
 			for _, ct := range dcrAsset.VisibleCoinTypes() {
 				visible[ct] = true
@@ -714,7 +875,7 @@ func (pg *TransactionsPage) filterByCoinType(in []*multiWalletTx) []*multiWallet
 			// Multi-wallet "All wallets" view: the hide filter is per-wallet,
 			// so scope each tx against its OWN wallet's visible set.
 			visibleByWallet = make(map[int]map[cointype.CoinType]bool)
-			for _, wal := range pg.assetWallets {
+			for _, wal := range v.assetWallets {
 				dcrAsset, ok := wal.(*dcr.Asset)
 				if !ok {
 					continue
@@ -754,61 +915,27 @@ func (pg *TransactionsPage) filterByCoinType(in []*multiWalletTx) []*multiWallet
 	return out
 }
 
-func (pg *TransactionsPage) multiWalletTxns(offset, pageSize int32, newestFirst bool) ([]*multiWalletTx, int, error) {
-	allTxs := make([]*multiWalletTx, 0)
-	for _, wal := range pg.assetWallets {
-		if !wal.IsSynced() {
-			continue // skip wallets that are not synced
-		}
-
-		txs, _, err := pg.loadTransactions(wal, offset, pageSize, newestFirst)
-		if err != nil {
-			return nil, 0, err
-		}
-		allTxs = append(allTxs, txs...)
-	}
-
-	sort.Slice(allTxs, func(i, j int) bool {
-		if newestFirst {
-			return allTxs[i].Timestamp > allTxs[j].Timestamp
-		}
-		return allTxs[i].Timestamp < allTxs[j].Timestamp
-	})
-
-	// TODO: remove after PR 268  // Improve infinite scroll list functionality is merged
-	if len(allTxs) > int(pageSize) {
-		allTxs = allTxs[:int(pageSize)]
-	}
-
-	return allTxs, len(allTxs), nil
-}
-
-func (pg *TransactionsPage) loadTransactions(wal sharedW.Asset, offset, pageSize int32, newestFirst bool) ([]*multiWalletTx, int, error) {
-	mapInfo, _ := components.TxPageDropDownFields(wal.GetAssetType(), pg.selectedTxCategoryTab)
+func (pg *TransactionsPage) loadTransactions(v txView, wal sharedW.Asset, offset, pageSize int32) ([]*multiWalletTx, int, error) {
+	mapInfo, _ := components.TxPageDropDownFields(wal.GetAssetType(), v.categoryTab)
 	if len(mapInfo) < 1 {
 		err := fmt.Errorf("unable to resolve asset filters for asset type (%v)", wal.GetAssetType())
 		return nil, -1, err
 	}
 
-	// Strip only the trailing " (N)" count suffix (regular tab appends it); keep
-	// internal spaces so multi-word status labels like the staking "Не дозріле"
-	// (Immature) still match a mapInfo key. A plain Cut on the first space broke
-	// those labels -> "unsupported field" and an empty list.
-	selectedVal := pg.statusDropDown.Selected()
-	if i := strings.LastIndex(selectedVal, " ("); i != -1 {
-		selectedVal = selectedVal[:i]
-	}
-	txFilter, ok := mapInfo[selectedVal]
+	// Resolve THIS wallet's coarse DB filter from its own asset type + the view's
+	// (already " (N)"-stripped) status label — multi-wallet may mix types. The
+	// logical filter that drives reclassify is v.txFilter (resolved once in
+	// snapshotView); we deliberately do NOT write it to page state here — that
+	// would race a concurrent fetch and could cache wrong-tab rows.
+	txFilter, ok := mapInfo[v.statusLabel]
 	if !ok {
 		err := fmt.Errorf("unsupported field(%v) for asset type(%v) and txCategoryTab index(%d) found",
-			selectedVal, wal.GetAssetType(), pg.selectedTxCategoryTab)
+			v.statusLabel, wal.GetAssetType(), v.categoryTab)
 		return nil, -1, err
 	}
-	pg.txFilter = txFilter // logical filter (drives reclassifyByTab + cache key)
-	searchKey := pg.searchEditor.Editor.Text()
 	// Fetch a DB-supported coarse superset; reclassifyByTab refines it (the
 	// reclassification filters aren't understood by prepareTxQuery).
-	walletTxs, err := wal.GetTransactionsRaw(offset, pageSize, coarseFetchFilter(txFilter), newestFirst, searchKey)
+	walletTxs, err := wal.GetTransactionsRaw(offset, pageSize, coarseFetchFilter(txFilter), v.orderNewest, v.searchKey)
 	if err != nil {
 		err = fmt.Errorf("error loading transactions: %v", err)
 	}
@@ -1090,6 +1217,18 @@ func (pg *TransactionsPage) txAndWallet(mtx *multiWalletTx) (*sharedW.Transactio
 // displayed.
 // Part of the load.Page interface.
 func (pg *TransactionsPage) HandleUserInteractions(gtx C) {
+	// Surface any fetch error staged by a background load (the scroll component
+	// swallows it). Shown once per failure, on the UI thread.
+	pg.fetchErrMu.Lock()
+	if ferr := pg.pendingFetchErr; ferr != nil {
+		pg.pendingFetchErr = nil
+		pg.fetchErrMu.Unlock()
+		pg.ParentWindow().ShowModal(modal.NewErrorModal(pg.Load,
+			fmt.Errorf("error loading transactions: %v", ferr).Error(), modal.DefaultClickFunc()))
+	} else {
+		pg.fetchErrMu.Unlock()
+	}
+
 	if pg.statusDropDown.Changed(gtx) {
 		go pg.scroll.FetchScrollData(false, pg.ParentWindow(), true)
 	}
@@ -1268,17 +1407,19 @@ func (pg *TransactionsPage) ListenForTxNotification(walletID int) {
 	if pg.selectedWallet != nil && pg.selectedWallet.GetWalletID() != walletID {
 		return
 	}
+	// §3: do NOT mutate the cache slice from this goroutine (Layout reads it on the
+	// UI thread). Just mark it dirty; the next fetch clears the flag and rebuilds
+	// from the freshly validated DB rows. Mark dirty BEFORE the coalescing guard:
+	// a notification that loses the CAS (its refresh coalesced away) must STILL
+	// invalidate the cache, otherwise a just-confirmed vote/coinbase/stake-fee
+	// could be committed-out of the cached set and stay missing until an unrelated
+	// later event. Marking is cheap and idempotent; only the heavy refresh below
+	// needs coalescing.
+	pg.txCacheDirty.Store(true)
 	if !pg.txRefreshInFlight.CompareAndSwap(false, true) {
 		return
 	}
 	defer pg.txRefreshInFlight.Store(false)
-	// §3: do NOT mutate the cache slice from this goroutine (Layout reads it on
-	// the UI thread). Just mark it dirty; the coalesced refresh below re-runs
-	// fetchTransactions on the UI thread, which clears the flag and rebuilds from
-	// the freshly validated DB rows. This fires for both OnTransaction (new/
-	// changed rows) and OnBlockAttached/OnTransactionConfirmed (full invalidate =
-	// reorg-safe), exactly the events the scroll refresh already coalesces.
-	pg.txCacheDirty.Store(true)
 	pg.scroll.FetchScrollDataHandler(false, pg.ParentWindow(), false, true)
 }
 

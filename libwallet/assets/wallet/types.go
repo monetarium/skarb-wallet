@@ -354,6 +354,14 @@ type Transaction struct {
 	// read back false until next decode.
 	IsStakeFee bool `json:"is_stake_fee,omitempty"`
 
+	// StakeFeeKind distinguishes the two SSFee variants when IsStakeFee is
+	// true: "SF" = staker fee (proof-of-stake side, distributed to voters),
+	// "MF" = miner fee (proof-of-work side, paid to the miner). "" when the tx
+	// is not a stake fee. Lets the Reward tab split PoW vs PoS. Computed at
+	// decode via stake.HasSSFeeMarker on the raw msgTx — no DB reindex; rows
+	// decoded before this field existed read back "" until next decode.
+	StakeFeeKind string `json:"stake_fee_kind,omitempty"`
+
 	// Vote Info (DCR fields)
 	VoteVersion    int32  `json:"vote_version,omitempty"`
 	LastBlockValid bool   `json:"last_block_valid,omitempty"`

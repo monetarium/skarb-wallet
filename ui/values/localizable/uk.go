@@ -173,7 +173,7 @@ const UK = `
 "max" = "Макс"
 "automatic" = "Автоматичний"
 "manual" = "Ручний"
-"coinSelection" = "Вибір UTXO"
+"coinSelection" = "Контроль монет"
 "advancedOptions" = "Розширені налаштування"
 "description" = "Опис"
 "txDescriptionTitle" = "Опис транзакції (необовʼязково)"
@@ -408,7 +408,7 @@ const UK = `
 // strings carry %d / %v / %s placeholders identical to en.go.
 
 // Accounts & wallet management
-"accountList" = "Список акаунтів"
+"accountList" = "Список UTXO"
 "acctCreated" = "Акаунт створено"
 "acctDetailsKey" = "%d зовнішніх, %d внутрішніх, %d імпортованих"
 "acctName" = "Назва акаунта"
@@ -702,8 +702,10 @@ const UK = `
 "revokeCause" = "Причина відкликання"
 "revoked" = "Відкликано"
 "stakingActivity" = "Активність стейкінгу"
-"stakingTx" = "Транзакції стейкінгу"
+"stakingTx" = "Активності стейкінгу"
 "rewardTx" = "Транзакції винагород"
+"pow" = "PoW"
+"pos" = "PoS"
 "ticket" = "Тикет"
 "ticketDetails" = "Деталі тикета"
 "ticketPrice" = "Ціна тикета"

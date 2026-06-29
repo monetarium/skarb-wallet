@@ -38,6 +38,8 @@ const (
 	TxFilterStakingList = utils.TxFilterStakingList
 	TxFilterRewardList  = utils.TxFilterRewardList
 	TxFilterMissed      = utils.TxFilterMissed
+	TxFilterRewardPoW   = utils.TxFilterRewardPoW
+	TxFilterRewardPoS   = utils.TxFilterRewardPoS
 
 	TxDirectionInvalid     = txhelper.TxDirectionInvalid
 	TxDirectionSent        = txhelper.TxDirectionSent
@@ -259,10 +261,11 @@ func (asset *Asset) TxMatchesFilter(tx *sharedW.Transaction, txFilter int32) boo
 	case TxFilterTickets:
 		return tx.Type == TxTypeTicketPurchase
 	case TxFilterSplit:
-		// A "split" tx is a plain Regular spend, mined, that both funds from
-		// and returns to the default account (0) only — i.e. it just splits
-		// the default account's own coins (e.g. preparing ticket-sized
-		// outputs) without touching any other account or an external party.
+		// A "split" tx is a plain Regular spend that both funds from and
+		// returns to the default account (0) only — i.e. it just splits the
+		// default account's own coins (e.g. preparing ticket-sized outputs)
+		// without touching any other account or an external party. Mined or
+		// not (see isSplitTx).
 		return isSplitTx(tx)
 	case TxFilterStakeFee:
 		return tx.IsStakeFee
@@ -289,6 +292,13 @@ func (asset *Asset) TxMatchesFilter(tx *sharedW.Transaction, txFilter int32) boo
 	case TxFilterRewardList:
 		return tx.Type == TxTypeCoinBase || tx.IsStakeFee ||
 			tx.Type == TxTypeVote || tx.Type == TxTypeRevocation
+	case TxFilterRewardPoW:
+		// Proof-of-work side: coinbase block reward, or a miner-fee (MF) SSFee.
+		return tx.Type == TxTypeCoinBase || (tx.IsStakeFee && tx.StakeFeeKind == "MF")
+	case TxFilterRewardPoS:
+		// Proof-of-stake side: votes, revocations, or a staker-fee (SF) SSFee.
+		return tx.Type == TxTypeVote || tx.Type == TxTypeRevocation ||
+			(tx.IsStakeFee && tx.StakeFeeKind == "SF")
 	case TxFilterMissed:
 		// Missed tickets aren't detectable over SPV; the filter exists so the
 		// UI can keep a "Missed" entry that always yields an empty list.
@@ -300,9 +310,16 @@ func (asset *Asset) TxMatchesFilter(tx *sharedW.Transaction, txFilter int32) boo
 	return false
 }
 
-// isSplitTx reports whether tx is a "split" transaction: a mined Regular spend
-// whose every input and every output belongs to the default account (account
-// 0). Used by TxFilterSplit, TxFilterRegularList and TxFilterStakingList.
+// isSplitTx reports whether tx is a "split" transaction: a Regular spend (mined
+// or unmined) whose every input and every output belongs to the default account
+// (account 0). Used by TxFilterSplit, TxFilterRegularList and TxFilterStakingList.
+//
+// Confirmation is deliberately NOT required: a default->default self-transfer
+// belongs on the Staking tab whether or not it has been mined yet — an unmined,
+// or a not-yet-resync'd (BlockHeight still -1) split must not fall back into the
+// Regular tab. A normal send to an external party is still excluded because its
+// recipient output carries AccountNumber == -1 (not wallet-owned), so the
+// all-outputs-on-account-0 test below fails for it.
 //
 // It relies on tx being a fully-decoded sharedW.Transaction with Inputs and
 // Outputs populated (each carrying an AccountNumber, with -1 meaning the
@@ -310,7 +327,7 @@ func (asset *Asset) TxMatchesFilter(tx *sharedW.Transaction, txFilter int32) boo
 // such decoded transactions (the UI passes the result of DecodeTransaction /
 // GetTransactionsRaw), so the account fields are available here.
 func isSplitTx(tx *sharedW.Transaction) bool {
-	if tx.Type != TxTypeRegular || tx.BlockHeight < 0 {
+	if tx.Type != TxTypeRegular {
 		return false
 	}
 	if len(tx.Inputs) == 0 || len(tx.Outputs) == 0 {
