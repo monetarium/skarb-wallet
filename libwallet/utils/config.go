@@ -87,6 +87,13 @@ const (
 	// simply yields an empty list.
 	TxFilterMissed int32 = 21
 
+	// Reward-tab PoW/PoS split (Skarb). The Reward list is consensus rewards
+	// only (coinbase, stake-fee, vote, revocation); these narrow it to the
+	// proof-of-work vs proof-of-stake side, keyed off Type + IsStakeFee +
+	// StakeFeeKind ("MF" miner-fee = PoW, "SF" staker-fee = PoS).
+	TxFilterRewardPoW int32 = 22 // coinbase, or a miner-fee (MF) SSFee.
+	TxFilterRewardPoS int32 = 23 // vote, revocation, or a staker-fee (SF) SSFee.
+
 	TypeFilter          = "Type"
 	DirectionFilter     = "Direction"
 	HeightFilter        = "BlockHeight"

@@ -651,13 +651,18 @@ func TxPageDropDownFields(wType libutils.AssetType, tabIndex int) (mapInfo map[s
 			values.String(values.StrVoted),
 		}
 	case wType == libutils.DCRWalletAsset && tabIndex == 2:
-		// DCR Reward Transactions dropdown fields. A single "All" item backed by
-		// TxFilterRewardList (coinbase, stake-fee, vote and revocation txs).
+		// DCR Reward Transactions dropdown fields: All (every consensus reward),
+		// PoW (coinbase + miner-fee SSFee) and PoS (votes, revocations +
+		// staker-fee SSFee). See keepForTab / TxMatchesFilter.
 		mapInfo = map[string]int32{
 			values.String(values.StrAll): libutils.TxFilterRewardList,
+			values.String(values.StrPoW): libutils.TxFilterRewardPoW,
+			values.String(values.StrPoS): libutils.TxFilterRewardPoS,
 		}
 		keysInfo = []string{
 			values.String(values.StrAll),
+			values.String(values.StrPoW),
+			values.String(values.StrPoS),
 		}
 	}
 	return

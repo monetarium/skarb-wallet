@@ -236,6 +236,13 @@ func (asset *Asset) DecodeTransaction(walletTx *sharedW.TxInfoFromWallet, netPar
 	// reclassification filters can key off. Pure structural check on the raw
 	// msgTx — computed here at decode so no DB reindex is required.
 	isStakeFee := stake.IsSSFee(msgTx)
+	// Distinguish the SSFee variant so the Reward tab can split PoW vs PoS:
+	// "SF" = staker fee (PoS side, paid to voters), "MF" = miner fee (PoW
+	// side, paid to the miner). Empty for non-SSFee txs.
+	stakeFeeKind := ""
+	if isStakeFee {
+		stakeFeeKind = ssFeeKind(msgTx)
+	}
 
 	// All outputs in a Monetarium tx share the same CoinType.
 	var txCoinType uint8
@@ -387,12 +394,13 @@ func (asset *Asset) DecodeTransaction(walletTx *sharedW.TxInfoFromWallet, netPar
 		AmountAtoms: amountAtoms,
 		FeeAtoms:    feeAtoms,
 
-		Direction:  direction,
-		Amount:     amount,
-		Inputs:     inputs,
-		Outputs:    outputs,
-		CoinType:   txCoinType,
-		IsStakeFee: isStakeFee,
+		Direction:    direction,
+		Amount:       amount,
+		Inputs:       inputs,
+		Outputs:      outputs,
+		CoinType:     txCoinType,
+		IsStakeFee:   isStakeFee,
+		StakeFeeKind: stakeFeeKind,
 
 		VoteVersion:     int32(ssGenVersion),
 		LastBlockValid:  lastBlockValid,
@@ -725,4 +733,23 @@ func voteInfo(msgTx *wire.MsgTx) (ssGenVersion uint32, lastBlockValid bool, vote
 		ticketSpentHash = msgTx.TxIn[1].PreviousOutPoint.Hash.String()
 	}
 	return
+}
+
+// ssFeeKind classifies a stake-fee (SSFee) distribution tx as "SF" (staker
+// fee — proof-of-stake, distributed to voters) or "MF" (miner fee —
+// proof-of-work, paid to the miner) by scanning its OP_RETURN marker with the
+// node's canonical stake.HasSSFeeMarker, which understands BOTH the OP_DATA_6
+// "MF" and the OP_DATA_8 "SF" marker layouts (the older udb getSSFeeType only
+// checked OP_DATA_6 and so missed staker markers). Returns "" when no marker
+// is present; only meaningful when stake.IsSSFee(msgTx) is true.
+func ssFeeKind(msgTx *wire.MsgTx) string {
+	for _, out := range msgTx.TxOut {
+		switch stake.HasSSFeeMarker(out.PkScript) {
+		case stake.SSFeeMarkerStaker:
+			return "SF"
+		case stake.SSFeeMarkerMiner:
+			return "MF"
+		}
+	}
+	return ""
 }

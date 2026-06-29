@@ -1030,6 +1030,8 @@ const (
 	StrTxRegular                             = "txRegular"
 	StrStakingTx                             = "stakingTx"
 	StrRewardTx                              = "rewardTx"
+	StrPoW                                   = "pow"
+	StrPoS                                   = "pos"
 	StrFilter                                = "filter"
 	StrExport                                = "export"
 	StrMyAddress                             = "myAddress"
