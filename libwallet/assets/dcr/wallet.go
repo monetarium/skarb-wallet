@@ -46,6 +46,13 @@ type Asset struct {
 	// dbMutex should be held when db transactions would circle back around
 	// and hold the mu lock to prevent a freeze.
 	dbMutex *sync.Mutex
+
+	// persistedCurrentAddr caches, per account, the last address that
+	// CurrentAddress registered in the address manager, so hot callers
+	// (per-keystroke tx construction, receive page) skip the DB write
+	// once the current address is already persisted.
+	persistedCurrentAddrMu sync.Mutex
+	persistedCurrentAddr   map[int32]string
 }
 
 // Verify that DCR implements the shared assets interface.

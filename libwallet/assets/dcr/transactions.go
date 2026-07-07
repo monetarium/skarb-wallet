@@ -7,6 +7,7 @@ import (
 	"github.com/asdine/storm"
 	"github.com/asdine/storm/q"
 	"github.com/monetarium/monetarium-node/chaincfg/chainhash"
+	"github.com/monetarium/monetarium-node/cointype"
 	sharedW "github.com/monetarium/skarb-wallet/libwallet/assets/wallet"
 	"github.com/monetarium/skarb-wallet/libwallet/txhelper"
 	"github.com/monetarium/skarb-wallet/libwallet/utils"
@@ -328,6 +329,12 @@ func (asset *Asset) TxMatchesFilter(tx *sharedW.Transaction, txFilter int32) boo
 // GetTransactionsRaw), so the account fields are available here.
 func isSplitTx(tx *sharedW.Transaction) bool {
 	if tx.Type != TxTypeRegular {
+		return false
+	}
+	// Splits prepare VAR for ticket purchases and staking is VAR-only, so
+	// a same-account SKA transfer (e.g. a send to one's own account) is
+	// never a split — it stays on the Regular tab.
+	if tx.CoinType != uint8(cointype.CoinTypeVAR) {
 		return false
 	}
 	if len(tx.Inputs) == 0 || len(tx.Outputs) == 0 {
