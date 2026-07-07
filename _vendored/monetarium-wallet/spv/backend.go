@@ -432,12 +432,68 @@ func (s *Syncer) PublishTransactions(ctx context.Context, txs ...*wire.MsgTx) er
 			return errors.E(errors.Protocol, err)
 		}
 	}
-	return s.forRemotes(func(rp *p2p.RemotePeer) error {
-		for _, inv := range msg.InvList {
-			rp.InvsSent().Add(inv.Hash)
+	// Snapshot the connected peers instead of holding remotesMu across
+	// the (potentially slow, up-to-stallTimeout) sends below, so peer
+	// management and other broadcasts are never blocked by one stalled
+	// peer.
+	s.remotesMu.Lock()
+	if len(s.remotes) == 0 {
+		s.remotesMu.Unlock()
+		return errors.E(errors.NoPeers)
+	}
+	remotes := make([]*p2p.RemotePeer, 0, len(s.remotes))
+	for _, rp := range s.remotes {
+		remotes = append(remotes, rp)
+	}
+	s.remotesMu.Unlock()
+
+	// Send the full transaction bytes to every peer instead of the
+	// historic inv-only announcement. The inv/getdata round trip gives
+	// no delivery guarantee: a peer that drops or ignores the
+	// announcement never requests the tx, no rejection is ever reported
+	// back, and on a network with a handful of static bootstrap peers
+	// the transaction then silently never reaches the mempool. Nodes
+	// accept unsolicited tx messages, so pushing the bytes directly
+	// ensures every reachable peer actually receives the transaction.
+	// (Sending an inv alongside the bytes would make the node fetch the
+	// tx twice and mark its second copy as a rejected duplicate.) The
+	// hashes still go into InvsSent so a later getdata for them is
+	// served.
+	//
+	// Delivery is best-effort per peer: the broadcast succeeds when at
+	// least one peer received everything. Failing the whole call after
+	// some peer already received the bytes would make the caller abandon
+	// a transaction the network may well mine.
+	var delivered int
+	var lastErr error
+	for _, rp := range remotes {
+		err := func() error {
+			for _, inv := range msg.InvList {
+				rp.InvsSent().Add(inv.Hash)
+			}
+			for _, tx := range txs {
+				if err := rp.SendMessage(ctx, tx); err != nil {
+					return err
+				}
+			}
+			return nil
+		}()
+		if err != nil {
+			lastErr = err
+			log.Warnf("Failed to send transaction(s) to peer %v: %v",
+				rp.RemoteAddr(), err)
+			continue
 		}
-		return rp.SendMessage(ctx, msg)
-	})
+		delivered++
+	}
+	if delivered == 0 {
+		return lastErr
+	}
+	for _, tx := range txs {
+		txHash := tx.TxHash()
+		log.Infof("Sent transaction %v to %d/%d connected peers", &txHash, delivered, len(remotes))
+	}
+	return nil
 }
 
 // PublishMixMessages implements the PublishMixMessages method of the

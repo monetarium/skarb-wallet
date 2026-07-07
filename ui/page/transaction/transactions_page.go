@@ -831,6 +831,12 @@ func isRegularTabSplitTx(tx *sharedW.Transaction) bool {
 	if tx.Type != txhelper.TxTypeRegular {
 		return false
 	}
+	// Splits prepare VAR for ticket purchases and staking is VAR-only, so
+	// a same-account SKA transfer (e.g. a send to one's own account) is
+	// never a split — it stays on the Regular tab.
+	if tx.CoinType != uint8(cointype.CoinTypeVAR) {
+		return false
+	}
 	if len(tx.Inputs) == 0 || len(tx.Outputs) == 0 {
 		return false
 	}

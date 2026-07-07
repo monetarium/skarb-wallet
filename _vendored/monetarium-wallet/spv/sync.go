@@ -1938,6 +1938,15 @@ func (s *Syncer) peerStartup(ctx context.Context, rp *p2p.RemotePeer) error {
 			// TODO: Transactions should be removed if this is a double spend.
 			log.Errorf("Failed to resent one or more unmined transactions: %v", err)
 		}
+		// Push the full transaction bytes as well; the inv-only
+		// announcement gives no delivery guarantee (see
+		// Syncer.PublishTransactions).
+		for _, tx := range unminedTxs {
+			if err := rp.SendMessage(ctx, tx); err != nil {
+				log.Errorf("Failed to resend unmined transaction %v: %v", tx.TxHash(), err)
+				break
+			}
+		}
 	}
 
 	// Ask peer to send any new headers.

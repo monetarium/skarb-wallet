@@ -2859,8 +2859,13 @@ func (w *Wallet) CurrentAddressAndPersist(ctx context.Context, account uint32) (
 		return nil, errors.E(op, err)
 	}
 
-	// Increment cursor to mark this address as returned
-	buf.cursor++
+	// Deliberately do NOT advance buf.cursor: this function must stay
+	// idempotent, returning (and re-persisting) the SAME current address
+	// until it is actually used. Advancing the cursor here would allocate
+	// a new address on every call with no gap-limit policy (unlike
+	// nextAddress), letting hot callers burn addresses past the gap limit
+	// — payments to such addresses become undiscoverable after a restore
+	// from seed.
 	w.addressBuffersMu.Unlock()
 
 	return addr, nil

@@ -86,12 +86,42 @@ func (asset *Asset) CurrentAddress(account int32) (string, error) {
 		return "", errors.E(utils.ErrAddressDiscoveryNotDone)
 	}
 
+	// Cheap in-memory peek first.
 	addr, err := asset.Internal().DCR.CurrentAddress(uint32(account))
 	if err != nil {
 		log.Errorf("CurrentAddress error: %v", err)
 		return "", err
 	}
-	return addr.String(), nil
+	addrStr := addr.String()
+
+	// The peeked address is derived purely in memory and may be absent
+	// from the address manager's index. A payment to an unregistered
+	// address (receive, or send-to-own-account) is silently skipped when
+	// the wallet records the transaction — the credit never lands. So
+	// register it via CurrentAddressAndPersist (idempotent: returns the
+	// same address until it is actually used), once per address — hot
+	// callers re-run this on every keystroke/render, and the cache keeps
+	// that free of DB writes.
+	asset.persistedCurrentAddrMu.Lock()
+	alreadyPersisted := asset.persistedCurrentAddr[account] == addrStr
+	asset.persistedCurrentAddrMu.Unlock()
+	if alreadyPersisted {
+		return addrStr, nil
+	}
+
+	ctx, _ := asset.ShutdownContextWithCancel()
+	pAddr, err := asset.Internal().DCR.CurrentAddressAndPersist(ctx, uint32(account))
+	if err != nil {
+		log.Errorf("CurrentAddress persist error: %v", err)
+		return "", err
+	}
+	asset.persistedCurrentAddrMu.Lock()
+	if asset.persistedCurrentAddr == nil {
+		asset.persistedCurrentAddr = make(map[int32]string)
+	}
+	asset.persistedCurrentAddr[account] = pAddr.String()
+	asset.persistedCurrentAddrMu.Unlock()
+	return pAddr.String(), nil
 }
 
 // NextAddress returns the address immediately following the last requested
