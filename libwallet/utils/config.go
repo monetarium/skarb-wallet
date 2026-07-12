@@ -94,6 +94,11 @@ const (
 	TxFilterRewardPoW int32 = 22 // coinbase, or a miner-fee (MF) SSFee.
 	TxFilterRewardPoS int32 = 23 // vote, revocation, or a staker-fee (SF) SSFee.
 
+	// TxFilterStakingNoSplit is the Staking tab's "All without Split" choice:
+	// every ticket purchase, regardless of status, but none of the split
+	// (default->default self-transfer) rows TxFilterStakingList includes.
+	TxFilterStakingNoSplit int32 = 24
+
 	TypeFilter          = "Type"
 	DirectionFilter     = "Direction"
 	HeightFilter        = "BlockHeight"

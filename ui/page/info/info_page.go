@@ -55,12 +55,16 @@ type WalletInfo struct {
 	stakes       []*sharedW.Transaction
 	recentStakes *cryptomaterial.ClickableList
 
+	rewards       []*sharedW.Transaction
+	recentRewards *cryptomaterial.ClickableList
+
 	mixerInfoButton,
 	mixerRedirectButton cryptomaterial.IconButton
 	unmixedBalance sharedW.AssetAmount
 
 	viewAllTxButton,
-	viewAllStakeButton cryptomaterial.Button
+	viewAllStakeButton,
+	viewAllRewardButton cryptomaterial.Button
 
 	walletSyncInfo *components.WalletSyncInfo
 
@@ -87,6 +91,7 @@ func NewInfoPage(l *load.Load, wallet sharedW.Asset, backup func(sharedW.Asset))
 		},
 		recentTransactions: l.Theme.NewClickableList(layout.Vertical),
 		recentStakes:       l.Theme.NewClickableList(layout.Vertical),
+		recentRewards:      l.Theme.NewClickableList(layout.Vertical),
 		materialLoader:     material.Loader(l.Theme.Base),
 	}
 	pg.walletSyncInfo = components.NewWalletSyncInfo(l, wallet, pg.reload, backup)
@@ -94,6 +99,8 @@ func NewInfoPage(l *load.Load, wallet sharedW.Asset, backup func(sharedW.Asset))
 	pg.recentTransactions.IsShadowEnabled = true
 	pg.recentStakes.Radius = cryptomaterial.Radius(14)
 	pg.recentStakes.IsShadowEnabled = true
+	pg.recentRewards.Radius = cryptomaterial.Radius(14)
+	pg.recentRewards.IsShadowEnabled = true
 
 	pg.viewAllTxButton = pg.Theme.OutlineButton(values.String(values.StrViewAll))
 	pg.viewAllTxButton.Font.Weight = font.Medium
@@ -106,6 +113,12 @@ func NewInfoPage(l *load.Load, wallet sharedW.Asset, backup func(sharedW.Asset))
 	pg.viewAllStakeButton.TextSize = values.TextSize16
 	pg.viewAllStakeButton.Inset = layout.UniformInset(0)
 	pg.viewAllStakeButton.HighlightColor = color.NRGBA{}
+
+	pg.viewAllRewardButton = pg.Theme.OutlineButton(values.String(values.StrViewAll))
+	pg.viewAllRewardButton.Font.Weight = font.Medium
+	pg.viewAllRewardButton.TextSize = values.TextSize16
+	pg.viewAllRewardButton.Inset = layout.UniformInset(0)
+	pg.viewAllRewardButton.HighlightColor = color.NRGBA{}
 
 	pg.mixerRedirectButton, pg.mixerInfoButton = components.SubpageHeaderButtons(l)
 	pg.mixerRedirectButton.Icon = pg.Theme.Icons.NavigationArrowForward
@@ -131,6 +144,7 @@ func (pg *WalletInfo) OnNavigatedTo() {
 
 	if pg.wallet.GetAssetType() == libutils.DCRWalletAsset {
 		go pg.loadStakes()
+		go pg.loadRewards()
 
 		if pg.wallet.(*dcr.Asset).IsAccountMixerActive() {
 			pg.listenForMixerNotifications()
@@ -163,6 +177,12 @@ func (pg *WalletInfo) snapshotStakes() []*sharedW.Transaction {
 	return pg.stakes
 }
 
+func (pg *WalletInfo) snapshotRewards() []*sharedW.Transaction {
+	pg.txMu.RLock()
+	defer pg.txMu.RUnlock()
+	return pg.rewards
+}
+
 func (pg *WalletInfo) loaderShown() bool {
 	pg.txMu.RLock()
 	defer pg.txMu.RUnlock()
@@ -192,6 +212,10 @@ func (pg *WalletInfo) Layout(gtx C) D {
 
 		if len(pg.snapshotStakes()) > 0 {
 			items = append(items, layout.Rigid(pg.recentStakeLayout))
+		}
+
+		if len(pg.snapshotRewards()) > 0 {
+			items = append(items, layout.Rigid(pg.recentRewardLayout))
 		}
 
 		return layout.Flex{Axis: layout.Vertical}.Layout(gtx, items...)
@@ -238,7 +262,7 @@ func filterVisibleCoinTxs(wallet sharedW.Asset, txs []*sharedW.Transaction) []*s
 // noTransactionsLayout renders the empty-state message for the recent-
 // transactions section.
 func (pg *WalletInfo) noTransactionsLayout(gtx C) D {
-	return pg.pageContentWrapper(gtx, values.String(values.StrRecentTransactions), pg.viewAllTxButton.Layout, func(gtx C) D {
+	return pg.pageContentWrapper(gtx, values.String(values.StrTxRegular), pg.viewAllTxButton.Layout, func(gtx C) D {
 		txt := pg.Theme.Body1(values.String(values.StrNoTransactions))
 		txt.Color = pg.Theme.Color.GrayText3
 		return layout.Center.Layout(gtx, func(gtx C) D {
@@ -249,7 +273,7 @@ func (pg *WalletInfo) noTransactionsLayout(gtx C) D {
 
 func (pg *WalletInfo) recentTransactionLayout(gtx C) D {
 	txs := pg.snapshotTxs()
-	return pg.pageContentWrapper(gtx, values.String(values.StrRecentTransactions), pg.viewAllTxButton.Layout, func(gtx C) D {
+	return pg.pageContentWrapper(gtx, values.String(values.StrTxRegular), pg.viewAllTxButton.Layout, func(gtx C) D {
 		return pg.recentTransactions.Layout(gtx, len(txs), func(gtx C, index int) D {
 			tx := txs[index]
 			isHiddenSeparator := index == len(txs)-1
@@ -260,10 +284,21 @@ func (pg *WalletInfo) recentTransactionLayout(gtx C) D {
 
 func (pg *WalletInfo) recentStakeLayout(gtx C) D {
 	stakes := pg.snapshotStakes()
-	return pg.pageContentWrapper(gtx, values.String(values.StrStakingActivity), pg.viewAllStakeButton.Layout, func(gtx C) D {
+	return pg.pageContentWrapper(gtx, values.String(values.StrStakingTx), pg.viewAllStakeButton.Layout, func(gtx C) D {
 		return pg.recentStakes.Layout(gtx, len(stakes), func(gtx C, index int) D {
 			tx := stakes[index]
 			isHiddenSeparator := index == len(stakes)-1
+			return pg.walletTxWrapper(gtx, tx, isHiddenSeparator)
+		})
+	})
+}
+
+func (pg *WalletInfo) recentRewardLayout(gtx C) D {
+	rewards := pg.snapshotRewards()
+	return pg.pageContentWrapper(gtx, values.String(values.StrRewardTx), pg.viewAllRewardButton.Layout, func(gtx C) D {
+		return pg.recentRewards.Layout(gtx, len(rewards), func(gtx C, index int) D {
+			tx := rewards[index]
+			isHiddenSeparator := index == len(rewards)-1
 			return pg.walletTxWrapper(gtx, tx, isHiddenSeparator)
 		})
 	})
@@ -350,10 +385,22 @@ func (pg *WalletInfo) HandleUserInteractions(gtx C) {
 		}
 	}
 
-	// Mixer & staking pages are not part of the v1 Monetarium wallet.
+	if clicked, selectedItem := pg.recentRewards.ItemClicked(); clicked {
+		if rewards := pg.snapshotRewards(); selectedItem >= 0 && selectedItem < len(rewards) {
+			pg.ParentNavigator().Display(transaction.NewTransactionDetailsPage(pg.Load, pg.wallet, rewards[selectedItem]))
+		}
+	}
 
+	// Each "View All" opens the Transactions page on ITS list's tab:
+	// 0 = Regular, 1 = Staking Activities, 2 = Reward.
 	if pg.viewAllTxButton.Button.Clicked(gtx) {
-		pg.ParentNavigator().Display(transaction.NewTransactionsPage(pg.Load, pg.wallet))
+		pg.ParentNavigator().Display(transaction.NewTransactionsPageWithType(pg.Load, 0, pg.wallet))
+	}
+	if pg.viewAllStakeButton.Button.Clicked(gtx) {
+		pg.ParentNavigator().Display(transaction.NewTransactionsPageWithType(pg.Load, 1, pg.wallet))
+	}
+	if pg.viewAllRewardButton.Button.Clicked(gtx) {
+		pg.ParentNavigator().Display(transaction.NewTransactionsPageWithType(pg.Load, 2, pg.wallet))
 	}
 }
 
@@ -408,6 +455,51 @@ func (pg *WalletInfo) ListenForNewTx(walletID int) {
 		return
 	}
 	pg.loadTransactions()
+	if pg.wallet.GetAssetType() == libutils.DCRWalletAsset {
+		pg.loadStakes()
+		pg.loadRewards()
+	}
+}
+
+// loadRecentByFilter returns the newest `want` transactions matching the
+// reclassification filter (TxFilterRegularList / StakingList / RewardList).
+// Those filters are refined in TxMatchesFilter, not in the storm query layer
+// (prepareTxQuery returns a coarse superset for filters it doesn't know), so
+// the recent rows can be dominated by other categories — page deeper until
+// enough matching rows are collected. The whole fetched window is also fed to
+// dcr.ApplySplitAmounts so split rows price as the outputs their tickets
+// consumed rather than the fee (the tickets always sit in the same or an
+// earlier page than their split — they are never older).
+func (pg *WalletInfo) loadRecentByFilter(filter int32, want int) []*sharedW.Transaction {
+	const pageSize = int32(100)
+	const maxPages = 10
+	fetched := make([]*sharedW.Transaction, 0, pageSize)
+	out := make([]*sharedW.Transaction, 0, want)
+	for page := int32(0); page < maxPages && len(out) < want; page++ {
+		txs, err := pg.wallet.GetTransactionsRaw(page*pageSize, pageSize, filter, true, "")
+		if err != nil {
+			log.Errorf("error loading transactions (filter %d): %v", filter, err)
+			break
+		}
+		if len(txs) == 0 {
+			break
+		}
+		lastPage := int32(len(txs)) < pageSize
+		fetched = append(fetched, txs...)
+		for _, tx := range filterVisibleCoinTxs(pg.wallet, txs) {
+			if len(out) == want {
+				break
+			}
+			if pg.wallet.TxMatchesFilter(tx, filter) {
+				out = append(out, tx)
+			}
+		}
+		if lastPage {
+			break
+		}
+	}
+	dcr.ApplySplitAmounts(fetched)
+	return out
 }
 
 func (pg *WalletInfo) loadTransactions() {
@@ -420,19 +512,9 @@ func (pg *WalletInfo) loadTransactions() {
 		return
 	}
 
-	// Fetch a wider window than the 3 shown, then drop hidden-coin txs and
-	// keep the newest 3 visible ones — a recent tx of a coin the user hid
-	// must not appear here, and filtering after a 3-row fetch could leave
-	// fewer than 3 visible rows.
-	txs, err := pg.wallet.GetTransactionsRaw(0, 30, mapInfo[values.String(values.StrAll)], true, "")
-	if err != nil {
-		log.Errorf("error loading transactions: %v", err)
-		return
-	}
-	txs = filterVisibleCoinTxs(pg.wallet, txs)
-	if len(txs) > 3 {
-		txs = txs[:3]
-	}
+	// The Regular-tab "All" filter — same classification as the Transactions
+	// page Regular list (no splits, no stake-fees, no rewards).
+	txs := pg.loadRecentByFilter(mapInfo[values.String(values.StrAll)], 3)
 	// Diagnostic log: surfaces what's in storm DB at the moment Info
 	// page (re)mounts. If the user reports "I sent a tx but it doesn't
 	// appear", grep for "InfoPage.loadTransactions" in the wallet log
@@ -460,26 +542,22 @@ func (pg *WalletInfo) loadTransactions() {
 }
 
 func (pg *WalletInfo) loadStakes() {
-	// Build into a local slice and publish it with one locked assignment —
-	// mutating pg.stakes across append/reslice while Layout reads it on the UI
-	// thread is the race this avoids.
-	stakes := make([]*sharedW.Transaction, 0)
-
-	txs, err := pg.wallet.GetTransactionsRaw(0, 10, libutils.TxFilterStaking, true, "")
-	if err != nil {
-		log.Errorf("error loading staking activities: %v", err)
-		return
-	}
-	for _, stakeTx := range txs {
-		if (stakeTx.Type == dcr.TxTypeTicketPurchase) || (stakeTx.Type == dcr.TxTypeRevocation) {
-			stakes = append(stakes, stakeTx)
-		}
-	}
-	if len(stakes) > 3 {
-		stakes = stakes[:3]
-	}
+	// Same classification as the Transactions page Staking tab "All": ticket
+	// purchases + splits. Build into a local slice and publish with one locked
+	// assignment (Layout reads pg.stakes on the UI thread).
+	stakes := pg.loadRecentByFilter(libutils.TxFilterStakingList, 3)
 	pg.txMu.Lock()
 	pg.stakes = stakes
+	pg.txMu.Unlock()
+	pg.ParentWindow().Reload()
+}
+
+func (pg *WalletInfo) loadRewards() {
+	// Same classification as the Transactions page Reward tab "All": coinbase,
+	// stake-fee distributions, votes and revocations.
+	rewards := pg.loadRecentByFilter(libutils.TxFilterRewardList, 3)
+	pg.txMu.Lock()
+	pg.rewards = rewards
 	pg.txMu.Unlock()
 	pg.ParentWindow().Reload()
 }

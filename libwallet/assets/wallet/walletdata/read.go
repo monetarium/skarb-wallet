@@ -35,10 +35,18 @@ func (db *DB) Read(offset, limit, txFilter int32, newestFirst bool, requiredConf
 	if limit > 0 {
 		query = query.Limit(int(limit))
 	}
+	// Type is a secondary sort key to break Timestamp ties: transactions mined
+	// in the same block share the block's timestamp, and with a single-key sort
+	// a split could render as if it happened AFTER the tickets it funded (both
+	// are usually mined together). Alphabetically "Regular" (the split) <
+	// "Ticket" < "Vote", so ascending puts the split before its tickets and
+	// Reverse() (newest first) puts the tickets above the split — matching the
+	// real spend order. Coinbase ("Coinbase") correctly sorts as the oldest row
+	// within its own block.
 	if newestFirst {
-		query = query.OrderBy("Timestamp").Reverse()
+		query = query.OrderBy("Timestamp", "Type").Reverse()
 	} else {
-		query = query.OrderBy("Timestamp")
+		query = query.OrderBy("Timestamp", "Type")
 	}
 
 	err := query.Find(transactions)
