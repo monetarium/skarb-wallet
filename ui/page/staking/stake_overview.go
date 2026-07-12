@@ -222,7 +222,12 @@ func (pg *Page) loadPageData() {
 }
 
 func (pg *Page) isTicketsPurchaseAllowed() bool {
-	return pg.AssetsManager.IsHTTPAPIPrivacyModeOff(libutils.VspAPI)
+	// The VSP HTTP-API privacy gate used to blank this whole page with a
+	// "not allowed" overlay whenever the VSP API was off — and Monetarium has
+	// no activated VSP, so the staking UI was never reviewable. Always allow:
+	// the overlay stays dormant, page data loads, and individual VSP-backed
+	// actions still fail gracefully on their own errors.
+	return true
 }
 
 // Layout draws the page UI components into the provided layout context

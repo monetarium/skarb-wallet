@@ -169,6 +169,12 @@ func NewTransactionDetailsPage(l *load.Load, wallet sharedW.Asset, transaction *
 		txDestinationAddresses: make([]string, 0),
 	}
 
+	// Splits are priced (Amount = outputs the tickets consumed) by the list
+	// fetches; a details page can also be reached with an unpriced row (the
+	// stored Amount is the fee), so re-derive here. No-op for non-splits and
+	// rows the list already priced.
+	ensureSplitAmount(wallet, transaction)
+
 	// Materialize sender-address clickables. See refreshSenderClickables
 	// for the rebuild contract — must also fire whenever pg.transaction
 	// is reassigned (ticket-spender navigation, back-stack).
@@ -451,7 +457,7 @@ func (pg *TxDetailsPage) txDetailsHeader(gtx C) D {
 										}
 
 										// immature tx section
-										p := pg.Theme.ProgressBarCircle(pg.getTimeToMatureOrExpire())
+										p := pg.Theme.ProgressBarCircle(pg.maturityProgressPercent())
 										p.Color = pg.txnWidgets.txStatus.ProgressBarColor
 										return layout.Inset{Left: values.MarginPadding10}.Layout(gtx, func(gtx C) D {
 											sz := gtx.Dp(values.MarginPadding22)
@@ -523,12 +529,16 @@ func (pg *TxDetailsPage) txDetailsHeader(gtx C) D {
 							if dcrImpl, ok := pg.wallet.(*dcr.Asset); ok {
 								switch pg.txnWidgets.txStatus.TicketStatus {
 								case dcr.TicketStatusImmature:
+									// "Mature in X of Y blocks (time)": X is the number
+									// of blocks left until the ticket goes live (the old
+									// code showed a progress PERCENTAGE there), and the
+									// time is how long those remaining blocks take (the
+									// old code showed the total maturity span, truncated
+									// to 0 when the per-block minutes were < 1).
 									maturity := dcrImpl.TicketMaturity()
-									blockTime := pg.wallet.TargetTimePerBlockMinutes()
-									maturityDuration := time.Duration(maturity*int32(blockTime)) * time.Minute
-
+									remaining := pg.getBlocksToMatureOrExpire()
 									lbl := pg.Theme.Label(values.TextSize16, values.StringF(values.StrImmatureInfo,
-										pg.getTimeToMatureOrExpire(), maturity, maturityDuration.String()))
+										remaining, maturity, formatBlockSpan(pg.wallet, remaining)))
 									lbl.Color = col
 									return lbl.Layout(gtx)
 
@@ -540,9 +550,13 @@ func (pg *TxDetailsPage) txDetailsHeader(gtx C) D {
 											return lbl.Layout(gtx)
 										}),
 										layout.Rigid(func(gtx C) D {
+											// "revoke in X of Y blocks (time)": lifetime is
+											// measured in BLOCKS (the old template said
+											// "days" and put a percentage in X).
 											expiry := dcrImpl.TicketExpiry()
+											remaining := pg.getBlocksToMatureOrExpire()
 											lbl := pg.Theme.Label(values.TextSize16, values.StringF(values.StrLiveInfoDisc,
-												expiry, pg.getTimeToMatureOrExpire(), expiry))
+												remaining, expiry, formatBlockSpan(pg.wallet, remaining)))
 											lbl.Color = col
 											return lbl.Layout(gtx)
 										}),
@@ -609,22 +623,69 @@ func (pg *TxDetailsPage) txDetailsHeader(gtx C) D {
 	)
 }
 
-func (pg *TxDetailsPage) getTimeToMatureOrExpire() int {
-	var progress float32
-	if dcrImpl, ok := pg.wallet.(*dcr.Asset); ok {
-		progressMax := dcrImpl.TicketMaturity()
-		if pg.txnWidgets.txStatus.TicketStatus == dcr.TicketStatusLive {
-			progressMax = dcrImpl.TicketExpiry()
-		}
-
-		confs := dcr.Confirmations(pg.wallet.GetBestBlockHeight(), pg.transaction)
-		if pg.ticketSpender != nil {
-			confs = dcr.Confirmations(pg.wallet.GetBestBlockHeight(), pg.ticketSpender)
-		}
-
-		progress = (float32(confs) / float32(progressMax)) * 100
+// maturityProgressPercent returns how far an immature ticket has progressed
+// toward going live, as 0-100 for the circular progress widget.
+func (pg *TxDetailsPage) maturityProgressPercent() int {
+	dcrImpl, ok := pg.wallet.(*dcr.Asset)
+	if !ok {
+		return 0
 	}
-	return int(progress)
+	maturity := dcrImpl.TicketMaturity()
+	if maturity <= 0 {
+		return 0
+	}
+	confs := dcr.Confirmations(pg.wallet.GetBestBlockHeight(), pg.transaction)
+	p := int(float32(confs) / float32(maturity) * 100)
+	if p > 100 {
+		p = 100
+	}
+	if p < 0 {
+		p = 0
+	}
+	return p
+}
+
+// getBlocksToMatureOrExpire returns how many blocks remain until the ticket
+// leaves its current stage: until it goes live for an immature ticket, until
+// it expires (becomes revocable) for a live one. Mirrors the boundaries of
+// dcr.TicketStatus — immature while confs <= maturity, expired once
+// confs > maturity+expiry — so the count reaches 0 exactly when the status
+// flips.
+func (pg *TxDetailsPage) getBlocksToMatureOrExpire() int32 {
+	dcrImpl, ok := pg.wallet.(*dcr.Asset)
+	if !ok {
+		return 0
+	}
+	confs := dcr.Confirmations(pg.wallet.GetBestBlockHeight(), pg.transaction)
+	remaining := dcrImpl.TicketMaturity() + 1 - confs
+	if pg.txnWidgets.txStatus.TicketStatus == dcr.TicketStatusLive {
+		remaining = dcrImpl.TicketMaturity() + dcrImpl.TicketExpiry() + 1 - confs
+	}
+	if remaining < 0 {
+		remaining = 0
+	}
+	return remaining
+}
+
+// formatBlockSpan renders how long `blocks` take on this chain as a compact
+// human duration ("8d 12h", "1h 28m", "32m"). Uses the chain's target
+// per-block time without integer truncation (the old code cast the per-block
+// minutes to int32, which is 0 on sub-minute chains).
+func formatBlockSpan(wallet sharedW.Asset, blocks int32) string {
+	d := time.Duration(float64(blocks) * wallet.TargetTimePerBlockMinutes() * float64(time.Minute))
+	d = d.Round(time.Minute)
+	days := d / (24 * time.Hour)
+	d -= days * 24 * time.Hour
+	hours := d / time.Hour
+	mins := d % time.Hour / time.Minute
+	switch {
+	case days > 0:
+		return fmt.Sprintf("%dd %dh", days, hours)
+	case hours > 0:
+		return fmt.Sprintf("%dh %dm", hours, mins)
+	default:
+		return fmt.Sprintf("%dm", mins)
+	}
 }
 
 func (pg *TxDetailsPage) keyValue(gtx C, key string, value layout.Widget) D {
@@ -761,7 +822,13 @@ func (pg *TxDetailsPage) txnTypeAndID(gtx C) D {
 			if pg.transaction.Type == txhelper.TxTypeTicketPurchase {
 				return D{}
 			}
-			return pg.keyValue(gtx, values.String(values.StrType), pg.Theme.Label(values.TextSize14, pg.transaction.Type).Layout)
+			// A split keeps consensus Type "Regular"; surface the
+			// classification so it doesn't read as a plain transfer.
+			typeText := pg.transaction.Type
+			if dcr.IsSplitTx(pg.transaction) {
+				typeText = fmt.Sprintf("%s (%s)", typeText, values.String(values.StrSplit))
+			}
+			return pg.keyValue(gtx, values.String(values.StrType), pg.Theme.Label(values.TextSize14, typeText).Layout)
 		}),
 		layout.Rigid(func(gtx C) D {
 			// hide section for non ticket transactions
@@ -1090,6 +1157,15 @@ func (pg *TxDetailsPage) HandleUserInteractions(gtx C) {
 	// until the user navigates away and back.
 	if pg.pendingTxRefresh.CompareAndSwap(true, false) {
 		if updated, err := pg.wallet.GetTransactionRaw(pg.transaction.Hash); err == nil && updated != nil {
+			// A fresh single-tx decode of a split carries the stored fee as its
+			// Amount — re-derive the ticket-consumed sum so the header doesn't
+			// silently flip from e.g. "205 VAR" to the fee on the next attached
+			// block. If the tickets can't be found, keep the already-priced
+			// value from the list that opened this page.
+			ensureSplitAmount(pg.wallet, updated)
+			if dcr.IsSplitTx(updated) && pg.transaction.Amount > updated.Amount {
+				updated.Amount = pg.transaction.Amount
+			}
 			pg.transaction = updated
 			pg.txnWidgets = pg.initTxnWidgets()
 			pg.refreshSenderClickables() // tx reassigned; clickable pool must follow

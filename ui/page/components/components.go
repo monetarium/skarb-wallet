@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"image/color"
 	"io"
+	"math"
 	"net/http"
 	"os/exec"
 	"runtime"
@@ -241,9 +242,31 @@ func TransactionTitleIcon(l *load.Load, wal sharedW.Asset, tx *sharedW.Transacti
 	} else if tx.Type == txhelper.TxTypeMixed {
 		txStatus.Title = values.String(values.StrMixed)
 		txStatus.Icon = l.Theme.Icons.MixedTx
+	} else if dcr.IsSplitTx(tx) {
+		// A split prepares VAR for ticket purchases: title it explicitly and
+		// swap the yellow Transferred icon for the blue "shuffle" one.
+		txStatus.Title = values.String(values.StrSplit)
+		txStatus.Icon = l.Theme.Icons.MixedTx
+	} else if tx.Type == txhelper.TxTypeCoinBase || tx.IsStakeFee {
+		// Consensus rewards otherwise render as a plain "Received": name the
+		// source instead — coinbase and a miner-fee (MF) SSFee are the PoW
+		// side, a staker-fee (SF) SSFee is the PoS side.
+		if tx.IsStakeFee && tx.StakeFeeKind == "SF" {
+			txStatus.Title = values.String(values.StrPoSReward)
+		} else {
+			txStatus.Title = values.String(values.StrPoWReward)
+		}
 	}
 
 	return &txStatus
+}
+
+// isPlainRegularRow reports whether the row is a plain Regular transfer that
+// renders as a bare amount with no title. Splits and stake-fee rewards keep
+// Type "Regular" by consensus but carry a row title (Split / PoW / PoS
+// Reward), so they must take the titled layout path instead.
+func isPlainRegularRow(tx *sharedW.Transaction) bool {
+	return tx.Type == txhelper.TxTypeRegular && !tx.IsStakeFee && !dcr.IsSplitTx(tx)
 }
 
 // LayoutTransactionRow is a single transaction row on the transactions and overview
@@ -291,7 +314,7 @@ func LayoutTransactionRow(gtx C, l *load.Load, wal sharedW.Asset, tx *sharedW.Tr
 				Direction:   layout.Center,
 			}.Layout(gtx,
 				layout.Rigid(func(gtx C) D {
-					if tx.Type == txhelper.TxTypeRegular {
+					if isPlainRegularRow(tx) {
 						amount := dcr.FormatTxAmountBig(tx.AmountAtoms, tx.Amount, tx.CoinType)
 						if tx.Direction == txhelper.TxDirectionSent && !strings.Contains(amount, "-") {
 							amount = "-" + amount
@@ -301,7 +324,7 @@ func LayoutTransactionRow(gtx C, l *load.Load, wal sharedW.Asset, tx *sharedW.Tr
 					return txTitleAndWalletInfoHorizontal(gtx, l, assetIcon, walName, txStatus, hideTxAssetInfo)
 				}),
 				layout.Rigid(func(gtx C) D {
-					if !hideTxAssetInfo && tx.Type == txhelper.TxTypeRegular {
+					if !hideTxAssetInfo && isPlainRegularRow(tx) {
 						return walletIconAndName(gtx, assetIcon, walName)
 					}
 					return cryptomaterial.LinearLayout{
@@ -312,7 +335,7 @@ func LayoutTransactionRow(gtx C, l *load.Load, wal sharedW.Asset, tx *sharedW.Tr
 						Direction:   layout.W,
 					}.Layout(gtx,
 						layout.Rigid(func(gtx C) D {
-							if tx.Type == txhelper.TxTypeRegular {
+							if isPlainRegularRow(tx) {
 								return D{}
 							}
 
@@ -418,14 +441,41 @@ func LayoutTransactionRow(gtx C, l *load.Load, wal sharedW.Asset, tx *sharedW.Tr
 											return txStakingStatus(gtx, l, wal, tx)
 										}
 
-										title := values.String(values.StrRevoke)
-										if tx.Type == txhelper.TxTypeVote {
-											title = values.String(values.StrVote)
+										if tx.Type == txhelper.TxTypeVote || tx.Type == txhelper.TxTypeRevocation {
+											// Spender rows: DaysToVoteOrRevoke holds how long the
+											// ticket took to vote / get revoked (decode writes it
+											// on the spender tx only).
+											title := values.String(values.StrRevoke)
+											if tx.Type == txhelper.TxTypeVote {
+												title = values.String(values.StrVote)
+											}
+											lbl := l.Theme.Label(l.ConvertTextSize(values.TextSize16), fmt.Sprintf("%dd to %s", tx.DaysToVoteOrRevoke, title))
+											lbl.Color = grayText
+											return lbl.Layout(gtx)
 										}
-
-										lbl := l.Theme.Label(l.ConvertTextSize(values.TextSize16), fmt.Sprintf("%dd to %s", tx.DaysToVoteOrRevoke, title))
-										lbl.Color = grayText
-										return lbl.Layout(gtx)
+										// Ticket rows: DaysToVoteOrRevoke is never written on the
+										// purchase tx (the old code always rendered "0d"). What
+										// the row needs is a COUNTDOWN — the lifetime left before
+										// an unvoted ticket becomes revocable, i.e. the blocks
+										// until maturity+expiry runs out, as wall-clock days.
+										if dcrImpl, ok := wal.(*dcr.Asset); ok && tx.Type == txhelper.TxTypeTicketPurchase {
+											maturity, expiry := dcrImpl.TicketMaturity(), dcrImpl.TicketExpiry()
+											best := wal.GetBestBlockHeight()
+											switch dcr.TicketStatus(maturity, expiry, best, tx) {
+											case dcr.TicketStatusUnmined, dcr.TicketStatusImmature, dcr.TicketStatusLive:
+												remaining := maturity + expiry + 1 - dcr.Confirmations(best, tx)
+												if remaining < 0 {
+													remaining = 0
+												}
+												days := int(math.Ceil(float64(remaining) * wal.TargetTimePerBlockMinutes() / (24 * 60)))
+												lbl := l.Theme.Label(l.ConvertTextSize(values.TextSize16), fmt.Sprintf("%dd to %s", days, values.String(values.StrRevoke)))
+												lbl.Color = grayText
+												return lbl.Layout(gtx)
+											}
+										}
+										// Voted / revoked / expired tickets: no countdown — show
+										// the plain confirmation status like any other row.
+										return status.Layout(gtx)
 									}),
 									layout.Rigid(func(gtx C) D {
 										return layout.Inset{Left: values.MarginPadding7}.Layout(gtx, statusIcon.Layout12dp)
@@ -631,17 +681,19 @@ func TxPageDropDownFields(wType libutils.AssetType, tabIndex int) (mapInfo map[s
 		// currently always empty (missed tickets are not detectable over SPV — see
 		// TxMatchesFilter), but is kept for parity with the staking categories.
 		mapInfo = map[string]int32{
-			values.String(values.StrAll):      libutils.TxFilterStakingList,
-			values.String(values.StrSplit):    libutils.TxFilterSplit,
-			values.String(values.StrUmined):   libutils.TxFilterUnmined,
-			values.String(values.StrImmature): libutils.TxFilterImmature,
-			values.String(values.StrLive):     libutils.TxFilterLive,
-			values.String(values.StrMissed):   libutils.TxFilterMissed,
-			values.String(values.StrExpired):  libutils.TxFilterExpired,
-			values.String(values.StrVoted):    libutils.TxFilterTicketVoted,
+			values.String(values.StrAll):             libutils.TxFilterStakingList,
+			values.String(values.StrAllWithoutSplit): libutils.TxFilterStakingNoSplit,
+			values.String(values.StrSplit):           libutils.TxFilterSplit,
+			values.String(values.StrUmined):          libutils.TxFilterUnmined,
+			values.String(values.StrImmature):        libutils.TxFilterImmature,
+			values.String(values.StrLive):            libutils.TxFilterLive,
+			values.String(values.StrMissed):          libutils.TxFilterMissed,
+			values.String(values.StrExpired):         libutils.TxFilterExpired,
+			values.String(values.StrVoted):           libutils.TxFilterTicketVoted,
 		}
 		keysInfo = []string{
 			values.String(values.StrAll),
+			values.String(values.StrAllWithoutSplit),
 			values.String(values.StrSplit),
 			values.String(values.StrUmined),
 			values.String(values.StrImmature),

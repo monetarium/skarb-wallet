@@ -371,6 +371,11 @@ func NewTransactionsPageWithType(l *load.Load, selectedTab int, wallet sharedW.A
 	pg.orderDropDown.CollapsedLayoutTextDirection = layout.E
 	settingCommonDropdown(pg.Theme, pg.orderDropDown)
 	pg.orderDropDown.SetConvertTextSize(pg.ConvertTextSize)
+	// Without this the Assets filter never exists on pages opened via the
+	// Info page "View All" buttons (rightDropdown nil-checks it away), and
+	// with a pre-selected wallet no walletDropDown.Changed event can ever
+	// rebuild it either.
+	pg.initCoinTypeDropdown()
 	return pg
 }
 
@@ -529,6 +534,14 @@ func (pg *TransactionsPage) snapshotView() txView {
 	if pg.coinTypeDropDown != nil {
 		v.coinSymbol = pg.coinTypeDropDown.Selected()
 	}
+	// The Staking tab is VAR-only and hides the Assets dropdown, so a coin
+	// selection left over from another tab must not (invisibly) filter it —
+	// a stale SKA pick would empty the tab with no visible control to undo
+	// it. Neutralizing here also keeps the tx cache key stable for the tab.
+	if v.categoryTab == 1 {
+		v.coinType = nil
+		v.coinSymbol = ""
+	}
 	v.txFilter = pg.resolveTxFilter(v)
 	return v
 }
@@ -671,6 +684,29 @@ func (pg *TransactionsPage) loadAllTransactions(v txView) ([]*multiWalletTx, err
 		}
 	}
 
+	// Price the split rows (Amount = the outputs their tickets consumed) while
+	// the coarse superset still holds the ticket rows — the coin-type filter
+	// and reclassification below may drop them.
+	all := make([]*sharedW.Transaction, 0, len(raw))
+	for _, mw := range raw {
+		if mw.Transaction != nil {
+			all = append(all, mw.Transaction)
+		}
+	}
+	dcr.ApplySplitAmounts(all)
+
+	// A hash search bypasses the coarse superset (the DB returns only the
+	// matched tx), so a searched split has no ticket rows to price against
+	// and would show its fee. Re-derive from the ticket index directly.
+	if v.searchKey != "" {
+		for _, mw := range raw {
+			if mw.Transaction != nil {
+				_, wal := pg.txAndWallet(mw)
+				ensureSplitAmount(wal, mw.Transaction)
+			}
+		}
+	}
+
 	raw = pg.filterByCoinType(v, raw)
 	// Reclassify into the selected sub-tab (Regular / Staking / Reward) over the
 	// decoded rows. The DB fetch used a COARSE filter (coarseFetchFilter) because
@@ -692,6 +728,32 @@ func (pg *TransactionsPage) loadAllTransactions(v txView) ([]*multiWalletTx, err
 	return raw, nil
 }
 
+// ensureSplitAmount prices a single split transaction's Amount (the sum of
+// outputs its ticket purchases consumed) when the tx arrives from a path that
+// carries no ticket rows alongside it — a hash search, a direct details open,
+// or a single-tx refresh. It pages the newest tickets down to the split's
+// timestamp (a spender is never older than its split) and runs
+// dcr.ApplySplitAmounts over {split + tickets}. No-op for non-splits; a split
+// whose tickets can't be found keeps its stored Amount (the fee).
+func ensureSplitAmount(wal sharedW.Asset, tx *sharedW.Transaction) {
+	if wal == nil || tx == nil || !dcr.IsSplitTx(tx) {
+		return
+	}
+	const ticketPage = int32(200)
+	supplement := []*sharedW.Transaction{tx}
+	for page := int32(0); page < 10; page++ {
+		tickets, err := wal.GetTransactionsRaw(page*ticketPage, ticketPage, utils.TxFilterTickets, true, "")
+		if err != nil || len(tickets) == 0 {
+			break
+		}
+		supplement = append(supplement, tickets...)
+		if tickets[len(tickets)-1].Timestamp < tx.Timestamp || int32(len(tickets)) < ticketPage {
+			break
+		}
+	}
+	dcr.ApplySplitAmounts(supplement)
+}
+
 // coarseFetchFilter maps a logical (tab,status) filter to a DB-supported filter
 // for the GetTransactionsRaw fetch. prepareTxQuery (walletdata/filter.go) only
 // understands the legacy filters (0-14); the reclassification filters (15-23)
@@ -709,13 +771,19 @@ func coarseFetchFilter(logical int32) int32 {
 	switch logical {
 	case utils.TxFilterTicketVoted:
 		return utils.TxFilterTickets // voted ⊆ tickets; spender==vote refined in UI
-	case utils.TxFilterSplit, utils.TxFilterStakeFee, utils.TxFilterRegularList:
-		// Split, stake-fee and the Regular-tab "All" are all Regular/Mixed-typed
-		// (an SSFee keeps Type=Regular), fully covered by TxFilterAll — no need to
-		// scan the stake rows.
+	case utils.TxFilterStakingNoSplit:
+		return utils.TxFilterTickets // tickets only — the DB Tickets filter is already exact
+	case utils.TxFilterStakeFee, utils.TxFilterRegularList:
+		// Stake-fee and the Regular-tab "All" are Regular/Mixed-typed (an SSFee
+		// keeps Type=Regular), fully covered by TxFilterAll — no need to scan
+		// the stake rows.
 		return utils.TxFilterAll
-	case utils.TxFilterStakingList, utils.TxFilterRewardList, utils.TxFilterRewardPoW,
+	case utils.TxFilterSplit, utils.TxFilterStakingList, utils.TxFilterRewardList, utils.TxFilterRewardPoW,
 		utils.TxFilterRewardPoS, utils.TxFilterMissed:
+		// TxFilterSplit is deliberately NOT collapsed onto TxFilterAll even
+		// though splits are Regular-typed: dcr.ApplySplitAmounts needs the
+		// ticket rows alongside the splits to price them, and TxFilterAll
+		// excludes tickets.
 		// Need ticket / vote / revocation rows that TxFilterAll omits. Pass the
 		// logical value through so prepareTxQuery's default returns q.True().
 		return logical
@@ -749,17 +817,20 @@ func (pg *TransactionsPage) keepForTab(v txView, mw *multiWalletTx) bool {
 		// type restriction is what keeps the three tabs mutually exclusive — a
 		// ticket must NOT also appear here.
 		return (tx.Type == txhelper.TxTypeRegular || tx.Type == txhelper.TxTypeMixed) &&
-			!tx.IsStakeFee && !isRegularTabSplitTx(tx)
+			!tx.IsStakeFee && !dcr.IsSplitTx(tx)
 	case 1: // Staking
 		switch v.txFilter {
 		case utils.TxFilterSplit:
-			return isRegularTabSplitTx(tx)
+			return dcr.IsSplitTx(tx)
 		case utils.TxFilterMissed:
 			return false // missed tickets aren't detectable over SPV — always empty
 		case utils.TxFilterTicketVoted:
 			return tx.Type == txhelper.TxTypeTicketPurchase && pg.ticketVoted(mw)
 		case utils.TxFilterStakingList: // "All" = tickets + splits
-			return tx.Type == txhelper.TxTypeTicketPurchase || isRegularTabSplitTx(tx)
+			return tx.Type == txhelper.TxTypeTicketPurchase || dcr.IsSplitTx(tx)
+		case utils.TxFilterStakingNoSplit:
+			// "All without Split": every ticket purchase, no split rows.
+			return tx.Type == txhelper.TxTypeTicketPurchase
 		default: // Unmined / Immature / Live / Expired — coarse filter already exact
 			return tx.Type == txhelper.TxTypeTicketPurchase
 		}
@@ -818,39 +889,6 @@ func (pg *TransactionsPage) ticketVoted(mw *multiWalletTx) bool {
 		return false
 	}
 	return spender.Type == txhelper.TxTypeVote
-}
-
-// isRegularTabSplitTx reports whether tx is a split transaction: every input and
-// output on the wallet's default account (number 0). Mirrors the backend
-// isSplitTx classifier used by TxFilterSplit / TxFilterRegularList. Confirmation
-// is NOT required — an unmined (or not-yet-resync'd, BlockHeight still -1)
-// default->default self-transfer still belongs on the Staking tab, not Regular
-// (tasks 4 & 5). A send to an external party is excluded: its recipient output
-// carries AccountNumber == -1, failing the all-outputs-on-account-0 test below.
-func isRegularTabSplitTx(tx *sharedW.Transaction) bool {
-	if tx.Type != txhelper.TxTypeRegular {
-		return false
-	}
-	// Splits prepare VAR for ticket purchases and staking is VAR-only, so
-	// a same-account SKA transfer (e.g. a send to one's own account) is
-	// never a split — it stays on the Regular tab.
-	if tx.CoinType != uint8(cointype.CoinTypeVAR) {
-		return false
-	}
-	if len(tx.Inputs) == 0 || len(tx.Outputs) == 0 {
-		return false
-	}
-	for _, in := range tx.Inputs {
-		if in.AccountNumber != 0 {
-			return false
-		}
-	}
-	for _, out := range tx.Outputs {
-		if out.AccountNumber != 0 {
-			return false
-		}
-	}
-	return true
 }
 
 // filterByCoinType drops any transactions whose CoinType differs from the
@@ -1097,7 +1135,9 @@ func (pg *TransactionsPage) rightDropdown(gtx C) D {
 		return layout.Flex{}.Layout(gtx,
 			layout.Rigid(pg.statusDropDown.Layout),
 			layout.Rigid(func(gtx C) D {
-				if pg.coinTypeDropDown == nil {
+				// The Staking tab is VAR-only (tickets and splits), so an
+				// Assets filter there is noise — hide it on that tab.
+				if pg.coinTypeDropDown == nil || pg.selectedTxCategoryTab == 1 {
 					return D{}
 				}
 				return pg.coinTypeDropDown.Layout(gtx)

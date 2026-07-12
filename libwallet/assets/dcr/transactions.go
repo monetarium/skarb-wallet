@@ -42,6 +42,8 @@ const (
 	TxFilterRewardPoW   = utils.TxFilterRewardPoW
 	TxFilterRewardPoS   = utils.TxFilterRewardPoS
 
+	TxFilterStakingNoSplit = utils.TxFilterStakingNoSplit
+
 	TxDirectionInvalid     = txhelper.TxDirectionInvalid
 	TxDirectionSent        = txhelper.TxDirectionSent
 	TxDirectionReceived    = txhelper.TxDirectionReceived
@@ -266,8 +268,8 @@ func (asset *Asset) TxMatchesFilter(tx *sharedW.Transaction, txFilter int32) boo
 		// returns to the default account (0) only — i.e. it just splits the
 		// default account's own coins (e.g. preparing ticket-sized outputs)
 		// without touching any other account or an external party. Mined or
-		// not (see isSplitTx).
-		return isSplitTx(tx)
+		// not (see IsSplitTx).
+		return IsSplitTx(tx)
 	case TxFilterStakeFee:
 		return tx.IsStakeFee
 	case TxFilterTicketVoted:
@@ -287,9 +289,12 @@ func (asset *Asset) TxMatchesFilter(tx *sharedW.Transaction, txFilter int32) boo
 		return spender != nil && spender.Type == TxTypeVote
 	case TxFilterRegularList:
 		return (tx.Type == TxTypeRegular || tx.Type == TxTypeMixed) &&
-			!isSplitTx(tx) && !tx.IsStakeFee
+			!IsSplitTx(tx) && !tx.IsStakeFee
 	case TxFilterStakingList:
-		return tx.Type == TxTypeTicketPurchase || isSplitTx(tx)
+		return tx.Type == TxTypeTicketPurchase || IsSplitTx(tx)
+	case TxFilterStakingNoSplit:
+		// Staking "All without Split": every ticket purchase, no split rows.
+		return tx.Type == TxTypeTicketPurchase
 	case TxFilterRewardList:
 		return tx.Type == TxTypeCoinBase || tx.IsStakeFee ||
 			tx.Type == TxTypeVote || tx.Type == TxTypeRevocation
@@ -311,7 +316,7 @@ func (asset *Asset) TxMatchesFilter(tx *sharedW.Transaction, txFilter int32) boo
 	return false
 }
 
-// isSplitTx reports whether tx is a "split" transaction: a Regular spend (mined
+// IsSplitTx reports whether tx is a "split" transaction: a Regular spend (mined
 // or unmined) whose every input and every output belongs to the default account
 // (account 0). Used by TxFilterSplit, TxFilterRegularList and TxFilterStakingList.
 //
@@ -327,7 +332,7 @@ func (asset *Asset) TxMatchesFilter(tx *sharedW.Transaction, txFilter int32) boo
 // in/out is not owned by this wallet). TxMatchesFilter is only ever called on
 // such decoded transactions (the UI passes the result of DecodeTransaction /
 // GetTransactionsRaw), so the account fields are available here.
-func isSplitTx(tx *sharedW.Transaction) bool {
+func IsSplitTx(tx *sharedW.Transaction) bool {
 	if tx.Type != TxTypeRegular {
 		return false
 	}
@@ -351,6 +356,43 @@ func isSplitTx(tx *sharedW.Transaction) bool {
 		}
 	}
 	return true
+}
+
+// ApplySplitAmounts rewrites each split transaction's Amount to the sum of its
+// outputs that ticket purchases actually consumed — i.e. "all outputs minus
+// change". The int64 classifier reports amount == fee for a split (every input
+// AND output is on the default account, so everything looks like change), and
+// the split's ticket-funding outputs can't be told apart from its change within
+// the tx itself: individualSplit (monetarium-wallet createtx.go) pays them to an
+// INTERNAL-branch address just like the change output. The only exact signal is
+// cross-tx: an output is ticket-funding iff a ticket purchase spends it. txs
+// must therefore contain the ticket purchases alongside the splits (any coarse
+// superset fetch does); a split whose tickets are absent keeps its stored
+// Amount (the fee) as a fallback. Mutation is by pointer and idempotent, so
+// repeated application over cached rows is safe.
+func ApplySplitAmounts(txs []*sharedW.Transaction) {
+	consumed := make(map[string]int64)
+	for _, tx := range txs {
+		if tx == nil || tx.Type != TxTypeTicketPurchase {
+			continue
+		}
+		for _, in := range tx.Inputs {
+			if in.PreviousTransactionHash != "" && in.Amount > 0 {
+				consumed[in.PreviousTransactionHash] += in.Amount
+			}
+		}
+	}
+	if len(consumed) == 0 {
+		return
+	}
+	for _, tx := range txs {
+		if tx == nil || !IsSplitTx(tx) {
+			continue
+		}
+		if sum, ok := consumed[tx.Hash]; ok && sum > 0 {
+			tx.Amount = sum
+		}
+	}
 }
 
 func (asset *Asset) TxMatchesFilter2(direction, blockHeight int32, txType, ticketSpender string, txFilter int32) bool {
