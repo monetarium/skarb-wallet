@@ -986,18 +986,12 @@ func (pg *Page) addSendDestination() (sharedW.AssetAmount, sharedW.AssetAmount, 
 	// toggle), the sender spends EXACTLY the entered amount — the fee comes
 	// out of the recipient's output, so it must NOT be added to
 	// "Загальна сума" or reduce "Баланс після відправлення" beyond the
-	// amount itself. SFFA never applies to a SendMax recipient (that sweeps
-	// the whole balance via change), so only skip the fee-add when no
-	// recipient is SendMax.
+	// amount itself. This applies to SendMax too: a Max sweep with the
+	// checkbox on shows the FULL spendable in the amount field (the receiver
+	// gets spendable − fee, which is what the sweep's changeSource authoring
+	// already delivers), so the fee must not be folded into the totals a
+	// second time.
 	sffaApplies := pg.subtractFeeFromRecipient
-	if sffaApplies {
-		for _, recipient := range pg.recipients {
-			if _, _, sm := recipient.validAmountBig(); sm {
-				sffaApplies = false
-				break
-			}
-		}
-	}
 	if !sffaApplies {
 		// EstimateFeeAndSize returns ONE fee for the whole serialized tx, not a
 		// per-output fee. Add it exactly once — the old `feeAtom * len(recipients)`
@@ -1035,12 +1029,21 @@ func (pg *Page) addSendDestination() (sharedW.AssetAmount, sharedW.AssetAmount, 
 		if !SendMax {
 			continue
 		}
-		// Compute spendable - fee losslessly in big.Int. Fall through to
-		// the int64 path only when no big-int spendable was computed
-		// (defensive — addSendDestination always sets spendableBig).
+		// Compute the Max fill losslessly in big.Int. With "subtract fee
+		// from recipient" on, the fill is the FULL spendable (the fee comes
+		// out of the swept amount — the sweep authoring already delivers
+		// spendable − fee to the receiver); otherwise it is spendable − fee.
+		// Fall through to the int64 path only when no big-int spendable was
+		// computed (defensive — addSendDestination always sets spendableBig).
 		var maxBig *big.Int
 		if spendableBig != nil {
-			maxBig = new(big.Int).Sub(spendableBig, feeBig)
+			if pg.subtractFeeFromRecipient {
+				maxBig = new(big.Int).Set(spendableBig)
+			} else {
+				maxBig = new(big.Int).Sub(spendableBig, feeBig)
+			}
+		} else if pg.subtractFeeFromRecipient {
+			maxBig = big.NewInt(spendableAmount)
 		} else {
 			maxBig = big.NewInt(spendableAmount - feeAtom)
 		}

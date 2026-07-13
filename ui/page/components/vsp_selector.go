@@ -29,6 +29,10 @@ type VSPSelector struct {
 	changed      bool
 	showVSPModal *cryptomaterial.Clickable
 	selectedVSP  *dcr.VSP
+	// allowDirectBuy adds the synthetic "Direct buy (solo)" entry to the
+	// picker. Opt-in per call site: the manual purchase flow supports a
+	// no-VSP purchase, the auto-buyer does not.
+	allowDirectBuy bool
 }
 
 func NewVSPSelector(l *load.Load, dcrWallet *dcr.Asset) *VSPSelector {
@@ -45,6 +49,12 @@ func (v *VSPSelector) Title(title string) *VSPSelector {
 	return v
 }
 
+// AllowDirectBuy enables the synthetic "Direct buy (solo)" picker entry.
+func (v *VSPSelector) AllowDirectBuy() *VSPSelector {
+	v.allowDirectBuy = true
+	return v
+}
+
 func (v *VSPSelector) Changed() bool {
 	changed := v.changed
 	v.changed = false
@@ -52,6 +62,16 @@ func (v *VSPSelector) Changed() bool {
 }
 
 func (v *VSPSelector) SelectVSP(vspHost string) {
+	// An empty host is the Direct-buy sentinel — but only when this selector
+	// opted into it (the auto-buyer restores its saved config host through
+	// here, and an unset config must not preselect Direct buy).
+	if vspHost == "" {
+		if v.allowDirectBuy {
+			v.changed = true
+			v.selectedVSP = dcr.DirectBuyVSP
+		}
+		return
+	}
 	for _, vsp := range v.dcrWallet.KnownVSPs() {
 		if vsp.Host == vspHost {
 			v.changed = true
@@ -69,6 +89,8 @@ func (v *VSPSelector) handle(gtx C, window app.WindowNavigator) {
 	if v.showVSPModal.Clicked(gtx) {
 		modal := newVSPSelectorModal(v.Load, v.dcrWallet).
 			title(values.String(values.StrVotingServiceProvider)).
+			allowDirectBuy(v.allowDirectBuy).
+			selected(v.selectedVSP).
 			vspSelected(func(info *dcr.VSP) {
 				v.SelectVSP(info.Host)
 			})
@@ -96,13 +118,19 @@ func (v *VSPSelector) Layout(window app.WindowNavigator, gtx C) D {
 							txt.Color = v.Theme.Color.GrayText3
 							return txt.Layout(gtx)
 						}
+						if v.selectedVSP.IsDirectBuy() {
+							return v.Theme.Label(textSize16, values.String(values.StrDirectBuy)).Layout(gtx)
+						}
 						return v.Theme.Label(textSize16, v.selectedVSP.Host).Layout(gtx)
 					}),
 					layout.Flexed(1, func(gtx C) D {
 						return layout.E.Layout(gtx, func(gtx C) D {
 							return layout.Flex{}.Layout(gtx,
 								layout.Rigid(func(gtx C) D {
-									if v.selectedVSP == nil {
+									// FeePercentage promotes from the embedded
+									// *VspInfoResponse, which is nil for the
+									// Direct-buy sentinel — no fee to show.
+									if v.selectedVSP == nil || v.selectedVSP.VspInfoResponse == nil {
 										return D{}
 									}
 									txt := v.Theme.Label(textSize16, fmt.Sprintf("%v%%", v.selectedVSP.FeePercentage))
@@ -140,6 +168,8 @@ type vspSelectorModal struct {
 	vspList     *cryptomaterial.ClickableList
 
 	vspSelectedCallback func(*dcr.VSP)
+	// showDirectBuy prepends the synthetic "Direct buy (solo)" row.
+	showDirectBuy bool
 
 	dcrImpl *dcr.Asset
 
@@ -205,8 +235,18 @@ func (v *vspSelectorModal) Handle(gtx C) {
 	if clicked, selectedItem := v.vspList.ItemClicked(); clicked {
 		// Snapshot once and bounds-check: ReloadVSPList runs in a goroutine and
 		// can replace the list with a shorter one between the click frame and
-		// now, making selectedItem out of range.
+		// now, making selectedItem out of range. With Direct buy enabled the
+		// synthetic row occupies index 0 and real VSPs shift by one.
 		vsps := v.dcrImpl.KnownVSPs()
+		if v.showDirectBuy {
+			if selectedItem == 0 {
+				v.selectedVSP = dcr.DirectBuyVSP
+				v.vspSelectedCallback(v.selectedVSP)
+				v.Dismiss()
+				return
+			}
+			selectedItem--
+		}
 		if selectedItem >= 0 && selectedItem < len(vsps) {
 			v.selectedVSP = vsps[selectedItem]
 			v.vspSelectedCallback(v.selectedVSP)
@@ -222,6 +262,20 @@ func (v *vspSelectorModal) title(title string) *vspSelectorModal {
 
 func (v *vspSelectorModal) vspSelected(callback func(*dcr.VSP)) *vspSelectorModal {
 	v.vspSelectedCallback = callback
+	return v
+}
+
+func (v *vspSelectorModal) allowDirectBuy(allow bool) *vspSelectorModal {
+	v.showDirectBuy = allow
+	return v
+}
+
+// selected seeds the modal's current selection from the collapsed control so
+// the checkmark marks the active entry. Without this the modal always opened
+// with selectedVSP == nil (it is recreated on every open and only assigned on
+// the click that immediately dismisses it), so the checkmark never rendered.
+func (v *vspSelectorModal) selected(vsp *dcr.VSP) *vspSelectorModal {
+	v.selectedVSP = vsp
 	return v
 }
 
@@ -254,22 +308,56 @@ func (v *vspSelectorModal) Layout(gtx C) D {
 					return EndToEndRow(gtx, txt.Layout, txtFee.Layout)
 				}),
 				layout.Rigid(func(gtx C) D {
-					// if VSP(s) are being loaded, show loading UI.
-					if v.isLoadingVSP.Load() {
+					// if VSP(s) are being loaded, show loading UI — unless the
+					// Direct-buy row is enabled: it needs no network, so keep
+					// the list (with Direct buy clickable) and show a smaller
+					// loader below it instead.
+					if v.isLoadingVSP.Load() && !v.showDirectBuy {
 						return layout.UniformInset(values.MarginPadding140).Layout(gtx, v.materialLoader.Layout)
 					}
 
-					// if no vsp loaded, display a no vsp text
+					// if no vsp loaded, display a no vsp text (the synthetic
+					// Direct-buy row still renders when enabled).
 					vsps := v.dcrImpl.KnownVSPs()
-					if len(vsps) == 0 && !v.isLoadingVSP.Load() {
+					if len(vsps) == 0 && !v.showDirectBuy && !v.isLoadingVSP.Load() {
 						noVsp := v.Theme.Label(textSize14, values.String(values.StrNoVSPLoaded))
 						noVsp.Color = v.Theme.Color.GrayText2
 						return layout.Inset{Top: values.MarginPadding5}.Layout(gtx, noVsp.Layout)
 					}
 
-					return v.vspList.Layout(gtx, len(vsps), func(gtx C, i int) D {
+					rows := len(vsps)
+					if v.showDirectBuy {
+						rows++ // synthetic "Direct buy (solo)" row at index 0
+					}
+					return v.vspList.Layout(gtx, rows, func(gtx C, i int) D {
 						// Show scrollbar on VSP selector modal
 						v.Modal.ShowScrollbar(true)
+						if v.showDirectBuy {
+							if i == 0 {
+								return layout.Flex{Alignment: layout.Middle}.Layout(gtx,
+									layout.Flexed(0.8, func(gtx C) D {
+										return layout.Inset{Top: values.MarginPadding12, Bottom: values.MarginPadding12}.Layout(gtx, func(gtx C) D {
+											return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
+												layout.Rigid(v.Theme.Label(textSize16, values.String(values.StrDirectBuy)).Layout),
+												layout.Rigid(func(gtx C) D {
+													warn := v.Theme.Label(values.TextSizeTransform(v.IsMobileView(), values.TextSize12), values.String(values.StrDirectBuyWarning))
+													warn.Color = v.Theme.Color.Danger
+													return layout.Inset{Top: values.MarginPadding4}.Layout(gtx, warn.Layout)
+												}),
+											)
+										})
+									}),
+									layout.Rigid(func(gtx C) D {
+										if v.selectedVSP == nil || !v.selectedVSP.IsDirectBuy() {
+											return D{}
+										}
+										ic := cryptomaterial.NewIcon(v.Theme.Icons.NavigationCheck)
+										return ic.Layout(gtx, values.MarginPadding20)
+									}),
+								)
+							}
+							i-- // real VSPs are shifted one down by the synthetic row
+						}
 						return layout.Flex{Alignment: layout.Middle}.Layout(gtx,
 							layout.Flexed(0.8, func(gtx C) D {
 								return layout.Inset{Top: values.MarginPadding12, Bottom: values.MarginPadding12}.Layout(gtx, func(gtx C) D {
@@ -287,6 +375,14 @@ func (v *vspSelectorModal) Layout(gtx C) D {
 							}),
 						)
 					})
+				}),
+				layout.Rigid(func(gtx C) D {
+					// Small inline loader below the (Direct-buy-only) list while
+					// real VSPs are still being fetched.
+					if v.isLoadingVSP.Load() && v.showDirectBuy {
+						return layout.UniformInset(values.MarginPadding24).Layout(gtx, v.materialLoader.Layout)
+					}
+					return D{}
 				}),
 			)
 		},

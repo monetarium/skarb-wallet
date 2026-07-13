@@ -51,7 +51,11 @@ const (
 	//     receive history. Fixed by using end-height=-1 instead (mined
 	//     blocks iterate forward, then unmined are appended). Re-bump
 	//     to repopulate the storm DB on upgrade so receive txs come back.
-	currentTxParserVersion int32 = 6
+	// v7: SSFee (stake-fee reward) rows store Amount = outputs − inputs (the
+	//     minted reward) instead of the cumulative augmented-UTXO value, and
+	//     their Fee/FeeAtoms are zeroed (previously a negative VAR "fee").
+	//     Bump reindexes persisted reward rows to the new semantics.
+	currentTxParserVersion int32 = 7
 )
 
 func (asset *Asset) IndexTransactions() error {
@@ -67,6 +71,12 @@ func (asset *Asset) IndexTransactions() error {
 	// the end so subsequent IndexTransactions() runs are a no-op for
 	// the migration path. Failures here are logged but don't abort
 	// indexing; a stale row is worse than a logged warning.
+	// The new version is persisted only after the reindex pass SUCCEEDS (see
+	// the defer below). Persisting it here, right after the rows are dropped,
+	// made an interrupted or failed pass permanent: on relaunch the migration
+	// branch was skipped, the index pointer said "done at tip", and the
+	// history between the abort point and tip was silently gone forever.
+	migrated := false
 	storedVersion := asset.ReadInt32ConfigValueForKey(txParserVersionConfigKey, 1)
 	if storedVersion < currentTxParserVersion {
 		log.Infof("[%d] tx-parser upgrade %d → %d: clearing saved tx rows for one-shot reindex",
@@ -76,7 +86,7 @@ func (asset *Asset) IndexTransactions() error {
 				"(continuing with stale rows; you can manually re-trigger via Settings → Rescan)",
 				asset.ID, err)
 		} else {
-			asset.SaveUserConfigValue(txParserVersionConfigKey, currentTxParserVersion)
+			migrated = true
 		}
 	}
 
@@ -161,6 +171,7 @@ func (asset *Asset) IndexTransactions() error {
 	}
 	endBlock := w.NewBlockIdentifierFromHeight(endNum)
 
+	var indexErr error
 	defer func() {
 		count, err := asset.GetWalletDataDb().Count(utils.TxFilterAll, asset.RequiredConfirmations(), endHeight, &sharedW.Transaction{})
 		if err != nil {
@@ -169,14 +180,27 @@ func (asset *Asset) IndexTransactions() error {
 			log.Infof("[%d] Transaction index finished at %d, %d transaction(s) indexed in total", asset.ID, endHeight, count)
 		}
 
+		// Stamp the index as complete (and the migration as done) ONLY when
+		// the pass finished cleanly. On an aborted pass (shutdown ctx, a bad
+		// decode) the per-block checkpoint written in rangeFn remains the
+		// resume point, so the next sync re-ranges the missing span instead
+		// of skipping to tip; an interrupted migration retries on relaunch.
+		if indexErr != nil {
+			log.Warnf("[%d] Indexing pass aborted (%v); keeping per-block resume point", asset.ID, indexErr)
+			return
+		}
 		err = asset.GetWalletDataDb().SaveLastIndexPoint(endHeight)
 		if err != nil {
 			log.Errorf("[%d] Set tx index end block height error: ", asset.ID, err)
 		}
+		if migrated {
+			asset.SaveUserConfigValue(txParserVersionConfigKey, currentTxParserVersion)
+		}
 	}()
 
 	log.Infof("[%d] Indexing transactions start height: %d, end height: %d", asset.ID, beginHeight, endHeight)
-	return asset.Internal().DCR.GetTransactions(ctx, rangeFn, startBlock, endBlock)
+	indexErr = asset.Internal().DCR.GetTransactions(ctx, rangeFn, startBlock, endBlock)
+	return indexErr
 }
 
 func (asset *Asset) reindexTransactions() error {

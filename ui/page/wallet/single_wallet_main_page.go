@@ -241,14 +241,16 @@ func (swmp *SingleWalletMasterPage) OnNavigatedTo() {
 
 // Call the subpage component update functions when there is a new tx
 func (swmp *SingleWalletMasterPage) ListenNewTxForSubPage(walletID int) {
-	switch swmp.CurrentPageID() {
-	case transaction.TransactionsPageID:
-		swmp.CurrentPage().(*transaction.TransactionsPage).ListenForTxNotification(walletID)
-		return
-	case info.InfoID:
-		swmp.CurrentPage().(*info.WalletInfo).ListenForNewTx(walletID)
-	default:
-		return
+	// Runs on a libwallet notification goroutine while the UI thread can swap
+	// the page stack at any moment. Snapshot the page ONCE and use checked
+	// type assertions: the old CurrentPageID()-then-assert pair was a TOCTOU
+	// window — a tab click between the two reads changed the concrete type
+	// and the unchecked assertion panicked the whole app.
+	switch page := swmp.CurrentPage().(type) {
+	case *transaction.TransactionsPage:
+		page.ListenForTxNotification(walletID)
+	case *info.WalletInfo:
+		page.ListenForNewTx(walletID)
 	}
 }
 
@@ -980,6 +982,10 @@ func (swmp *SingleWalletMasterPage) listenForNotifications(listenForSubpage func
 	syncProgressListener := &sharedW.SyncProgressListener{
 		OnSyncCompleted: func() {
 			swmp.updateBalance()
+			// Historical txs indexed during the just-finished sync produced no
+			// OnTransaction notifications, so tell the mounted subpage (Info /
+			// Transactions) to re-query the now-populated walletdata DB.
+			listenForSubpage(swmp.selectedWallet.GetWalletID())
 			swmp.ParentWindow().Reload()
 		},
 	}

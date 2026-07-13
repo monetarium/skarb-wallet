@@ -121,6 +121,18 @@ func (asset *Asset) decodeTransactionWithTxSummary(txSummary *w.TransactionSumma
 		return nil, err
 	}
 
+	// DecodeTransaction never populates TicketSpender (it only sets the
+	// vote-side TicketSpentHash). Without this back-fill a freshly decoded
+	// voted ticket reads as spender-less, so TxFilterLive/TxFilterExpired
+	// match it and the UI flips "Voted" back to "Live" — and the txindex
+	// re-index path (SaveOrUpdate = delete-then-save) would wipe the
+	// persisted spender the vote decode below had written.
+	if decodedTx.Type == TxTypeTicketPurchase {
+		if spender, _ := asset.TicketSpender(decodedTx.Hash); spender != nil {
+			decodedTx.TicketSpender = spender.Hash
+		}
+	}
+
 	if decodedTx.TicketSpentHash != "" {
 		ticketPurchaseTx, err := asset.GetTransactionRaw(decodedTx.TicketSpentHash)
 		if err != nil {

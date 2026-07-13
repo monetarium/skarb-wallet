@@ -101,14 +101,25 @@ func (asset *Asset) TicketPrice() (*TicketPriceResponse, error) {
 
 // PurchaseTickets purchases tickets from the asset.
 // Returns a slice of hashes for tickets purchased.
+//
+// An empty vspHost requests a direct (solo) purchase: no VSP client is
+// created and request.VSPClient stays nil, which the vendored
+// wallet.purchaseTickets natively treats as "no fee reservation, no fee
+// processing" while still deriving voting rights from VotingAccount. The
+// ticket must then be voted by a voting-enabled wallet holding this seed —
+// this SPV app itself does not vote.
 func (asset *Asset) PurchaseTickets(account, numTickets int32, vspHost, passphrase string, vspPubKey []byte) ([]*chainhash.Hash, error) {
 	if !asset.WalletOpened() {
 		return nil, utils.ErrDCRNotInitialized
 	}
 
-	vspClient, err := asset.VSPClient(account, vspHost, vspPubKey)
-	if err != nil {
-		return nil, fmt.Errorf("VSP Server instance failed to start: %v", err)
+	var vspClient *w.VSPClient
+	if vspHost != "" {
+		var err error
+		vspClient, err = asset.VSPClient(account, vspHost, vspPubKey)
+		if err != nil {
+			return nil, fmt.Errorf("VSP Server instance failed to start: %v", err)
+		}
 	}
 
 	networkBackend, err := asset.Internal().DCR.NetworkBackend()

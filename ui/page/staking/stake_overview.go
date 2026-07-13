@@ -485,9 +485,9 @@ func (pg *Page) showManualPurchaseModal() {
 // synchronously in the callback).
 func (pg *Page) startManualPurchasePasswordModal(accountNumber, numTickets int32, vsp *dcr.VSP, ticketPriceAtoms int64) {
 	// vsp.PubKey promotes from the embedded *vspd.VspInfoResponse; guard against a
-	// nil embed before it's dereferenced in PurchaseTickets. SelectedVSP() always
-	// carries a response, so this is defensive only.
-	if vsp == nil || vsp.VspInfoResponse == nil {
+	// nil embed before it's dereferenced below. The Direct-buy sentinel carries a
+	// nil embed by design and purchases without a VSP (empty host, nil pubkey).
+	if vsp == nil || (!vsp.IsDirectBuy() && vsp.VspInfoResponse == nil) {
 		return
 	}
 	name, err := pg.dcrWallet.AccountNameRaw(uint32(accountNumber))
@@ -510,8 +510,20 @@ func (pg *Page) startManualPurchasePasswordModal(accountNumber, numTickets int32
 				layout.Rigid(pg.Theme.Label(values.TextSize14, fmt.Sprintf("%s: %d", values.String(values.StrNumberOfTickets), numTickets)).Layout),
 				layout.Rigid(pg.Theme.Label(values.TextSize14, fmt.Sprintf("%s: %s", values.String(values.StrTotalCost), total)).Layout),
 				layout.Rigid(func(gtx C) D {
-					label := pg.Theme.Label(values.TextSize14, fmt.Sprintf("VSP: %s", vsp.Host))
+					vspName := vsp.Host
+					if vsp.IsDirectBuy() {
+						vspName = values.String(values.StrDirectBuy)
+					}
+					label := pg.Theme.Label(values.TextSize14, fmt.Sprintf("VSP: %s", vspName))
 					return layout.Inset{Bottom: values.MarginPadding12}.Layout(gtx, label.Layout)
+				}),
+				layout.Rigid(func(gtx C) D {
+					if !vsp.IsDirectBuy() {
+						return D{}
+					}
+					warn := pg.Theme.Label(values.TextSize12, values.String(values.StrDirectBuyWarning))
+					warn.Color = pg.Theme.Color.Danger
+					return layout.Inset{Bottom: values.MarginPadding12}.Layout(gtx, warn.Layout)
 				}),
 			)
 		}).
@@ -531,7 +543,12 @@ func (pg *Page) startManualPurchasePasswordModal(accountNumber, numTickets int32
 				return false
 			}
 			go func() {
-				hashes, err := pg.dcrWallet.PurchaseTickets(accountNumber, numTickets, vsp.Host, password, vsp.PubKey)
+				// PubKey promotes from the embedded response — nil for Direct buy.
+				var vspPubKey []byte
+				if vsp.VspInfoResponse != nil {
+					vspPubKey = vsp.PubKey
+				}
+				hashes, err := pg.dcrWallet.PurchaseTickets(accountNumber, numTickets, vsp.Host, password, vspPubKey)
 				// Clear the counterpart field too: only one branch runs, and a
 				// leftover value from a prior purchase would otherwise be drained
 				// as a stale result (e.g. a stale error after a later success).

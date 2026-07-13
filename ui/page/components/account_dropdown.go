@@ -105,6 +105,11 @@ func (d *AccountDropdown) Setup(w sharedW.Asset, args ...*sharedW.Account) *Acco
 		}
 	}
 	d.dropdown.SetItems(items)
+	// Same desync as in SetCoinType: SetItems resets the visible selection to
+	// index 0 even when a previously selected account was re-applied above.
+	if d.selectedAccount != nil {
+		d.dropdown.SetSelectedValue(fmt.Sprint(d.selectedAccount.Number))
+	}
 	return d
 }
 
@@ -142,6 +147,15 @@ func (d *AccountDropdown) SetCoinType(ct cointype.CoinType) {
 		})
 	}
 	d.dropdown.SetItems(items)
+	// SetItems hard-resets the dropdown's selectedIndex to 0, which visually
+	// snaps the collapsed control to the first ("default") account while
+	// d.selectedAccount silently keeps the user's choice — the authored tx
+	// then spends from an account the UI no longer displays. Restore the
+	// visible selection (no-op if the account vanished), mirroring
+	// CoinTypeDropdown.Setup.
+	if d.selectedAccount != nil {
+		d.dropdown.SetSelectedValue(fmt.Sprint(d.selectedAccount.Number))
+	}
 }
 
 func (d *AccountDropdown) getAccountItemLayout(account *sharedW.Account) layout.Widget {
