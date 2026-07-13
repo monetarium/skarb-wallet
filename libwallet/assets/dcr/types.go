@@ -159,6 +159,19 @@ type VSP struct {
 	*vspd.VspInfoResponse
 }
 
+// DirectBuyVSP is the sentinel picker entry for a direct (solo, no-VSP)
+// ticket purchase. Host is empty — PurchaseTickets treats an empty host as
+// "buy without a VSP". The embedded VspInfoResponse stays nil, so UI code
+// must check IsDirectBuy() before dereferencing promoted fields (PubKey,
+// FeePercentage, …).
+var DirectBuyVSP = &VSP{Host: ""}
+
+// IsDirectBuy reports whether this picker entry is the solo-purchase
+// sentinel (no VSP involved).
+func (v *VSP) IsDirectBuy() bool {
+	return v != nil && v.Host == ""
+}
+
 /** end vspd-related types */
 
 /** begin agenda types */

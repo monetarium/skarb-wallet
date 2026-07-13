@@ -911,6 +911,12 @@ func (pg *TxDetailsPage) txnTypeAndID(gtx C) D {
 			return pg.keyValue(gtx, values.String(values.StrConfStatus), stat)
 		}),
 		layout.Rigid(func(gtx C) D {
+			// Reward (SSFee) txs mint coins — the wallet paid no fee, and the
+			// legacy inputs−outputs "fee" was just the negated reward. The
+			// reward itself is already the headline Amount, so the row is noise.
+			if pg.transaction.IsStakeFee {
+				return D{}
+			}
 			if pg.wallet.GetAssetType() == libutils.BTCWalletAsset && transaction.Direction == txhelper.TxDirectionReceived {
 				return D{}
 			}
@@ -1165,6 +1171,22 @@ func (pg *TxDetailsPage) HandleUserInteractions(gtx C) {
 			ensureSplitAmount(pg.wallet, updated)
 			if dcr.IsSplitTx(updated) && pg.transaction.Amount > updated.Amount {
 				updated.Amount = pg.transaction.Amount
+			}
+			// Re-resolve the ticket's spender so a Voted/Revoked header never
+			// regresses to "Live" (and catches a Live→Voted transition while
+			// the page is open). GetTransactionRaw back-fills TicketSpender
+			// since the txparser fix, but keep the previous snapshot as a
+			// defensive fallback for a transient DB miss.
+			if updated.Type == txhelper.TxTypeTicketPurchase {
+				if dcrImp, ok := pg.wallet.(*dcr.Asset); ok {
+					if spender, _ := dcrImp.TicketSpender(updated.Hash); spender != nil {
+						updated.TicketSpender = spender.Hash
+						pg.ticketSpender = spender // keep "Voted on"/"Reward" rows in sync
+					}
+				}
+				if updated.TicketSpender == "" {
+					updated.TicketSpender = pg.transaction.TicketSpender
+				}
 			}
 			pg.transaction = updated
 			pg.txnWidgets = pg.initTxnWidgets()

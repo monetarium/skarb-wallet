@@ -375,6 +375,41 @@ func (asset *Asset) DecodeTransaction(walletTx *sharedW.TxInfoFromWallet, netPar
 			amountAtoms = feeBig.String()
 		}
 	}
+	// Stake-fee (SSFee) reward txs mint value: outputs > inputs, and in the
+	// common UTXO-augmentation shape the wallet-owned output carries the whole
+	// cumulative reward balance (old UTXO value + new reward), so the
+	// classifier-derived amount overstates what this tx actually earned.
+	// Override: Amount = outputs − inputs (the newly minted reward), and zero
+	// the fee channels — a reward costs the wallet nothing, and the raw wire
+	// "fee" (inputs − outputs) is a negative artifact of the minting.
+	if isStakeFee {
+		// WALLET-owned totals, not tx-global ones: consensus allows an SSFee
+		// tx to pay up to MaxOutputsPerSSFee recipients, and tx-global
+		// outputs−inputs would credit every co-paid wallet with the whole
+		// minted sum. For the reference miner's single-recipient shape the
+		// two coincide (augmented inputs are recorded as wallet debits).
+		if isSKATx && skaTotalWalletOut != nil && skaTotalWalletIn != nil {
+			minted := new(big.Int).Sub(skaTotalWalletOut, skaTotalWalletIn)
+			if minted.Sign() < 0 {
+				minted.SetInt64(0)
+			}
+			amountAtoms = minted.String()
+			if minted.IsInt64() {
+				amount = minted.Int64()
+			} else {
+				amount = math.MaxInt64
+			}
+		} else {
+			amount = totalWalletOutput - totalWalletInput
+			if amount < 0 {
+				amount = 0
+			}
+			amountAtoms = ""
+		}
+		direction = txhelper.TxDirectionReceived
+		feeOverride = 0
+		feeAtoms = ""
+	}
 	return &sharedW.Transaction{
 		Hash:        msgTx.TxHash().String(),
 		Type:        txType,

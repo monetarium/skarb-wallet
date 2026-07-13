@@ -707,14 +707,14 @@ func TxPageDropDownFields(wType libutils.AssetType, tabIndex int) (mapInfo map[s
 		// PoW (coinbase + miner-fee SSFee) and PoS (votes, revocations +
 		// staker-fee SSFee). See keepForTab / TxMatchesFilter.
 		mapInfo = map[string]int32{
-			values.String(values.StrAll): libutils.TxFilterRewardList,
-			values.String(values.StrPoW): libutils.TxFilterRewardPoW,
-			values.String(values.StrPoS): libutils.TxFilterRewardPoS,
+			values.String(values.StrAllRewards): libutils.TxFilterRewardList,
+			values.String(values.StrPoWRewards): libutils.TxFilterRewardPoW,
+			values.String(values.StrPoSRewards): libutils.TxFilterRewardPoS,
 		}
 		keysInfo = []string{
-			values.String(values.StrAll),
-			values.String(values.StrPoW),
-			values.String(values.StrPoS),
+			values.String(values.StrAllRewards),
+			values.String(values.StrPoWRewards),
+			values.String(values.StrPoSRewards),
 		}
 	}
 	return

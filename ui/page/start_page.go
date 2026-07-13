@@ -169,8 +169,11 @@ func (sp *startPage) initPage() {
 			Text: titler.String(values.String(opt.Value)),
 		})
 	}
+	// 150dp, not 120: the dropdown item reserves ~45dp for paddings and the
+	// trailing icon, and "Українська" at 14sp needs ~90dp of text width —
+	// at 120dp it gets pixel-ellipsized to "Українськ…".
 	sp.languageDropdown = sp.Theme.NewCommonDropDown(
-		langItems, nil, values.MarginPadding120, values.StartPageDropdownGroup, false)
+		langItems, nil, values.MarginPadding150, values.StartPageDropdownGroup, false)
 
 	// The dropdown is created with selectedIndex=0 — i.e. it visually shows
 	// the first locale (Ukrainian) — but no Changed event ever fires for the

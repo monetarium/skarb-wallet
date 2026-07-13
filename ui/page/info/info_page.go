@@ -151,6 +151,14 @@ func (pg *WalletInfo) OnNavigatedTo() {
 			pg.reloadMixerBalances()
 		}
 	}
+
+	// Right after a create/restore the loaders above legitimately read 0 rows
+	// (historical txs land in walletdata only when IndexTransactions finishes
+	// with SPV sync), and indexed history fires no new-tx notifications. The
+	// refresh is driven by the master page instead: its OnSyncCompleted calls
+	// listenForSubpage → ListenForNewTx, which re-runs all three loaders
+	// (single_wallet_main_page.go). A page-level SyncProgressListener here
+	// would double-load the lists concurrently on every sync completion.
 }
 
 func (pg *WalletInfo) reload() {

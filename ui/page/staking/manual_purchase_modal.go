@@ -53,7 +53,7 @@ func newManualPurchaseModal(l *load.Load, wallet *dcr.Asset, ticketPrice int64) 
 		Modal:       l.Theme.ModalFloatTitle("manual_purchase_modal", l.IsMobileView(), nil),
 		cancelBtn:   l.Theme.OutlineButton(values.String(values.StrCancel)),
 		purchaseBtn: l.Theme.Button(values.String(values.StrBuyTickets)),
-		vspSelector: components.NewVSPSelector(l, wallet).Title(values.String(values.StrSelectVSP)),
+		vspSelector: components.NewVSPSelector(l, wallet).Title(values.String(values.StrSelectVSP)).AllowDirectBuy(),
 		dcrImpl:     wallet,
 		ticketPrice: ticketPrice,
 	}
@@ -180,6 +180,15 @@ func (mp *manualPurchaseModal) Layout(gtx C) D {
 			})
 		},
 		func(gtx C) D {
+			// Solo staking caveat, shown only once Direct buy is picked.
+			if vsp := mp.vspSelector.SelectedVSP(); vsp == nil || !vsp.IsDirectBuy() {
+				return D{}
+			}
+			warn := mp.Theme.Label(values.TextSize12, values.String(values.StrDirectBuyWarning))
+			warn.Color = mp.Theme.Color.Danger
+			return layout.Inset{Bottom: values.MarginPadding8}.Layout(gtx, warn.Layout)
+		},
+		func(gtx C) D {
 			return layout.E.Layout(gtx, func(gtx C) D {
 				return layout.Flex{Axis: layout.Horizontal}.Layout(gtx,
 					layout.Rigid(func(gtx C) D {
@@ -219,8 +228,9 @@ func (mp *manualPurchaseModal) kvRow(gtx C, key, value string, emphasize bool) D
 
 func (mp *manualPurchaseModal) canPurchase() bool {
 	// vsp.PubKey (used downstream by PurchaseTickets) promotes from the embedded
-	// *vspd.VspInfoResponse — require it non-nil too, not just the VSP wrapper.
-	if vsp := mp.vspSelector.SelectedVSP(); vsp == nil || vsp.VspInfoResponse == nil {
+	// *vspd.VspInfoResponse — require it non-nil, except for the Direct-buy
+	// sentinel, which is a valid no-VSP selection with a nil embed.
+	if vsp := mp.vspSelector.SelectedVSP(); vsp == nil || (!vsp.IsDirectBuy() && vsp.VspInfoResponse == nil) {
 		return false
 	}
 	if mp.accountDropdown.SelectedAccount() == nil {
@@ -250,7 +260,8 @@ func (mp *manualPurchaseModal) Handle(gtx C) {
 		n := mp.parseTicketCount()
 		// canPurchase() (which gates the enabled button) guarantees these are
 		// non-nil and n >= 1, but guard defensively before dereferencing.
-		if account == nil || vsp == nil || vsp.VspInfoResponse == nil || n < 1 {
+		// Direct buy carries a nil VspInfoResponse by design.
+		if account == nil || vsp == nil || (!vsp.IsDirectBuy() && vsp.VspInfoResponse == nil) || n < 1 {
 			return
 		}
 		if mp.onPurchase != nil {
