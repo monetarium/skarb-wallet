@@ -800,6 +800,17 @@ func (pg *Page) checkAssetCoverage(sourceAccount *sharedW.Account, totalAmount, 
 			feeBig = parsed
 		}
 	}
+	// With "subtract fee from recipient" on, the fee is paid out of the
+	// recipient's output — the account only covers the amount itself.
+	// Adding the fee here anyway double-counted it and fired a false
+	// "insufficient balance" the moment Max (amount = full spendable) met
+	// the checkbox. Mirrors the sffaApplies guard in addSendDestination so
+	// the coverage check never diverges from the displayed totals. (VAR
+	// never reaches this code — see the IsVAR early return — which is why
+	// the bug was SKA-only.)
+	if pg.subtractFeeFromRecipient {
+		feeBig.SetInt64(0)
+	}
 	// Build the required-atom big.Int from the lossless big-string when the
 	// SKA amount overflowed int64 (constructTx populated totalAmountBigStr
 	// in that case). Otherwise lift the int64 totalAmount. Add the (real) fee.

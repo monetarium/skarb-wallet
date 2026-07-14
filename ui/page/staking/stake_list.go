@@ -16,11 +16,18 @@ func (pg *Page) initTicketList() {
 }
 
 func (pg *Page) listenForTxNotifications() {
+	// A bare Reload() only redrew the page with its STORED fields — the
+	// overview counts, total rewards, and ticket list stayed stale until the
+	// user left and re-entered. Flag a refresh instead; the UI thread drains
+	// it in HandleUserInteractions and re-runs the actual data loads
+	// (CLAUDE.md §3 — never touch Layout-read state from this goroutine).
 	txAndBlockNotificationListener := &sharedW.TxAndBlockNotificationListener{
 		OnTransaction: func(_ int, _ *sharedW.Transaction) {
+			pg.pendingRefresh.Store(true)
 			pg.ParentWindow().Reload()
 		},
 		OnBlockAttached: func(_ int, _ int32) {
+			pg.pendingRefresh.Store(true)
 			pg.ParentWindow().Reload()
 		},
 	}

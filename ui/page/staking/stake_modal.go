@@ -42,7 +42,9 @@ func newTicketBuyerModal(l *load.Load, wallet *dcr.Asset) *ticketBuyerModal {
 
 		cancel:          l.Theme.OutlineButton(values.String(values.StrCancel)),
 		saveSettingsBtn: l.Theme.Button(values.String(values.StrSave)),
-		vspSelector:     components.NewVSPSelector(l, wallet).Title(values.String(values.StrSelectVSP)),
+		// AllowDirectBuy: the auto-buyer works solo too (nil VSPClient in
+		// StartTicketBuyer) — an empty saved host round-trips as Direct buy.
+		vspSelector:     components.NewVSPSelector(l, wallet).Title(values.String(values.StrSelectVSP)).AllowDirectBuy(),
 		dcrImpl:         wallet,
 	}
 
@@ -140,6 +142,16 @@ func (tb *ticketBuyerModal) Layout(gtx C) D {
 					return components.VerticalInset(values.MarginPadding16).Layout(gtx, func(gtx C) D {
 						return tb.vspSelector.Layout(tb.ParentWindow(), gtx)
 					})
+				}),
+				layout.Rigid(func(gtx C) D {
+					// Solo caveat, shown only once Direct buy is picked —
+					// same warning as the manual purchase modal.
+					if vsp := tb.vspSelector.SelectedVSP(); vsp == nil || !vsp.IsDirectBuy() {
+						return D{}
+					}
+					warn := tb.Theme.Label(values.TextSize12, values.String(values.StrDirectBuyWarning))
+					warn.Color = tb.Theme.Color.Danger
+					return layout.Inset{Bottom: values.MarginPadding8}.Layout(gtx, warn.Layout)
 				}),
 			)
 		},

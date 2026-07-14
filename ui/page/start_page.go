@@ -309,7 +309,15 @@ func (sp *startPage) HandleUserInteractions(gtx C) {
 				newWallet.SaveUserConfigValue(sharedW.AutoSyncConfigKey, true)
 			}
 			sp.setLanguagePref(false)
-			sp.ParentNavigator().Display(root.NewHomePage(sp.Load))
+			homePage := root.NewHomePage(sp.Load)
+			sp.ParentNavigator().Display(homePage)
+			// Land on the new wallet's Info page (SingleWalletMasterPage's
+			// default tab) instead of the dashboard. For a freshly created
+			// wallet the seed-backup flow below stacks on top; its completion
+			// callback (ClosePagesAfter) then reveals this wallet page.
+			if newWallet != nil {
+				homePage.OpenWallet(newWallet)
+			}
 			// Force the seed-phrase backup flow for a FRESHLY CREATED wallet
 			// before the user can do anything else. Without this the seed was
 			// never shown at all (backup was only reachable manually via

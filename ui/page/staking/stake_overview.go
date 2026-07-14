@@ -58,8 +58,11 @@ type Page struct {
 	infoButton     cryptomaterial.IconButton
 	materialLoader material.LoaderStyle
 
-	ticketPrice  string
-	totalRewards string
+	ticketPrice string
+	// rewardRows holds one pre-formatted "12.34 VAR" / "1.50 SKA1" staking-
+	// reward line per visibility-allowed coin (VAR first), zeros included —
+	// the user asked for a Total Reward row per visible coin.
+	rewardRows []string
 	// showMaterialLoader is toggled from the FetchScrollData goroutine and read
 	// by Layout (stake_list.go) — atomic to avoid the §3 data race.
 	showMaterialLoader atomic.Bool
@@ -73,10 +76,31 @@ type Page struct {
 	// ticketOverview/totalRewards (which Layout reads) directly from the
 	// goroutine is a data race (CLAUDE.md §3) — a torn read of the
 	// ticketOverview pointer can crash the staking page.
-	pendingDataApply   atomic.Bool
-	stagedOverview     *dcr.StakingOverview
-	stagedTotalRewards string
-	stagedDataErr      error
+	pendingDataApply atomic.Bool
+	stagedOverview   *dcr.StakingOverview
+	stagedRewardRows []string
+	stagedDataErr    error
+
+	// pendingRefresh is set by the tx/block notification callbacks (goroutine)
+	// and drained on the UI thread in HandleUserInteractions, where it re-runs
+	// the full data load (price, overview, rewards, ticket list). Without it
+	// the notification callbacks only redrew the page — the stored fields went
+	// stale until the user left and re-entered. The CAS coalesces notification
+	// bursts into one refresh per frame.
+	pendingRefresh atomic.Bool
+
+	// loadingData single-flights loadPageData's goroutine: per-notification
+	// refreshes could otherwise spawn overlapping loads whose unsynchronized
+	// writes to the staged* fields race each other (the pendingDataApply CAS
+	// orders producer→consumer, not producer↔producer), each re-scanning the
+	// whole tx set.
+	loadingData atomic.Bool
+
+	// ticketRefreshInFlight coalesces ticket-list refetches, mirroring
+	// transactions_page.go's txRefreshInFlight: loadNewItem=true resets and
+	// re-fetches the whole list, and concurrent runs race the scroll
+	// component's data/offset/position and break scrolling.
+	ticketRefreshInFlight atomic.Bool
 
 	navToSettingsBtn cryptomaterial.Button
 	buyTicketBtn     cryptomaterial.Button
@@ -160,10 +184,28 @@ func (pg *Page) startPageData() {
 
 	go func() {
 		pg.showMaterialLoader.Store(true)
-		pg.scroll.FetchScrollData(false, pg.ParentWindow(), false)
+		// Through the coalescing guard too: a notification arriving during
+		// this very first load must not start a second concurrent fetch.
+		pg.refreshTicketList()
 		pg.showMaterialLoader.Store(false)
 		pg.ParentWindow().Reload()
 	}()
+}
+
+// refreshTicketList resets and re-fetches the staking ticket list, then
+// redraws. A plain FetchScrollData(..., isResetList=false) is a NO-OP once
+// the list already holds data (items_scroll.go skips the fetch), so every
+// post-load refresh must pass loadNewItem=true — and concurrent runs must be
+// coalesced (see ticketRefreshInFlight): a block confirms many txs at once,
+// and parallel reset+refetch runs corrupt the scroll state. Blocking — run
+// it off the UI thread (`go pg.refreshTicketList()`).
+func (pg *Page) refreshTicketList() {
+	if !pg.ticketRefreshInFlight.CompareAndSwap(false, true) {
+		return
+	}
+	defer pg.ticketRefreshInFlight.Store(false)
+	pg.scroll.FetchScrollDataHandler(false, pg.ParentWindow(), false, true)
+	pg.ParentWindow().Reload()
 }
 
 // fetch ticket price only when the wallet is synced
@@ -191,19 +233,35 @@ func (pg *Page) setStakingButtonsState() {
 }
 
 func (pg *Page) loadPageData() {
+	// Single-flight: skip when a load is already running — the in-flight
+	// goroutine reads current data anyway, and the next notification
+	// re-triggers a fresh load.
+	if !pg.loadingData.CompareAndSwap(false, true) {
+		return
+	}
 	go func() {
+		defer pg.loadingData.Store(false)
 		if len(pg.dcrWallet.KnownVSPs()) == 0 {
 			// TODO: Does this page need this list?
 			pg.dcrWallet.ReloadVSPList(context.TODO())
 		}
 
-		var rewards string
+		var rewardRows []string
 		var overview *dcr.StakingOverview
 		var stageErr error
-		if totalRewards, err := pg.dcrWallet.TotalStakingRewards(); err != nil {
+		if totals, err := pg.dcrWallet.TotalStakingRewardsByCoin(); err != nil {
 			stageErr = err
 		} else {
-			rewards = dcrutil.Amount(totalRewards).String()
+			// One "Total Reward" line per visibility-allowed coin, VAR
+			// first, zeros included (an allowed coin must not vanish from
+			// the stats just because nothing was earned yet).
+			for _, ct := range pg.dcrWallet.VisibleCoinTypes() {
+				atoms := "0"
+				if t := totals[ct]; t != nil {
+					atoms = t.String()
+				}
+				rewardRows = append(rewardRows, dcr.FormatTxAmountBig(atoms, 0, uint8(ct)))
+			}
 		}
 		if ov, err := pg.dcrWallet.StakingOverview(); err != nil {
 			stageErr = err
@@ -211,9 +269,9 @@ func (pg *Page) loadPageData() {
 			overview = ov
 		}
 
-		// Stage for the UI thread — never write ticketOverview/totalRewards
+		// Stage for the UI thread — never write ticketOverview/rewardRows
 		// (read by Layout) or show a modal from this goroutine (CLAUDE.md §3).
-		pg.stagedTotalRewards = rewards
+		pg.stagedRewardRows = rewardRows
 		pg.stagedOverview = overview
 		pg.stagedDataErr = stageErr
 		pg.pendingDataApply.Store(true)
@@ -281,8 +339,8 @@ func (pg *Page) HandleUserInteractions(gtx C) {
 	// Apply staking data staged by loadPageData()'s goroutine on the UI thread
 	// (CLAUDE.md §3). The atomic CAS publishes the goroutine's writes.
 	if pg.pendingDataApply.CompareAndSwap(true, false) {
-		if pg.stagedTotalRewards != "" {
-			pg.totalRewards = pg.stagedTotalRewards
+		if pg.stagedRewardRows != nil {
+			pg.rewardRows = pg.stagedRewardRows
 		}
 		if pg.stagedOverview != nil {
 			pg.ticketOverview = pg.stagedOverview
@@ -292,6 +350,21 @@ func (pg *Page) HandleUserInteractions(gtx C) {
 			pg.ParentWindow().ShowModal(errModal)
 			pg.stagedDataErr = nil
 		}
+	}
+
+	// A new tx / block arrived: re-run the full data load in place so the
+	// user never has to leave and re-enter the page. loadPageData stages its
+	// results (drained above); the ticket-list refetch runs on its own
+	// goroutine like every other FetchScrollData call site. dataLoaded gates
+	// out the pre-first-load window (startPageData will do the initial load).
+	// During a rescan the flag is left SET (checked before the CAS): the
+	// OnTransaction flood would otherwise re-scan the tx set per frame, and
+	// dropping the flag would lose the refresh owed once the rescan ends.
+	if pg.dataLoaded && !pg.dcrWallet.IsRescanning() &&
+		pg.pendingRefresh.CompareAndSwap(true, false) {
+		pg.fetchTicketPrice()
+		pg.loadPageData()
+		go pg.refreshTicketList()
 	}
 
 	// Apply the result of a manual purchase staged by the goroutine in
@@ -308,10 +381,7 @@ func (pg *Page) HandleUserInteractions(gtx C) {
 			pg.ParentWindow().ShowModal(successModal)
 			// Refresh overview/rewards and the ticket list to show the new tickets.
 			pg.loadPageData()
-			go func() {
-				pg.scroll.FetchScrollData(false, pg.ParentWindow(), false)
-				pg.ParentWindow().Reload()
-			}()
+			go pg.refreshTicketList()
 		}
 	}
 
@@ -453,8 +523,9 @@ func (pg *Page) ticketBuyerSettingsModal() {
 	pg.ParentWindow().ShowModal(ticketBuyerModal)
 }
 
-// showManualPurchaseModal opens the one-time ticket-purchase modal, snapshotting
-// the current ticket price so the modal can show N × price = total live.
+// showManualPurchaseModal opens the one-time ticket-purchase modal, seeding it
+// with the current ticket price (the modal keeps the price fresh per block
+// while open and reports its current value back through OnPurchase).
 func (pg *Page) showManualPurchaseModal() {
 	if pg.purchasing.Load() {
 		return // a purchase is already in flight
@@ -470,8 +541,11 @@ func (pg *Page) showManualPurchaseModal() {
 	}
 	ticketPriceAtoms := tp.TicketPrice
 	purchaseModal := newManualPurchaseModal(pg.Load, pg.dcrWallet, ticketPriceAtoms).
-		OnPurchase(func(accountNumber, numTickets int32, vsp *dcr.VSP) {
-			pg.startManualPurchasePasswordModal(accountNumber, numTickets, vsp, ticketPriceAtoms)
+		OnPurchase(func(accountNumber, numTickets int32, vsp *dcr.VSP, currentPriceAtoms int64) {
+			// Use the modal's CURRENT price, not the open-time snapshot —
+			// the card refreshes it per block while open, and the confirm
+			// modal's total must match what the user just saw.
+			pg.startManualPurchasePasswordModal(accountNumber, numTickets, vsp, currentPriceAtoms)
 		})
 	pg.ParentWindow().ShowModal(purchaseModal)
 }
@@ -588,8 +662,22 @@ func (pg *Page) startTicketBuyerPasswordModal() {
 				layout.Rigid(pg.Theme.Label(values.TextSize14, values.StringF(values.StrWalletToPurchaseFrom, pg.dcrWallet.GetWalletName())).Layout),
 				layout.Rigid(pg.Theme.Label(values.TextSize14, values.StringF(values.StrSelectedAccount, name)).Layout),
 				layout.Rigid(pg.Theme.Label(values.TextSize14, values.StringF(values.StrBalToMaintainValue, balToMaintain)).Layout), layout.Rigid(func(gtx C) D {
-					label := pg.Theme.Label(values.TextSize14, fmt.Sprintf("VSP: %s", tbConfig.VspHost))
+					// Empty saved host == solo (Direct buy) auto-staking.
+					vspName := tbConfig.VspHost
+					if vspName == "" {
+						vspName = values.String(values.StrDirectBuy)
+					}
+					label := pg.Theme.Label(values.TextSize14, fmt.Sprintf("VSP: %s", vspName))
 					return layout.Inset{Bottom: values.MarginPadding12}.Layout(gtx, label.Layout)
+				}),
+				layout.Rigid(func(gtx C) D {
+					// Solo caveat — same warning as the manual Direct-buy flow.
+					if tbConfig.VspHost != "" {
+						return D{}
+					}
+					warn := pg.Theme.Label(values.TextSize12, values.String(values.StrDirectBuyWarning))
+					warn.Color = pg.Theme.Color.Danger
+					return layout.Inset{Bottom: values.MarginPadding12}.Layout(gtx, warn.Layout)
 				}),
 				layout.Rigid(func(gtx C) D {
 					return cryptomaterial.LinearLayout{

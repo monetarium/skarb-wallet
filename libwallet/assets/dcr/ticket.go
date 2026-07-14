@@ -3,12 +3,14 @@ package dcr
 import (
 	"context"
 	"fmt"
+	"math/big"
 	"runtime/trace"
 	"sync"
 	"time"
 
 	vspd "github.com/decred/vspd/types/v3"
 	"github.com/monetarium/monetarium-node/chaincfg/chainhash"
+	"github.com/monetarium/monetarium-node/cointype"
 	"github.com/monetarium/monetarium-node/dcrutil"
 	"github.com/monetarium/monetarium-wallet/errors"
 	w "github.com/monetarium/monetarium-wallet/wallet"
@@ -28,6 +30,53 @@ func (asset *Asset) TotalStakingRewards() (int64, error) {
 	}
 
 	return totalRewards, nil
+}
+
+// TotalStakingRewardsByCoin sums this wallet's staking earnings per coin.
+// VAR — the vote subsidies (VoteReward over voted tickets, the same value
+// TotalStakingRewards returns). Each SKA coin — the PoS-side stake-fee
+// (SF SSFee) reward transactions, whose Amount is the wallet-owned minted
+// reward (outputs − inputs; see decodetx.go). Totals are big.Int because a
+// single SKA amount at 1e18 atoms/coin can overflow int64. Coins with no
+// earnings are simply absent from the map — the caller decides how to render
+// a zero row.
+func (asset *Asset) TotalStakingRewardsByCoin() (map[cointype.CoinType]*big.Int, error) {
+	totals := make(map[cointype.CoinType]*big.Int)
+
+	voteTxs, err := asset.GetTransactionsRaw(0, 0, TxFilterVoted, true, "")
+	if err != nil {
+		return nil, err
+	}
+	varTotal := new(big.Int)
+	for _, tx := range voteTxs {
+		varTotal.Add(varTotal, big.NewInt(tx.VoteReward))
+	}
+	totals[cointype.CoinTypeVAR] = varTotal
+
+	// TxFilterRewardPoS also matches votes and revocations (VAR side, already
+	// counted above via VoteReward) — keep only the SSFee distributions.
+	rewardTxs, err := asset.GetTransactionsRaw(0, 0, TxFilterRewardPoS, true, "")
+	if err != nil {
+		return nil, err
+	}
+	for _, tx := range rewardTxs {
+		if !tx.IsStakeFee {
+			continue
+		}
+		ct := cointype.CoinType(tx.CoinType)
+		amt := big.NewInt(tx.Amount)
+		if tx.AmountAtoms != "" {
+			if parsed, ok := new(big.Int).SetString(tx.AmountAtoms, 10); ok {
+				amt = parsed
+			}
+		}
+		if cur := totals[ct]; cur != nil {
+			cur.Add(cur, amt)
+		} else {
+			totals[ct] = amt
+		}
+	}
+	return totals, nil
 }
 
 func (asset *Asset) TicketMaturity() int32 {
@@ -241,7 +290,9 @@ func (asset *Asset) StartTicketBuyer(passphrase string) error {
 	// the ticket buyer impossible to start. Tickets are bought directly from
 	// cfg.PurchaseAccount with Mixing:false (see runTicketBuyer/buyTicket).
 	cfg := asset.AutoTicketsBuyerConfig()
-	if cfg.VspHost == "" {
+	// An empty VspHost is a valid SOLO (Direct buy) config — "configured" is
+	// signalled by the purchase account, not the host (TicketBuyerConfigIsSet).
+	if cfg.PurchaseAccount < 0 {
 		return errors.New("ticket buyer config not set for this wallet")
 	}
 	if cfg.BalanceToMaintain < 0 {
@@ -262,18 +313,25 @@ func (asset *Asset) StartTicketBuyer(passphrase string) error {
 
 	ctx, cancel := asset.ShutdownContextWithCancel()
 
-	// Check the VSP.
-	vspInfo, err := vspInfo(cfg.VspHost)
-	if err != nil {
-		cancel()
-		return fmt.Errorf("error setting up vsp client: %v", err)
-	}
+	// Solo mode: leave cfg.VspClient nil — buyTicket's PurchaseTicketsRequest
+	// then carries no VSPClient and the vendored purchaseTickets natively
+	// skips fee reservation/processing, deriving voting rights from the
+	// purchase account (same mechanism as a manual Direct buy). The ticket
+	// must be voted by a voting-enabled wallet holding this seed.
+	if cfg.VspHost != "" {
+		// Check the VSP.
+		vspInfo, err := vspInfo(cfg.VspHost)
+		if err != nil {
+			cancel()
+			return fmt.Errorf("error setting up vsp client: %v", err)
+		}
 
-	cfg.VspClient, err = asset.VSPClient(cfg.PurchaseAccount, cfg.VspHost, vspInfo.PubKey)
-	if err != nil {
-		cancel()
-		log.Errorf("[%d] VSP Client instance failed error: %v", asset.ID, err)
-		return errors.New("VSP Client failed to start due to incorrect configuration")
+		cfg.VspClient, err = asset.VSPClient(cfg.PurchaseAccount, cfg.VspHost, vspInfo.PubKey)
+		if err != nil {
+			cancel()
+			log.Errorf("[%d] VSP Client instance failed error: %v", asset.ID, err)
+			return errors.New("VSP Client failed to start due to incorrect configuration")
+		}
 	}
 
 	// Mark the buyer active only after everything that can fail has succeeded;
@@ -286,7 +344,7 @@ func (asset *Asset) StartTicketBuyer(passphrase string) error {
 	go func() {
 		log.Infof("[%d] Running ticket buyer", asset.ID)
 
-		if err = asset.runTicketBuyer(ctx, passphrase, cfg); err != nil {
+		if err := asset.runTicketBuyer(ctx, passphrase, cfg); err != nil {
 			if ctx.Err() != nil {
 				log.Errorf("[%d] Ticket buyer instance canceled", asset.ID)
 			} else {
@@ -294,7 +352,7 @@ func (asset *Asset) StartTicketBuyer(passphrase string) error {
 			}
 		}
 
-		if err = asset.StopAutoTicketsPurchase(); err != nil {
+		if err := asset.StopAutoTicketsPurchase(); err != nil {
 			log.Errorf("[%d] Stopping auto ticket purchase errored: %v", asset.ID, err)
 		}
 	}()
@@ -542,8 +600,12 @@ func (asset *Asset) AutoTicketsBuyerConfig() *TicketBuyerConfig {
 }
 
 // TicketBuyerConfigIsSet checks if ticket buyer config is set for the asset.
+// The signal is the purchase account, NOT the VSP host: an empty host is a
+// valid SOLO (Direct buy) configuration, while ClearTicketBuyerConfig resets
+// the account to -1. Keying off the host would make a saved solo config look
+// unconfigured (the toggle would re-open the settings modal forever).
 func (asset *Asset) TicketBuyerConfigIsSet() bool {
-	return asset.ReadStringConfigValueForKey(sharedW.TicketBuyerVSPHostConfigKey, "") != ""
+	return asset.ReadInt32ConfigValueForKey(sharedW.TicketBuyerAccountConfigKey, -1) != -1
 }
 
 // IsTicketBuyerAccountSet checks if ticket buyer account is set for the asset.

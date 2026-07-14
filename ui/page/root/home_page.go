@@ -152,6 +152,15 @@ func (hp *HomePage) showOverview() {
 	hp.Display(NewOverviewPage(hp.Load, func() {}, hp.openWallet))
 }
 
+// OpenWallet opens w's detail page (landing on its default Info tab) inside
+// this HomePage. Exported for the start page: right after a wallet is
+// created or restored the user must land on that wallet's Info page, not on
+// the dashboard. Safe to call immediately after constructing the HomePage —
+// OnNavigatedTo only pushes Overview when no subpage is set yet.
+func (hp *HomePage) OpenWallet(w sharedW.Asset) {
+	hp.openWallet(w)
+}
+
 // openWallet swaps the body subpage to a per-wallet detail page. Shared
 // between sidebar entries and Overview cards so both paths land on the same
 // place.

@@ -6,7 +6,6 @@ import (
 	"gioui.org/font"
 	"gioui.org/layout"
 	"github.com/monetarium/skarb-wallet/ui/cryptomaterial"
-	"github.com/monetarium/skarb-wallet/ui/page/components"
 	"github.com/monetarium/skarb-wallet/ui/values"
 )
 
@@ -19,13 +18,9 @@ type statisticsItem struct {
 
 func (pg *Page) stakeStatisticsSection(gtx C) D {
 	isMobile := pg.IsMobileView()
-	totalRewardDim := func(gtx C) D {
-		if pg.totalRewards == "" {
-			return D{}
-		}
-		return components.LayoutBalanceWithStateSemiBold(gtx, pg.Load, pg.totalRewards)
-	}
-	totalRewardItem := &statisticsItem{Icon: pg.Theme.Icons.StakeyIcon, Title: values.String(values.StrTotalReward), ValueText: pg.totalRewards, ValueWidget: totalRewardDim}
+	// Swapped with Total Reward (now in the price section): this tile shows
+	// the live-ticket count, keeping the statistics grid all-numeric.
+	liveItem := &statisticsItem{Icon: pg.Theme.Icons.TicketLiveIcon, Title: values.String(values.StrLiveTickets), ValueText: fmt.Sprintf("%d", pg.ticketOverview.Live)}
 	revokedItem := &statisticsItem{Icon: pg.Theme.Icons.TicketRevokedIcon, Title: values.String(values.StrRevoke), ValueText: fmt.Sprintf("%d", pg.ticketOverview.Revoked)}
 	uminedItem := &statisticsItem{Icon: pg.Theme.Icons.TicketUnminedIcon, Title: values.String(values.StrUmined), ValueText: fmt.Sprintf("%d", pg.ticketOverview.Unmined)}
 	votedItem := &statisticsItem{Icon: pg.Theme.Icons.TicketVotedIcon, Title: values.String(values.StrVoted), ValueText: fmt.Sprintf("%d", pg.ticketOverview.Voted)}
@@ -45,12 +40,12 @@ func (pg *Page) stakeStatisticsSection(gtx C) D {
 				var flexChilds []layout.FlexChild
 				if isMobile {
 					flexChilds = []layout.FlexChild{
-						pg.dataStatisticsCol(totalRewardItem, revokedItem, uminedItem, isMobile),
+						pg.dataStatisticsCol(liveItem, revokedItem, uminedItem, isMobile),
 						pg.dataStatisticsCol(votedItem, immatureItem, expiredItem, isMobile),
 					}
 				} else {
 					flexChilds = []layout.FlexChild{
-						pg.dataStatisticsCol(totalRewardItem, revokedItem, nil, isMobile),
+						pg.dataStatisticsCol(liveItem, revokedItem, nil, isMobile),
 						pg.dataStatisticsCol(uminedItem, votedItem, nil, isMobile),
 						pg.dataStatisticsCol(immatureItem, expiredItem, nil, isMobile),
 					}
