@@ -3,6 +3,7 @@ package staking
 import (
 	"context"
 	"strconv"
+	"sync/atomic"
 
 	"gioui.org/font"
 	"gioui.org/layout"
@@ -31,7 +32,11 @@ type manualPurchaseModal struct {
 	*load.Load
 	*cryptomaterial.Modal
 
-	onPurchase func(accountNumber, numTickets int32, vsp *dcr.VSP)
+	// onPurchase receives the modal's CURRENT ticket price so the confirm
+	// modal's total matches what this card displayed (the price refreshes
+	// per block while the card is open — the page's open-time snapshot may
+	// be stale by purchase time).
+	onPurchase func(accountNumber, numTickets int32, vsp *dcr.VSP, ticketPriceAtoms int64)
 	onCancel   func()
 
 	cancelBtn   cryptomaterial.Button
@@ -43,9 +48,21 @@ type manualPurchaseModal struct {
 
 	dcrImpl *dcr.Asset
 	// ticketPrice is the network ticket price in VAR atoms (int64-safe: tickets
-	// are VAR-only). Snapshotted by the page when the modal is opened.
+	// are VAR-only). Seeded by the page when the modal is opened, then kept
+	// fresh while the modal is up (see the pendingRefresh drain in Handle).
 	ticketPrice int64
+
+	// pendingRefresh is set by the modal's tx/block notification listener
+	// (goroutine) and drained on the UI thread in Handle, where the ticket
+	// price and the account balances are re-read. Without it both values were
+	// open-time snapshots that went stale while the modal stayed up.
+	pendingRefresh atomic.Bool
 }
+
+// purchaseModalListenerID keys this modal's own TxAndBlockNotificationListener —
+// distinct from both the page's (OverviewPageID) and the account dropdown's
+// IDs, so registration never collides with either.
+const purchaseModalListenerID = "manual_purchase_modal"
 
 func newManualPurchaseModal(l *load.Load, wallet *dcr.Asset, ticketPrice int64) *manualPurchaseModal {
 	mp := &manualPurchaseModal{
@@ -66,7 +83,7 @@ func newManualPurchaseModal(l *load.Load, wallet *dcr.Asset, ticketPrice int64) 
 	return mp
 }
 
-func (mp *manualPurchaseModal) OnPurchase(f func(accountNumber, numTickets int32, vsp *dcr.VSP)) *manualPurchaseModal {
+func (mp *manualPurchaseModal) OnPurchase(f func(accountNumber, numTickets int32, vsp *dcr.VSP, ticketPriceAtoms int64)) *manualPurchaseModal {
 	mp.onPurchase = f
 	return mp
 }
@@ -86,6 +103,23 @@ func (mp *manualPurchaseModal) OnResume() {
 		Setup(mp.dcrImpl)
 	mp.accountDropdown.ListenForTxNotifications(mp.ParentWindow()) // stopped in OnDismiss()
 
+	// Keep the card live while it's open: each new tx/block flags a refresh
+	// of the ticket price and account balances (drained in Handle on the UI
+	// thread — CLAUDE.md §3).
+	err := mp.dcrImpl.AddTxAndBlockNotificationListener(&sharedW.TxAndBlockNotificationListener{
+		OnTransaction: func(_ int, _ *sharedW.Transaction) {
+			mp.pendingRefresh.Store(true)
+			mp.ParentWindow().Reload()
+		},
+		OnBlockAttached: func(_ int, _ int32) {
+			mp.pendingRefresh.Store(true)
+			mp.ParentWindow().Reload()
+		},
+	}, purchaseModalListenerID)
+	if err != nil {
+		log.Errorf("manual purchase modal: adding tx/block listener: %v", err)
+	}
+
 	if len(mp.dcrImpl.KnownVSPs()) == 0 {
 		go mp.dcrImpl.ReloadVSPList(context.TODO())
 	}
@@ -95,6 +129,7 @@ func (mp *manualPurchaseModal) OnDismiss() {
 	if mp.accountDropdown != nil {
 		mp.accountDropdown.StopTxNtfnListener()
 	}
+	mp.dcrImpl.RemoveTxAndBlockNotificationListener(purchaseModalListenerID)
 }
 
 // parseTicketCount returns the integer ticket count entered, or 0 if the field
@@ -244,6 +279,22 @@ func (mp *manualPurchaseModal) canPurchase() bool {
 }
 
 func (mp *manualPurchaseModal) Handle(gtx C) {
+	// Drain the notification flag on the UI thread: re-read the ticket price
+	// and the account balances so the displayed price / total / spendable
+	// (and the insufficient check derived from them) track the chain instead
+	// of freezing at open time. Pass the CURRENT selection — a no-arg Setup
+	// overwrites it with the first valid account, silently switching which
+	// account would fund the purchase (a nil selection falls back to the
+	// first account, same as the initial Setup).
+	if mp.pendingRefresh.CompareAndSwap(true, false) {
+		if tp, err := mp.dcrImpl.TicketPrice(); err == nil && tp != nil {
+			mp.ticketPrice = tp.TicketPrice
+		}
+		if mp.accountDropdown != nil {
+			_ = mp.accountDropdown.Setup(mp.dcrImpl, mp.accountDropdown.SelectedAccount())
+		}
+	}
+
 	mp.accountDropdown.Handle(gtx)
 	mp.purchaseBtn.SetEnabled(mp.canPurchase())
 
@@ -265,7 +316,7 @@ func (mp *manualPurchaseModal) Handle(gtx C) {
 			return
 		}
 		if mp.onPurchase != nil {
-			mp.onPurchase(account.Number, int32(n), vsp)
+			mp.onPurchase(account.Number, int32(n), vsp, mp.ticketPrice)
 		}
 		mp.Dismiss()
 	}

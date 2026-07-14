@@ -382,8 +382,11 @@ func (swmp *SingleWalletMasterPage) updateBalance() {
 }
 
 // computeSKABalanceLines aggregates this wallet's SKA token balances across
-// accounts and returns one pre-formatted "amount SYMBOL" string per coin
-// with a non-zero balance. VAR is shown via the int64 total elsewhere; this
+// accounts and returns one pre-formatted "amount SYMBOL" string per
+// visibility-allowed coin — INCLUDING zero balances ("0.00 SKAx"): a coin
+// the user explicitly allowed in Settings must not vanish from the header
+// just because it's empty (VisibleCoinTypes' contract; matches the overview
+// and accounts pages). VAR is shown via the int64 total elsewhere; this
 // fills the SKA gap the legacy Balance struct leaves. Safe to call from a
 // notification goroutine (no UI-thread state touched).
 func (swmp *SingleWalletMasterPage) computeSKABalanceLines() []string {
@@ -401,16 +404,10 @@ func (swmp *SingleWalletMasterPage) computeSKABalanceLines() []string {
 		if !ct.IsSKA() {
 			continue
 		}
-		bal, ok := balances[ct]
-		if !ok {
-			continue
-		}
-		// Only non-zero balances, matching this function's doc and the account-
-		// details page — a visible-but-empty SKA coin shouldn't add a "0.00
-		// SKAx" line under the VAR total.
-		if bal.SKATotal.Sign() <= 0 && bal.SKASpendable.Sign() <= 0 && bal.SKAUnconfirmed.Sign() <= 0 {
-			continue
-		}
+		// A coin absent from the balance map (never received) still gets a
+		// zero line — the zero-value CoinBalance renders as "0.00 SKAx"
+		// (same pattern as overview_page.go).
+		bal := balances[ct]
 		bal.CoinType = ct // ensure FormatCoinAmount picks the SKA branch
 		lines = append(lines, dcr.FormatCoinAmount(bal))
 	}

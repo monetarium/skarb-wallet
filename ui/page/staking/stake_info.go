@@ -2,6 +2,7 @@ package staking
 
 import (
 	"fmt"
+	"strings"
 
 	"gioui.org/font"
 	"gioui.org/layout"
@@ -105,8 +106,11 @@ func (pg *Page) stakePriceSection(gtx C) D {
 						}),
 						layout.Rigid(layout.Spacer{Height: values.MarginPadding12}.Layout),
 						layout.Rigid(func(gtx C) D {
-							live := fmt.Sprintf("%d", pg.ticketOverview.Live)
-							return pg.dataRows(gtx, values.String(values.StrLiveTickets), live, flexAxis, alignment)
+							// Swapped with Live Tickets (now a statistics
+							// tile): one reward line per visible coin —
+							// the multi-line value renders them stacked.
+							return pg.dataRows(gtx, values.String(values.StrTotalReward),
+								strings.Join(pg.rewardRows, "\n"), flexAxis, alignment)
 						}),
 					)
 				}
@@ -283,7 +287,7 @@ func (pg *Page) balanceProgressBarLayout(gtx C) D {
 
 func (pg *Page) stakingRecordStatistics(gtx C) D {
 	return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
-		layout.Rigid(pg.stakingRecord(pg.totalRewards, fmt.Sprintf("%s %s", values.String(values.StrTotal), values.String(values.StrReward)))),
+		layout.Rigid(pg.stakingRecord(strings.Join(pg.rewardRows, "\n"), fmt.Sprintf("%s %s", values.String(values.StrTotal), values.String(values.StrReward)))),
 		layout.Rigid(pg.stakingRecord(fmt.Sprintf("%d", pg.ticketOverview.Voted), values.String(values.StrVoted))),
 		layout.Rigid(pg.stakingRecord(fmt.Sprintf("%d", pg.ticketOverview.Revoked), values.String(values.StrRevoked))),
 		layout.Rigid(pg.stakingRecord(fmt.Sprintf("%d", pg.ticketOverview.Immature), values.String(values.StrImmature))),
