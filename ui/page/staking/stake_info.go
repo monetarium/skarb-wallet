@@ -73,7 +73,10 @@ func (pg *Page) stakePriceSection(gtx C) D {
 			alignment = layout.Start
 		}
 
-		ticketsCanBuy := pg.CalculateTotalTicketsCanBuy()
+		// Cached — recomputed by loadPageData on every block/tx. The old
+		// per-frame CalculateTotalTicketsCanBuy call opened a bbolt read
+		// (TicketPrice) plus a full GetAccountsRaw on EVERY redraw.
+		ticketsCanBuy := pg.ticketsCanBuy
 
 		return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
 			layout.Rigid(pg.pageHead),
@@ -166,19 +169,26 @@ func (pg *Page) buyTicketsButtonLayout(gtx C) D {
 // configured-but-paused-after-restart (the "toggle dropped on restart" case) /
 // active with reserve + tickets affordable now / active but underfunded.
 func (pg *Page) stakeStatusLayout(gtx C, ticketsCanBuy int) D {
-	configured := pg.dcrWallet.TicketBuyerConfigIsSet()
+	// tbConfigured/tbIntent/tbReserve are cached snapshots (refreshed by
+	// loadPageData and on toggle/settings changes) — the old per-frame
+	// TicketBuyerConfigIsSet + AutoTicketsBuyerConfig calls were three DB
+	// reads per redraw. The active flag stays live: it's an in-memory mutex
+	// check.
+	configured := pg.tbConfigured
 	active := pg.dcrWallet.IsAutoTicketsPurchaseActive()
 
 	var msg string
 	switch {
 	case active && ticketsCanBuy >= 1:
-		reserve := pg.dcrWallet.ToAmount(pg.dcrWallet.AutoTicketsBuyerConfig().BalanceToMaintain).String()
-		msg = values.StringF(values.StrStakeStatusActive, reserve, ticketsCanBuy)
+		msg = values.StringF(values.StrStakeStatusActive, pg.tbReserve, ticketsCanBuy)
 	case active:
 		msg = values.StringF(values.StrStakeStatusLowBalance, pg.ticketPrice)
+	case configured && pg.tbIntent:
+		// Intent still true = the buyer died WITH the process (restart),
+		// the user never turned it off.
+		msg = values.StringF(values.StrStakeStatusPaused, pg.tbReserve)
 	case configured:
-		reserve := pg.dcrWallet.ToAmount(pg.dcrWallet.AutoTicketsBuyerConfig().BalanceToMaintain).String()
-		msg = values.StringF(values.StrStakeStatusPaused, reserve)
+		msg = values.StringF(values.StrStakeStatusDisabled, pg.tbReserve)
 	default:
 		msg = values.String(values.StrStakeStatusOff)
 	}
@@ -242,8 +252,12 @@ func (pg *Page) CalculateTotalTicketsCanBuy() int {
 }
 
 func (pg *Page) balanceProgressBarLayout(gtx C) D {
-	totalBalance, err := components.CalculateMixedAccountBalance(pg.dcrWallet)
-	if err != nil {
+	// Cached snapshot (refreshed by loadPageData) — the old per-frame
+	// CalculateMixedAccountBalance re-read every account on every redraw.
+	// nil until the first load lands or on a load error: bar hidden, same
+	// as the old per-frame error path.
+	totalBalance := pg.stakeBalance
+	if totalBalance == nil {
 		return D{}
 	}
 	textSize16 := values.TextSizeTransform(pg.IsMobileView(), values.TextSize16)

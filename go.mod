@@ -57,7 +57,7 @@ require (
 require (
 	decred.org/cspp/v2 v2.4.0 // indirect
 	decred.org/dcrwallet/v5 v5.0.3 // indirect
-	gioui.org/cpu v0.0.0-20210817075930-8d6a761490d2 // indirect
+	gioui.org/cpu v0.0.0-20220412190645-f1e9e8c3b1f7 // indirect
 	gioui.org/shader v1.0.8 // indirect
 	github.com/AndreasBriese/bbloom v0.0.0-20190825152654-46b345b51c96 // indirect
 	github.com/DataDog/zstd v1.5.2 // indirect
@@ -220,3 +220,7 @@ replace github.com/lib/pq => github.com/lib/pq v1.10.4
 replace github.com/monetarium/monetarium-wallet => ./_vendored/monetarium-wallet
 
 // https://github.com/ukane-philemon/dcrdex/tree/btc-node
+
+replace gioui.org/cpu => ./_vendored/gioui-cpu
+
+replace gioui.org/shader => ./_vendored/gioui-shader

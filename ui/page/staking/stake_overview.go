@@ -63,6 +63,20 @@ type Page struct {
 	// reward line per visibility-allowed coin (VAR first), zeros included —
 	// the user asked for a Total Reward row per visible coin.
 	rewardRows []string
+
+	// Per-frame display caches. Layout used to hit the DB on EVERY frame:
+	// CalculateTotalTicketsCanBuy ran TicketPrice (bbolt) + GetAccountsRaw,
+	// the balance progress bar re-read all accounts, and the status banner
+	// re-read the buyer config — ~hundreds of disk reads/second at 60fps,
+	// pure battery drain on mobile. All refreshed by loadPageData (initial
+	// load, every block/tx via pendingRefresh, after purchases and after the
+	// buyer settings are saved). IsAutoTicketsPurchaseActive stays live in
+	// Layout — it's an in-memory mutex check.
+	ticketsCanBuy int
+	stakeBalance  *components.CummulativeWalletsBalance
+	tbConfigured  bool
+	tbIntent      bool
+	tbReserve     string
 	// showMaterialLoader is toggled from the FetchScrollData goroutine and read
 	// by Layout (stake_list.go) — atomic to avoid the §3 data race.
 	showMaterialLoader atomic.Bool
@@ -76,10 +90,15 @@ type Page struct {
 	// ticketOverview/totalRewards (which Layout reads) directly from the
 	// goroutine is a data race (CLAUDE.md §3) — a torn read of the
 	// ticketOverview pointer can crash the staking page.
-	pendingDataApply atomic.Bool
-	stagedOverview   *dcr.StakingOverview
-	stagedRewardRows []string
-	stagedDataErr    error
+	pendingDataApply   atomic.Bool
+	stagedOverview     *dcr.StakingOverview
+	stagedRewardRows   []string
+	stagedCanBuy       int
+	stagedStakeBalance *components.CummulativeWalletsBalance
+	stagedTBConfigured bool
+	stagedTBIntent     bool
+	stagedTBReserve    string
+	stagedDataErr      error
 
 	// pendingRefresh is set by the tx/block notification callbacks (goroutine)
 	// and drained on the UI thread in HandleUserInteractions, where it re-runs
@@ -100,7 +119,23 @@ type Page struct {
 	// transactions_page.go's txRefreshInFlight: loadNewItem=true resets and
 	// re-fetches the whole list, and concurrent runs race the scroll
 	// component's data/offset/position and break scrolling.
+	// ticketRefreshQueued marks a refresh requested WHILE one was running
+	// (the runner captured pre-change state, e.g. an older statFilter) —
+	// the in-flight goroutine reruns once more before releasing, so a tile
+	// click can't be silently dropped.
 	ticketRefreshInFlight atomic.Bool
+	ticketRefreshQueued   atomic.Bool
+
+	// statFilter is the ticket-list filter picked by clicking a Statistics
+	// tile (dcr.TxFilterLive/Voted/Revoked/Immature/Unmined/Expired);
+	// 0 = no tile filter, the full tickets list. Atomic because fetchTickets
+	// reads it on the scroll component's goroutines. Clicking the active
+	// tile again clears the filter.
+	statFilter atomic.Int32
+	// statTileClickables holds one persistent clickable per statistics tile,
+	// keyed by the tile's filter (clickables must survive across frames to
+	// accumulate gesture state).
+	statTileClickables map[int32]*cryptomaterial.Clickable
 
 	navToSettingsBtn cryptomaterial.Button
 	buyTicketBtn     cryptomaterial.Button
@@ -142,6 +177,14 @@ func NewStakingPage(l *load.Load, dcrWallet *dcr.Asset) *Page {
 	pg.scroll = components.NewScroll(l, pageSize, pg.fetchTickets)
 	pg.materialLoader = material.Loader(l.Theme.Base)
 	pg.ticketOverview = new(dcr.StakingOverview)
+	pg.statTileClickables = map[int32]*cryptomaterial.Clickable{
+		dcr.TxFilterLive:     l.Theme.NewClickable(true),
+		dcr.TxFilterRevoked:  l.Theme.NewClickable(true),
+		dcr.TxFilterUnmined:  l.Theme.NewClickable(true),
+		dcr.TxFilterVoted:    l.Theme.NewClickable(true),
+		dcr.TxFilterImmature: l.Theme.NewClickable(true),
+		dcr.TxFilterExpired:  l.Theme.NewClickable(true),
+	}
 	pg.initStakePriceWidget()
 	pg.initTicketList()
 
@@ -201,11 +244,21 @@ func (pg *Page) startPageData() {
 // it off the UI thread (`go pg.refreshTicketList()`).
 func (pg *Page) refreshTicketList() {
 	if !pg.ticketRefreshInFlight.CompareAndSwap(false, true) {
+		// A refresh is already running — and it captured the PRE-change
+		// state (e.g. the statFilter a tile click just set). Queue a
+		// follow-up so this trigger isn't silently dropped: the in-flight
+		// goroutine reruns once more before releasing.
+		pg.ticketRefreshQueued.Store(true)
 		return
 	}
 	defer pg.ticketRefreshInFlight.Store(false)
-	pg.scroll.FetchScrollDataHandler(false, pg.ParentWindow(), false, true)
-	pg.ParentWindow().Reload()
+	for {
+		pg.scroll.FetchScrollDataHandler(false, pg.ParentWindow(), false, true)
+		pg.ParentWindow().Reload()
+		if !pg.ticketRefreshQueued.CompareAndSwap(true, false) {
+			return
+		}
+	}
 }
 
 // fetch ticket price only when the wallet is synced
@@ -269,10 +322,33 @@ func (pg *Page) loadPageData() {
 			overview = ov
 		}
 
+		// Per-frame caches (see the field docs): computed HERE, off the UI
+		// thread, so Layout never touches the DB.
+		canBuy := pg.CalculateTotalTicketsCanBuy()
+		stakeBal, err := components.CalculateMixedAccountBalance(pg.dcrWallet)
+		if err != nil {
+			stakeBal = nil // progress bar hides, same as the old per-frame error path
+		}
+		tbConfigured := pg.dcrWallet.TicketBuyerConfigIsSet()
+		// Default the intent to tbConfigured, not false: a wallet configured
+		// BEFORE the intent key existed has no stored value, and defaulting
+		// to false would greet it with "turned off" though the user never
+		// turned it off — "paused after restart" is the truthful legacy read.
+		tbIntent := pg.dcrWallet.ReadBoolConfigValueForKey(sharedW.TicketBuyerIntentConfigKey, tbConfigured)
+		var tbReserve string
+		if tbConfigured {
+			tbReserve = pg.dcrWallet.ToAmount(pg.dcrWallet.AutoTicketsBuyerConfig().BalanceToMaintain).String()
+		}
+
 		// Stage for the UI thread — never write ticketOverview/rewardRows
 		// (read by Layout) or show a modal from this goroutine (CLAUDE.md §3).
 		pg.stagedRewardRows = rewardRows
 		pg.stagedOverview = overview
+		pg.stagedCanBuy = canBuy
+		pg.stagedStakeBalance = stakeBal
+		pg.stagedTBConfigured = tbConfigured
+		pg.stagedTBIntent = tbIntent
+		pg.stagedTBReserve = tbReserve
 		pg.stagedDataErr = stageErr
 		pg.pendingDataApply.Store(true)
 		pg.ParentWindow().Reload()
@@ -345,6 +421,11 @@ func (pg *Page) HandleUserInteractions(gtx C) {
 		if pg.stagedOverview != nil {
 			pg.ticketOverview = pg.stagedOverview
 		}
+		pg.ticketsCanBuy = pg.stagedCanBuy
+		pg.stakeBalance = pg.stagedStakeBalance
+		pg.tbConfigured = pg.stagedTBConfigured
+		pg.tbIntent = pg.stagedTBIntent
+		pg.tbReserve = pg.stagedTBReserve
 		if pg.stagedDataErr != nil {
 			errModal := modal.NewErrorModal(pg.Load, pg.stagedDataErr.Error(), modal.DefaultClickFunc())
 			pg.ParentWindow().ShowModal(errModal)
@@ -404,6 +485,20 @@ func (pg *Page) HandleUserInteractions(gtx C) {
 		pg.showManualPurchaseModal()
 	}
 
+	// A Statistics tile click filters the ticket list by that status; the
+	// active tile is highlighted (dataStatisticsItem) and clicking it again
+	// clears the filter back to the full list.
+	for filter, clk := range pg.statTileClickables {
+		if clk.Clicked(gtx) {
+			if pg.statFilter.Load() == filter {
+				pg.statFilter.Store(0)
+			} else {
+				pg.statFilter.Store(filter)
+			}
+			go pg.refreshTicketList()
+		}
+	}
+
 	if pg.stake.Changed(gtx) {
 		if pg.stake.IsChecked() {
 			if pg.dcrWallet.TicketBuyerConfigIsSet() {
@@ -424,6 +519,10 @@ func (pg *Page) HandleUserInteractions(gtx C) {
 			}
 		} else {
 			_ = pg.dcrWallet.StopAutoTicketsPurchase()
+			// The user turned it off — remember that, so the banner says
+			// "turned off" instead of "paused after restart".
+			pg.dcrWallet.SetBoolConfigValueForKey(sharedW.TicketBuyerIntentConfigKey, false)
+			pg.loadPageData()
 		}
 	}
 
@@ -436,6 +535,9 @@ func (pg *Page) HandleUserInteractions(gtx C) {
 
 		ticketBuyerModal := newTicketBuyerModal(pg.Load, pg.dcrWallet).
 			OnSettingsSaved(func() {
+				// The status banner reads the cached config snapshot —
+				// re-stage it so the new reserve/config shows immediately.
+				pg.loadPageData()
 				infoModal := modal.NewSuccessModal(pg.Load, values.String(values.StrTicketSettingSaved), modal.DefaultClickFunc())
 				pg.ParentWindow().ShowModal(infoModal)
 			}).
@@ -445,14 +547,12 @@ func (pg *Page) HandleUserInteractions(gtx C) {
 		pg.ParentWindow().ShowModal(ticketBuyerModal)
 	}
 
-	// Refresh the ticket price only at the stake-difficulty window boundary
-	// (the only moment it changes). The old extra per-frame
-	// `if IsSynced { fetchTicketPrice }` opened a bbolt read transaction on the
-	// UI thread on every redraw — needless disk I/O and jank.
-	secs, _ := pg.dcrWallet.NextTicketPriceRemaining()
-	if secs <= 0 {
-		pg.fetchTicketPrice()
-	}
+	// The ticket price is refreshed on every attached block by the
+	// pendingRefresh drain above — which covers the stake-difficulty window
+	// boundary (the only moment the price changes). The old per-frame
+	// `if secs <= 0 { fetchTicketPrice() }` re-opened a bbolt read on EVERY
+	// redraw for the entire duration of the boundary block (minutes), and on
+	// an unsynced wallet could stack the "not synced" error modal per frame.
 
 	if clicked, selectedItem := pg.ticketsList.ItemClicked(); clicked {
 		tickets := pg.scroll.FetchedData()
@@ -516,6 +616,8 @@ func (pg *Page) ticketBuyerSettingsModal() {
 			pg.stake.SetChecked(false)
 		}).
 		OnSettingsSaved(func() {
+			// Re-stage the cached config snapshot (status banner/reserve).
+			pg.loadPageData()
 			pg.startTicketBuyerPasswordModal()
 			infoModal := modal.NewSuccessModal(pg.Load, values.String(values.StrTicketSettingSaved), modal.DefaultClickFunc())
 			pg.ParentWindow().ShowModal(infoModal)
@@ -708,7 +810,10 @@ func (pg *Page) startTicketBuyerPasswordModal() {
 		}).
 		SetNegativeButtonCallback(func() {
 			_ = pg.dcrWallet.StopAutoTicketsPurchase()
+			// Declining the password = the buyer is NOT wanted running.
+			pg.dcrWallet.SetBoolConfigValueForKey(sharedW.TicketBuyerIntentConfigKey, false)
 			pg.stake.SetChecked(false)
+			pg.loadPageData()
 		}).
 		SetPositiveButtonCallback(func(_, password string, pm *modal.CreatePasswordModal) bool {
 			pg.stake.SetChecked(false)
@@ -725,23 +830,25 @@ func (pg *Page) startTicketBuyerPasswordModal() {
 				return false
 			}
 
+			// Remember the buyer is WANTED running — after an app restart
+			// the banner then says "paused after restart", not "turned off".
+			pg.dcrWallet.SetBoolConfigValueForKey(sharedW.TicketBuyerIntentConfigKey, true)
 			pg.stake.SetChecked(pg.dcrWallet.IsAutoTicketsPurchaseActive())
+			pg.loadPageData()
 			pg.ParentWindow().Reload()
 			pm.Dismiss()
 
-			// The "balance to maintain" field is a RESERVE, not the spend
-			// amount — the auto-buyer spends (spendable − reserve) on tickets,
-			// one ticket at the current ticket price. If the wallet can't afford
-			// even one ticket, enabling auto-buy otherwise looks like it did
-			// nothing (the page just shows "Можна купити 0"). Say so explicitly;
-			// the buyer keeps running and will purchase once the wallet is funded.
-			if pg.CalculateTotalTicketsCanBuy() < 1 {
-				infoModal := modal.NewCustomModal(pg.Load).
-					Title(values.String(values.StrAutoTicketPurchase)).
-					Body(values.StringF(values.StrAutoTicketInsufficient, pg.ticketPrice)).
-					SetPositiveButtonText(values.String(values.StrGotIt))
-				pg.ParentWindow().ShowModal(infoModal)
-			}
+			// Just confirm the enablement — nothing about balances. The old
+			// low-balance warning here raced the buyer itself: it often
+			// bought a ticket between the password confirm and this modal,
+			// making "insufficient funds" appear right after a successful
+			// purchase. The persistent staking banner already reports the
+			// funded/underfunded state accurately.
+			infoModal := modal.NewCustomModal(pg.Load).
+				Title(values.String(values.StrAutoTicketPurchase)).
+				Body(values.String(values.StrAutoTicketEnabled)).
+				SetPositiveButtonText(values.String(values.StrGotIt))
+			pg.ParentWindow().ShowModal(infoModal)
 
 			return true
 		})

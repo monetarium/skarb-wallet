@@ -742,9 +742,18 @@ func CoinImageBySymbol(l *load.Load, assetType libutils.AssetType, isWatchOnly b
 	return nil
 }
 
-// GetTicketPurchaseAccount is a stub. Ticket buying / VSP integration was
-// removed in v1; nothing to look up.
+// GetTicketPurchaseAccount returns the auto-buyer's configured purchase
+// account, or (nil, nil) when the buyer isn't configured — the caller picks
+// its own fallback. (Was a hard stub returning nil,nil while staking was
+// removed; the buyer is back, so honor its config again: the settings modal
+// restore and the staking balance both key off this.)
 func GetTicketPurchaseAccount(selectedWallet *dcr.Asset) (*sharedW.Account, error) {
+	if selectedWallet == nil {
+		return nil, nil
+	}
+	if cfg := selectedWallet.AutoTicketsBuyerConfig(); cfg.PurchaseAccount >= 0 {
+		return selectedWallet.GetAccount(cfg.PurchaseAccount)
+	}
 	return nil, nil
 }
 
@@ -759,8 +768,12 @@ func CalculateMixedAccountBalance(selectedWallet *dcr.Asset) (*CummulativeWallet
 
 	var err error
 	if account == nil {
-		// A valid purchase account hasn't been set. Use default mixed account.
-		account, err = selectedWallet.GetAccount(selectedWallet.MixedAccountNumber())
+		// No purchase account configured. Use the DEFAULT account (0) — the
+		// same account the manual purchase modal funds from. The old fallback
+		// was GetAccount(MixedAccountNumber()) with the mixer removed, i.e.
+		// GetAccount(-1) → ErrNotExist on every wallet — which silently
+		// zeroed "Tickets You Can Buy" and hid the staked/spendable bar.
+		account, err = selectedWallet.GetAccount(dcr.DefaultAccountNum)
 		if err != nil {
 			return nil, err
 		}
