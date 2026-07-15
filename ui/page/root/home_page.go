@@ -285,15 +285,24 @@ func (hp *HomePage) HandleUserInteractions(gtx layout.Context) {
 				return
 			}
 			newWallet.SaveUserConfigValue(sharedW.AutoSyncConfigKey, true)
+			// Land on the new wallet's Info page in every branch — this
+			// path used to leave the body on the dashboard / previously
+			// opened wallet. For a freshly created wallet the open happens
+			// in the post-backup redirect: by then VerifySeedForWallet has
+			// set IsBackedUp, so SingleWalletMasterPage won't stack its own
+			// "Backup now or later?" prompt on top of the forced flow.
 			if newWallet.IsWatchingOnlyWallet() {
+				hp.openWallet(newWallet)
 				return
 			}
 			if dcrW, ok := newWallet.(*dcr.Asset); ok && dcrW.IsRestored {
+				hp.openWallet(newWallet)
 				return
 			}
 			currentID := hp.ParentWindow().CurrentPageID()
 			hp.ParentWindow().Display(seedbackup.NewBackupInstructionsPage(hp.Load, newWallet,
 				func(_ *load.Load, navigator app.WindowNavigator) {
+					hp.openWallet(newWallet)
 					navigator.ClosePagesAfter(currentID)
 				}))
 		}))

@@ -41,6 +41,12 @@ const (
 	TicketBuyerWalletConfigKey  = "tb_wallet_id"
 	TicketBuyerAccountConfigKey = "tb_account_number"
 	TicketBuyerATMConfigKey     = "tb_amount_to_maintain"
+	// TicketBuyerIntentConfigKey remembers whether the user WANTED the
+	// auto-buyer running: set true when StartTicketBuyer succeeds, false when
+	// the user toggles it off. Configured-but-inactive then splits into
+	// "paused after restart" (intent true — the process died with the buyer
+	// on) vs "turned off by the user" (intent false) on the staking banner.
+	TicketBuyerIntentConfigKey = "tb_enabled_intent"
 
 	ExchangeSourceDstnTypeConfigKey = "exchange_source_destination_key"
 

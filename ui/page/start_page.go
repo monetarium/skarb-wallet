@@ -311,26 +311,31 @@ func (sp *startPage) HandleUserInteractions(gtx C) {
 			sp.setLanguagePref(false)
 			homePage := root.NewHomePage(sp.Load)
 			sp.ParentNavigator().Display(homePage)
-			// Land on the new wallet's Info page (SingleWalletMasterPage's
-			// default tab) instead of the dashboard. For a freshly created
-			// wallet the seed-backup flow below stacks on top; its completion
-			// callback (ClosePagesAfter) then reveals this wallet page.
-			if newWallet != nil {
-				homePage.OpenWallet(newWallet)
-			}
 			// Force the seed-phrase backup flow for a FRESHLY CREATED wallet
 			// before the user can do anything else. Without this the seed was
 			// never shown at all (backup was only reachable manually via
 			// wallet settings) — a wallet whose DB is lost before a manual
 			// backup is unrecoverable. Restored and watch-only wallets skip
 			// this: their owner already holds the seed / there is no seed.
+			//
+			// The new wallet's Info page is opened AFTER the backup flow (in
+			// the redirect), not before it: pre-backup the wallet reads
+			// IsBackedUp=false, and SingleWalletMasterPage.OnNavigatedTo
+			// would stack its own "Backup now or later?" prompt on top of
+			// this forced flow. Restored/watch-only wallets open immediately.
+			freshlyCreated := false
 			if newWallet != nil && !newWallet.IsWatchingOnlyWallet() {
 				if dcrW, ok := newWallet.(*dcr.Asset); !ok || !dcrW.IsRestored {
+					freshlyCreated = true
 					sp.ParentNavigator().Display(seedbackup.NewBackupInstructionsPage(sp.Load, newWallet,
 						func(_ *load.Load, navigator app.WindowNavigator) {
+							homePage.OpenWallet(newWallet)
 							navigator.ClosePagesAfter(root.HomePageID)
 						}))
 				}
+			}
+			if newWallet != nil && !freshlyCreated {
+				homePage.OpenWallet(newWallet)
 			}
 		})
 		sp.ParentNavigator().Display(createWalletPage)

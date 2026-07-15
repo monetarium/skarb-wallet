@@ -230,7 +230,6 @@ func (pg *CreateWallet) OnNavigatedFrom() {}
 // to be eventually drawn on screen.
 // Part of the load.Page interface.
 func (pg *CreateWallet) Layout(gtx C) D {
-	pg.handleEditorEvents(gtx)
 	return cryptomaterial.UniformPadding(gtx, func(gtx layout.Context) layout.Dimensions {
 		return cryptomaterial.LinearLayout{
 			Width:     cryptomaterial.MatchParent,
@@ -598,6 +597,14 @@ func (pg *CreateWallet) createWallet() {
 // displayed.
 // Part of the load.Page interface.
 func (pg *CreateWallet) HandleUserInteractions(gtx C) {
+	// MUST run here (before the button Clicked checks below), NOT in Layout:
+	// the Enter→Submit path translates into a programmatic Button.Click(),
+	// and gio's Clickable.Layout drains-and-DISCARDS any click still pending
+	// when the button is laid out. Fired from Layout, the click was swallowed
+	// in the same frame and Enter did nothing; fired here, the Clicked(gtx)
+	// checks a few lines down consume it immediately.
+	pg.handleEditorEvents(gtx)
+
 	// Apply errors staged by the create/import goroutines on the UI thread
 	// (Editor.SetError mutates state Layout reads — see CLAUDE.md §3).
 	if pg.pendingErrApply.CompareAndSwap(true, false) {

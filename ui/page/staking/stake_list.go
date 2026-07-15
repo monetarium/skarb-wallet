@@ -43,13 +43,19 @@ func (pg *Page) stopTxNotificationsListener() {
 }
 
 func (pg *Page) fetchTickets(offset, pageSize int32) ([]*transactionItem, int, bool, error) {
-	txs, err := pg.dcrWallet.GetTransactionsRaw(offset, pageSize, dcr.TxFilterTickets, true, "")
+	// A Statistics tile narrows the list to that ticket status; without a
+	// tile selection the full tickets list is shown.
+	filter := pg.statFilter.Load()
+	if filter == 0 {
+		filter = dcr.TxFilterTickets
+	}
+	txs, err := pg.dcrWallet.GetTransactionsRaw(offset, pageSize, filter, true, "")
 	if err != nil {
 		return nil, -1, false, err
 	}
 
-	tickets, err := pg.stakeToTransactionItems(txs, true, func(filter int32) bool {
-		return filter == dcr.TxFilterTickets
+	tickets, err := pg.stakeToTransactionItems(txs, true, func(f int32) bool {
+		return f == filter
 	})
 	return tickets, len(tickets), false, err
 }
