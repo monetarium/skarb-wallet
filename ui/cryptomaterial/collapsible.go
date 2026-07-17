@@ -68,13 +68,13 @@ func (t *Theme) CollapsibleWithOption() *CollapsibleWithOption {
 		expandedIcon:    t.collapseIcon,
 		collapsedIcon:   t.expandIcon,
 		moreIconButton: IconButton{
-			IconButtonStyle{
+			IconButtonStyle: IconButtonStyle{
 				Button: new(widget.Clickable),
 				Icon:   t.NavMoreIcon,
 				Size:   unit.Dp(25),
 				Inset:  layout.UniformInset(unit.Dp(0)),
 			},
-			&values.ColorStyle{
+			colorStyle: &values.ColorStyle{
 				Background: color.NRGBA{},
 				Foreground: t.Color.Text,
 			},

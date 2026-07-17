@@ -13,9 +13,16 @@ const KeyEndBlock = "EndBlock"
 // SaveOrUpdate saves a transaction to the database and would overwrite
 // if a transaction with same hash exists
 func (db *DB) SaveOrUpdate(emptyTxPointer, record interface{}) (overwritten bool, err error) {
+	return saveOrUpdate(db.walletDataDB, emptyTxPointer, record)
+}
+
+// saveOrUpdate runs the read-compare-delete-save dance on any storm
+// node: the live DB (one bbolt write transaction per operation) or an
+// open BatchTx (all operations share a single transaction).
+func saveOrUpdate(node storm.Node, emptyTxPointer, record interface{}) (overwritten bool, err error) {
 	v := reflect.ValueOf(record)
 	txHash := reflect.Indirect(v).FieldByName("Hash").String()
-	err = db.walletDataDB.One("Hash", txHash, emptyTxPointer)
+	err = node.One("Hash", txHash, emptyTxPointer)
 	if err != nil && err != storm.ErrNotFound {
 		err = errors.Errorf("error checking if record was already indexed: %s", err.Error())
 		return
@@ -28,7 +35,7 @@ func (db *DB) SaveOrUpdate(emptyTxPointer, record interface{}) (overwritten bool
 	if timestamp > 0 {
 		overwritten = true
 		// delete old record before saving new (if it exists)
-		_ = db.walletDataDB.DeleteStruct(emptyTxPointer)
+		_ = node.DeleteStruct(emptyTxPointer)
 	}
 
 	if txlabel != "" {
@@ -38,9 +45,42 @@ func (db *DB) SaveOrUpdate(emptyTxPointer, record interface{}) (overwritten bool
 		v.Elem().FieldByName("Label").SetString(txlabel)
 	}
 
-	err = db.walletDataDB.Save(record)
+	err = node.Save(record)
 	return
 }
+
+// BatchTx accumulates writes in one storm/bbolt transaction — a single
+// fsync per Commit instead of one (or three) per record. The initial
+// tx-index pass over a whole history is disk-bound on exactly that,
+// which made first sync crawl on slow (phone) storage.
+type BatchTx struct {
+	node storm.Node
+}
+
+// BeginBatch opens a write transaction. bbolt allows one writer at a
+// time: other writers block until Commit/Rollback, so keep batches
+// short-lived and do any decoding work outside of them.
+func (db *DB) BeginBatch() (*BatchTx, error) {
+	node, err := db.walletDataDB.Begin(true)
+	if err != nil {
+		return nil, err
+	}
+	return &BatchTx{node: node}, nil
+}
+
+// SaveOrUpdate mirrors DB.SaveOrUpdate inside the batch transaction.
+func (b *BatchTx) SaveOrUpdate(emptyTxPointer, record interface{}) (overwritten bool, err error) {
+	return saveOrUpdate(b.node, emptyTxPointer, record)
+}
+
+// SaveLastIndexPoint mirrors DB.SaveLastIndexPoint inside the batch, so
+// the resume checkpoint commits atomically with the rows it covers.
+func (b *BatchTx) SaveLastIndexPoint(endBlockHeight int32) error {
+	return saveLastIndexPoint(b.node, endBlockHeight)
+}
+
+func (b *BatchTx) Commit() error   { return b.node.Commit() }
+func (b *BatchTx) Rollback() error { return b.node.Rollback() }
 
 func (db *DB) SaveOrUpdateVspdRecord(emptyTxPointer, record interface{}) (updated bool, err error) {
 	v := reflect.ValueOf(record)
@@ -71,7 +111,11 @@ func (db *DB) LastIndexPoint() (int32, error) {
 }
 
 func (db *DB) SaveLastIndexPoint(endBlockHeight int32) error {
-	err := db.walletDataDB.Set(TxBucketName, KeyEndBlock, &endBlockHeight)
+	return saveLastIndexPoint(db.walletDataDB, endBlockHeight)
+}
+
+func saveLastIndexPoint(node storm.Node, endBlockHeight int32) error {
+	err := node.Set(TxBucketName, KeyEndBlock, &endBlockHeight)
 	if err != nil {
 		return fmt.Errorf("error setting block height for last indexed tx: %s", err.Error())
 	}

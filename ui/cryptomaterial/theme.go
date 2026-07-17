@@ -49,8 +49,11 @@ type Theme struct {
 	dropDownMenus    []*DropDown
 	DropdownBackdrop *widget.Clickable
 
-	allEditors   []*Editor
-	backButtons  []*widget.Clickable
+	allEditors []*Editor
+	// backTargets collects the back arrows actually drawn during the
+	// current frame's layout (UI thread only). The Android hardware back
+	// key activates the last (deepest nested) one — see OnTapBack.
+	backTargets  []*widget.Clickable
 	isDarkModeOn bool
 }
 
@@ -364,13 +367,33 @@ func (t *Theme) WatchOnlyAssetIcon(asset utils.AssetType) *Image {
 	return icon
 }
 
-func (t *Theme) AddBackClick(clickable *widget.Clickable) {
-	t.backButtons = append(t.backButtons, clickable)
+// MarkBackButtonLaidOut records a back arrow as it is drawn; called from
+// IconButton.Layout for buttons registered via TrackBackTarget.
+func (t *Theme) MarkBackButtonLaidOut(clickable *widget.Clickable) {
+	t.backTargets = append(t.backTargets, clickable)
 }
 
+// ResetBackTargets drops the previous frame's back arrows. Called once at
+// the start of every frame, before pages lay out and re-register.
+func (t *Theme) ResetBackTargets() {
+	t.backTargets = t.backTargets[:0]
+}
+
+// HasBackTarget reports whether any back arrow was drawn this frame.
+// With no target the window skips claiming the back key, letting
+// Android's default (background the app at the navigation root) apply.
+func (t *Theme) HasBackTarget() bool {
+	return len(t.backTargets) > 0
+}
+
+// OnTapBack routes the Android hardware back key to the deepest back
+// arrow visible this frame. Earlier this clicked every arrow ever
+// created: one key press cascade-popped master AND sub pages at once,
+// and arrows of destroyed pages accumulated queued ghost clicks that
+// fired when their page was shown again.
 func (t *Theme) OnTapBack() {
-	for _, clickable := range t.backButtons {
-		clickable.Click()
+	if n := len(t.backTargets); n > 0 {
+		t.backTargets[n-1].Click()
 	}
 }
 

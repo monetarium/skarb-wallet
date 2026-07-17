@@ -31,6 +31,7 @@ type SubPage struct {
 func SubpageHeaderButtons(l *load.Load) (cryptomaterial.IconButton, cryptomaterial.IconButton) {
 	backClickable := new(widget.Clickable)
 	backButton := l.Theme.NewIconButton(l.Theme.Icons.NavigationArrowBack, backClickable)
+	backButton.TrackBackTarget(l.Theme)
 	infoButton := l.Theme.IconButton(l.Theme.Icons.ActionInfo)
 
 	size := values.MarginPadding24
@@ -54,7 +55,7 @@ func GetBackButton(l *load.Load) cryptomaterial.IconButton {
 	}
 	backButton.Size = size
 	backButton.Inset = layout.UniformInset(values.MarginPadding0)
-	l.Theme.AddBackClick(backClickable)
+	backButton.TrackBackTarget(l.Theme)
 	return backButton
 }
 

@@ -54,6 +54,13 @@ type AssetsManager struct {
 	RateSource rateSourceStub // Phase-1 stub; FX rate fetching removed.
 	Politeia   politeiaStub   // Phase-1 stub; governance removed.
 
+	// walletsMu guards the Assets.DCR.Wallets map: wallet create/restore
+	// run on background goroutines while the UI (and the per-second
+	// screen-awake poll on mobile) iterates the map from the frame
+	// goroutine — an unguarded write during iteration is a fatal runtime
+	// error.
+	walletsMu sync.RWMutex
+
 	toast *notification.Toast
 
 	NeedMigrate bool
@@ -191,7 +198,7 @@ func (mgr *AssetsManager) prepareExistingWallets() error {
 				mgr.Assets.DCR.BadWallets[wallet.ID] = wallet
 				log.Warnf("Ignored dcr wallet load error for wallet %d (%s)", wallet.ID, wallet.Name)
 			} else {
-				mgr.Assets.DCR.Wallets[wallet.ID] = w
+				mgr.addWallet(w)
 			}
 		default:
 			mgr.Assets.DCR.BadWallets[wallet.ID] = wallet
@@ -312,6 +319,7 @@ func (mgr *AssetsManager) sortWallets(assetType utils.AssetType) []sharedW.Asset
 		unsortedWallets = mgr.Assets.DCR.Wallets
 	}
 
+	mgr.walletsMu.RLock()
 	for _, wallet := range unsortedWallets {
 		if wallet.IsWatchingOnlyWallet() {
 			watchOnlyWallets = append(watchOnlyWallets, wallet)
@@ -319,6 +327,7 @@ func (mgr *AssetsManager) sortWallets(assetType utils.AssetType) []sharedW.Asset
 			normalWallets = append(normalWallets, wallet)
 		}
 	}
+	mgr.walletsMu.RUnlock()
 
 	sort.Slice(normalWallets, func(i, j int) bool {
 		return normalWallets[i].GetWalletID() < normalWallets[j].GetWalletID()
@@ -352,13 +361,26 @@ func (mgr *AssetsManager) DeleteWallet(walletID int, privPass string) error {
 	}
 
 	if wallet.GetAssetType() == utils.DCRWalletAsset {
+		mgr.walletsMu.Lock()
 		delete(mgr.Assets.DCR.Wallets, walletID)
+		mgr.walletsMu.Unlock()
 	}
 	return nil
 }
 
+// addWallet registers a freshly created/restored wallet under the map
+// lock — creation runs on background goroutines while the UI iterates
+// the map.
+func (mgr *AssetsManager) addWallet(wallet sharedW.Asset) {
+	mgr.walletsMu.Lock()
+	mgr.Assets.DCR.Wallets[wallet.GetWalletID()] = wallet
+	mgr.walletsMu.Unlock()
+}
+
 // WalletWithID returns a wallet with the given ID.
 func (mgr *AssetsManager) WalletWithID(walletID int) sharedW.Asset {
+	mgr.walletsMu.RLock()
+	defer mgr.walletsMu.RUnlock()
 	if wallet, ok := mgr.Assets.DCR.Wallets[walletID]; ok {
 		return wallet
 	}

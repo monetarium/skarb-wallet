@@ -228,6 +228,7 @@ func NewSendPage(l *load.Load, wallet sharedW.Asset) *Page {
 	}
 	pg.customFeeEditor = l.Theme.Editor(new(widget.Editor), values.String(values.StrFeeRatePerKbHint))
 	pg.customFeeEditor.Editor.SingleLine = true
+	pg.customFeeEditor.Editor.InputHint = key.HintNumeric
 	pg.customFeeApplyBtn = l.Theme.Button(values.String(values.StrApply))
 	pg.customFeeApplyBtn.TextSize = values.TextSize14
 	pg.customFeeApplyBtn.Inset = layout.UniformInset(values.MarginPadding8)
@@ -395,6 +396,7 @@ func (pg *Page) addRecipient() {
 func (pg *Page) removeRecipient(id int) {
 	for i, re := range pg.recipients {
 		if re.id == id {
+			re.sendDestination.stopQRScan()
 			pg.recipients = append(pg.recipients[:i], pg.recipients[i+1:]...)
 			break
 		}
@@ -1617,6 +1619,9 @@ func (pg *Page) HandleKeyPress(_ *key.Event) {}
 // Part of the load.Page interface.
 func (pg *Page) OnNavigatedFrom() {
 	pg.walletDropdown.StopTxNtfnListener()
+	for _, rc := range pg.recipients {
+		rc.sendDestination.stopQRScan()
+	}
 }
 
 func (pg *Page) isFeerateAPIApproved() bool {

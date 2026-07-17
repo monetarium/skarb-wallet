@@ -6,6 +6,7 @@ import (
 	"sync/atomic"
 
 	"gioui.org/font"
+	"gioui.org/io/key"
 	"gioui.org/layout"
 	"gioui.org/widget"
 
@@ -77,6 +78,7 @@ func newManualPurchaseModal(l *load.Load, wallet *dcr.Asset, ticketPrice int64) 
 
 	mp.ticketsEditor = l.Theme.Editor(new(widget.Editor), values.String(values.StrNumberOfTickets))
 	mp.ticketsEditor.Editor.SingleLine = true
+	mp.ticketsEditor.Editor.InputHint = key.HintNumeric
 	mp.ticketsEditor.Editor.SetText("1")
 
 	mp.purchaseBtn.SetEnabled(false)

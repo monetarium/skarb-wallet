@@ -5,6 +5,7 @@ import (
 	"math"
 	"math/big"
 	"strconv"
+	"strings"
 
 	"gioui.org/io/key"
 	"gioui.org/layout"
@@ -67,6 +68,7 @@ func newSendAmount(theme *cryptomaterial.Theme, assetType libUtil.AssetType) *se
 	sa.amountEditor.Editor.SetText("")
 	sa.amountEditor.HasCustomButton = true
 	sa.amountEditor.Editor.SingleLine = true
+	sa.amountEditor.Editor.InputHint = key.HintNumeric
 	sa.amountEditor.IsTitleLabel = false
 	sa.amountEditor.AlwaysShowHint()
 
@@ -79,6 +81,7 @@ func newSendAmount(theme *cryptomaterial.Theme, assetType libUtil.AssetType) *se
 	sa.usdAmountEditor.Editor.SetText("")
 	sa.usdAmountEditor.HasCustomButton = true
 	sa.usdAmountEditor.Editor.SingleLine = true
+	sa.usdAmountEditor.Editor.InputHint = key.HintNumeric
 	sa.usdAmountEditor.IsTitleLabel = false
 	sa.usdAmountEditor.AlwaysShowHint()
 
@@ -179,7 +182,10 @@ func (sa *sendAmount) setAmountBig(atoms *big.Int) {
 }
 
 func (sa *sendAmount) amountIsValid() bool {
-	txt := sa.amountEditor.Editor.Text()
+	// Accept a comma decimal separator: uk-locale Android numeric
+	// keypads expose only "," and ParseAmountToAtomsBig (the actual
+	// amount parser) already normalizes it the same way.
+	txt := strings.Replace(sa.amountEditor.Editor.Text(), ",", ".", 1)
 	amount, err := strconv.ParseFloat(txt, 64)
 	if (err == nil && amount <= 0) || (err != nil && sa.amountErrorText == "" && len(txt) > 0) {
 		// do not overwrite existing errors
@@ -284,7 +290,9 @@ func (sa *sendAmount) validateAmount() {
 func (sa *sendAmount) validateUSDAmount() bool {
 	sa.amountErrorText = ""
 	if sa.inputsNotEmpty(sa.usdAmountEditor.Editor) {
-		usdAmount, err := strconv.ParseFloat(sa.usdAmountEditor.Editor.Text(), 64)
+		// Comma decimal separator — see amountIsValid.
+		usdText := strings.Replace(sa.usdAmountEditor.Editor.Text(), ",", ".", 1)
+		usdAmount, err := strconv.ParseFloat(usdText, 64)
 		if err != nil {
 			// empty dcr input
 			sa.amountEditor.Editor.SetText("")
