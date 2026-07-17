@@ -129,9 +129,7 @@ type TransactionsPage struct {
 	orderDropDown    *cryptomaterial.DropDown
 	walletDropDown   *cryptomaterial.DropDown
 	coinTypeDropDown *cryptomaterial.DropDown
-	filterBtn        *cryptomaterial.Clickable
 	exportBtn        *cryptomaterial.Clickable
-	isFilterOpen     bool
 	searchEditor     cryptomaterial.Editor
 
 	transactionList *cryptomaterial.ClickableList
@@ -215,7 +213,6 @@ func NewTransactionsPage(l *load.Load, wallet sharedW.Asset) *TransactionsPage {
 	}
 
 	pg.scroll = components.NewScroll(l, pageSize, pg.fetchTransactions)
-	pg.filterBtn = l.Theme.NewClickable(false)
 	pg.exportBtn = l.Theme.NewClickable(false)
 	pg.transactionList.Radius = cryptomaterial.Radius(14)
 	pg.transactionList.IsShadowEnabled = true
@@ -369,7 +366,6 @@ func NewTransactionsPageWithType(l *load.Load, selectedTab int, wallet sharedW.A
 		pg.isShowTitle = false
 	}
 	pg.scroll = components.NewScroll(l, pageSize, pg.fetchTransactions)
-	pg.filterBtn = l.Theme.NewClickable(false)
 	pg.exportBtn = l.Theme.NewClickable(false)
 	pg.transactionList.Radius = cryptomaterial.Radius(14)
 	pg.transactionList.IsShadowEnabled = true
@@ -462,6 +458,14 @@ func (pg *TransactionsPage) refreshAvailableTxType() {
 	pg.statusDropDown.CollapsedLayoutTextDirection = layout.E
 	pg.statusDropDown.SetConvertTextSize(pg.ConvertTextSize)
 	settingCommonDropdown(pg.Theme, pg.statusDropDown)
+
+	// The Regular tab opens on "All without Split": splits are ticket
+	// plumbing, not payments, so the plain-transfers view is the useful
+	// default — "All types" stays one click away. (No-op for non-DCR
+	// assets, whose filter set has no such label.)
+	if tableTab(pg.selectedTxCategoryTab) == 0 {
+		pg.statusDropDown.SetSelectedValue(values.String(values.StrAllWithoutSplit))
+	}
 
 	// Per-status "(N)" count badges were removed with the 3-tab reclassification:
 	// the displayed list is now a UI post-filter (reclassifyByTab) over a COARSE
@@ -618,14 +622,18 @@ func (pg *TransactionsPage) fetchTransactions(offset, pageSize int32) (txs []*mu
 		pg.txCacheMu.Unlock()
 	}
 
-	// Deliver the COMPLETE set to the scroll window only on a fresh load (cache
-	// MISS) at offset 0. Every reset trigger (a tab/status/coin/order/search change
-	// or a tx/block notification) invalidates the cache, so a cache HIT at offset 0
-	// means NO reset happened and the window already holds this data — returning it
-	// again would double-append the whole list. offset>0 always returns nil, so the
-	// component's window stays anchored at idxStart==0 (its slide/reposition math
-	// never engages — tasks 1 & 2). Gio virtualizes the full slice, so it's cheap.
-	if offset == 0 && !hit {
+	// Deliver the COMPLETE set on EVERY offset-0 query, cache hit or miss.
+	// An offset-0 query only ever comes from (a) an initial load with an
+	// empty window (fetchScrollData queries at 0 only when s.data is
+	// nil/empty) or (b) refreshInPlace, which REPLACES the window rather
+	// than appending — so returning the cached set can never double-append.
+	// Returning nil on a hit (the old rule) let a concurrent fetch consume
+	// txCacheDirty first and this refresh then swap the visible list to
+	// EMPTY even though the cache held the full fresh set. offset>0 always
+	// returns nil, so the component's window stays anchored at idxStart==0
+	// (its slide/reposition math never engages — tasks 1 & 2). Gio
+	// virtualizes the full slice, so it's cheap.
+	if offset == 0 {
 		return full, len(full), false, nil
 	}
 	return nil, 0, false, nil
@@ -781,6 +789,11 @@ func coarseFetchFilter(logical int32) int32 {
 		// Type=Regular), fully covered by TxFilterAll — no need to scan
 		// the stake rows.
 		return utils.TxFilterAll
+	case utils.TxFilterRegularNoSplit:
+		// Splits are excluded from this view, so the ticket rows
+		// ApplySplitAmounts would need aren't required — TxFilterAll
+		// (Regular+Mixed+Coinbase) is a cheap indexed superset.
+		return utils.TxFilterAll
 	case utils.TxFilterSplit, utils.TxFilterRegularList, utils.TxFilterStakingList,
 		utils.TxFilterRewardList, utils.TxFilterRewardPoW,
 		utils.TxFilterRewardPoS, utils.TxFilterMissed:
@@ -829,6 +842,16 @@ func (pg *TransactionsPage) keepForTab(v txView, mw *multiWalletTx) bool {
 			// exclusive — a ticket must NOT also appear here.
 			return (tx.Type == txhelper.TxTypeRegular || tx.Type == txhelper.TxTypeMixed) &&
 				!tx.IsStakeFee
+		case utils.TxFilterRegularNoSplit: // "All without Split" — the default view
+			// An explicit search must still find a split by its hash even
+			// under the no-split default — hiding an exact match the user
+			// asked for reads as "transaction lost".
+			if v.searchKey != "" {
+				return (tx.Type == txhelper.TxTypeRegular || tx.Type == txhelper.TxTypeMixed) &&
+					!tx.IsStakeFee
+			}
+			return (tx.Type == txhelper.TxTypeRegular || tx.Type == txhelper.TxTypeMixed) &&
+				!tx.IsStakeFee && !dcr.IsSplitTx(tx)
 		default: // Sent / Received / Transferred — direction views.
 			// Splits stay out of these: they have their own filter, and
 			// these statuses' exact DB fetch lacks the ticket rows
@@ -1050,17 +1073,27 @@ func (pg *TransactionsPage) layoutContent(gtx C) D {
 	return layout.Stack{}.Layout(gtx, pageElements...)
 }
 
+// dropdownLayout renders the always-visible filter controls (there is no
+// Filter toggle anymore — hiding the filters behind an extra click just cost
+// a click and shoved the list down when opened). Desktop fits everything on
+// one row: wallet selector left, status/coin/order dropdowns + Export right.
+// Mobile keeps a permanent second row for the dropdowns — three of them plus
+// Export don't fit into 375dp.
 func (pg *TransactionsPage) dropdownLayout(gtx C) D {
-	return layout.Stack{}.Layout(gtx,
-		layout.Stacked(func(gtx C) D {
-			gtx.Constraints.Min.X = gtx.Constraints.Max.X
-			return layout.Inset{Top: values.MarginPadding40}.Layout(gtx, pg.rightDropdown)
-		}),
-		layout.Expanded(func(gtx C) D {
-			gtx.Constraints.Min.X = gtx.Constraints.Max.X
-			return pg.leftDropdown(gtx)
-		}),
-	)
+	if pg.IsMobileView() {
+		return layout.Stack{}.Layout(gtx,
+			layout.Stacked(func(gtx C) D {
+				gtx.Constraints.Min.X = gtx.Constraints.Max.X
+				return layout.Inset{Top: values.MarginPadding40}.Layout(gtx, pg.rightDropdown)
+			}),
+			layout.Expanded(func(gtx C) D {
+				gtx.Constraints.Min.X = gtx.Constraints.Max.X
+				return pg.leftDropdown(gtx)
+			}),
+		)
+	}
+	gtx.Constraints.Min.X = gtx.Constraints.Max.X
+	return pg.leftDropdown(gtx)
 }
 
 func (pg *TransactionsPage) leftDropdown(gtx C) D {
@@ -1082,30 +1115,27 @@ func (pg *TransactionsPage) leftDropdown(gtx C) D {
 			if showOverlay {
 				return D{}
 			}
-			icon := pg.Theme.Icons.FilterOffImgIcon
-			if pg.isFilterOpen {
-				icon = pg.Theme.Icons.FilterImgIcon
+			// Mobile: the dropdowns live on their own second row
+			// (rightDropdown) and Export is not enabled yet (TODO) —
+			// nothing to render on the top row's right side.
+			if pg.IsMobileView() {
+				return D{}
 			}
-			return layout.Inset{Top: values.MarginPadding8}.Layout(gtx, func(gtx C) D {
-				return layout.Flex{Alignment: layout.Middle}.Layout(gtx,
-					layout.Rigid(func(gtx C) D {
-						margin := values.MarginPadding20
-						if pg.IsMobileView() {
-							margin = values.MarginPadding12
-						}
-						return layout.Inset{Right: margin}.Layout(gtx, func(gtx C) D {
-							return pg.buttonWrap(gtx, pg.filterBtn, icon, values.String(values.StrFilter))
-						})
-					}),
-					layout.Rigid(func(gtx C) D {
-						// TODO: Enable on mobile
-						if pg.IsMobileView() {
-							return D{}
-						}
+			return layout.Flex{Alignment: layout.Middle}.Layout(gtx,
+				layout.Rigid(pg.statusDropDown.Layout),
+				layout.Rigid(func(gtx C) D {
+					if pg.coinTypeDropDown == nil {
+						return D{}
+					}
+					return pg.coinTypeDropDown.Layout(gtx)
+				}),
+				layout.Rigid(pg.orderDropDown.Layout),
+				layout.Rigid(func(gtx C) D {
+					return layout.Inset{Left: values.MarginPadding20, Top: values.MarginPadding8}.Layout(gtx, func(gtx C) D {
 						return pg.buttonWrap(gtx, pg.exportBtn, pg.Theme.Icons.ShareIcon, values.String(values.StrExport))
-					}),
-				)
-			})
+					})
+				}),
+			)
 		}),
 	)
 }
@@ -1131,10 +1161,9 @@ func (pg *TransactionsPage) buttonWrap(gtx C, clickable *cryptomaterial.Clickabl
 	)
 }
 
+// rightDropdown is the mobile-only second row holding the filter dropdowns
+// (desktop inlines them into the top row — see leftDropdown).
 func (pg *TransactionsPage) rightDropdown(gtx C) D {
-	if !pg.isFilterOpen {
-		return D{}
-	}
 	return layout.E.Layout(gtx, func(gtx C) D {
 		return layout.Flex{}.Layout(gtx,
 			layout.Rigid(pg.statusDropDown.Layout),
@@ -1152,16 +1181,14 @@ func (pg *TransactionsPage) rightDropdown(gtx C) D {
 func (pg *TransactionsPage) txListLayout(gtx C) D {
 	pg.scroll.OnScrollChangeListener(pg.ParentWindow())
 	txListWidget := func(gtx C) D {
+		// One header row on desktop, two on mobile (the dropdowns' own row).
 		marginTop := values.MarginPadding50
-		if pg.isFilterOpen {
+		if pg.IsMobileView() {
 			marginTop = values.MarginPadding80
 		}
 		return layout.Inset{Top: marginTop}.Layout(gtx, func(gtx C) D {
 			return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
 				layout.Rigid(func(gtx C) D {
-					if !pg.isFilterOpen {
-						return D{}
-					}
 					return layout.Inset{Bottom: values.MarginPadding16}.Layout(gtx, pg.searchEditor.Layout)
 				}),
 				layout.Rigid(func(gtx C) D {
@@ -1328,10 +1355,6 @@ func (pg *TransactionsPage) HandleUserInteractions(gtx C) {
 
 		pg.refreshAvailableTxType()
 		go pg.scroll.FetchScrollData(false, pg.ParentWindow(), true)
-	}
-
-	if pg.filterBtn.Clicked(gtx) {
-		pg.isFilterOpen = !pg.isFilterOpen
 	}
 
 	if pg.exportBtn.Clicked(gtx) {

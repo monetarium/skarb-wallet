@@ -88,27 +88,74 @@ func (s *Scroll[T]) FetchScrollData(isScrollUp bool, window app.WindowNavigator,
 
 // isResetList = false and loadNewItem = true: Reloads the item list but does not alter the current scroll position
 func (s *Scroll[T]) FetchScrollDataHandler(isScrollUp bool, window app.WindowNavigator, isResetList, loadNewItem bool) {
+	if loadNewItem && !isResetList {
+		// In-place refresh (tx/block notifications, Statistics-tile filter
+		// clicks): fetch the replacement FIRST and swap once. The old rows
+		// stay visible for the whole refetch — nulling s.data up front (the
+		// previous behavior) let any concurrent frame render the list as
+		// empty, which collapsed the page's height and made the enclosing
+		// page scroll clamp back to the top on every refresh.
+		s.refreshInPlace(window)
+		return
+	}
+
 	s.mu.Lock()
 	// s.data is not nil when moving from details page to list page.
 	if s.data != nil {
 		s.isLoadingItems = false
 	}
 
-	if isResetList || loadNewItem {
+	if isResetList {
 		s.loadedAllItems = false
 		s.isLoadingItems = false
 		s.offset = 0
 		s.itemsCount = -1
 		s.data = nil
 		s.cacheData = nil
-		if isResetList {
-			s.list.Position.Offset = 0
-		}
+		s.list.Position.Offset = 0
 	}
 	s.mu.Unlock()
 	if s.data == nil || len(s.data.items) == 0 {
 		s.fetchScrollData(isScrollUp, window)
 	}
+}
+
+// refreshInPlace re-queries the list from offset 0 and atomically replaces the
+// window contents, mirroring the state an initial load produces. The scroll
+// position is left untouched; Gio clamps it on the next frame if the new list
+// is genuinely shorter. Blocking — call from a non-UI goroutine (both callers
+// already do), and serialize concurrent refreshes at the call site.
+func (s *Scroll[T]) refreshInPlace(window app.WindowNavigator) {
+	if s.queryFunc == nil {
+		return
+	}
+	s.mu.Lock()
+	prev := s.data
+	s.mu.Unlock()
+	items, _, _, err := s.queryFunc(0, s.pageSize*2)
+	if err != nil {
+		errModal := modal.NewErrorModal(s.load, err.Error(), modal.DefaultClickFunc())
+		window.ShowModal(errModal)
+		return
+	}
+	s.mu.Lock()
+	if s.data != prev {
+		// A reset (filter/tab/search change) replaced the window while this
+		// refresh was querying: the result reflects the OLD view, so drop
+		// it — the reset's own fetch is authoritative for the new view.
+		s.mu.Unlock()
+		return
+	}
+	s.isLoadingItems = false
+	// Same quirk as fetchScrollData's initial load: "all loaded" keys off
+	// pageSize even though 2×pageSize was requested — a later scroll-down
+	// query at the new offset returns the remainder (or nothing) either way.
+	s.loadedAllItems = len(items) < int(s.pageSize)
+	s.offset = int32(len(items))
+	s.itemsCount = len(items)
+	s.cacheData = append([]T(nil), items...)
+	s.data = &dataList[T]{items: items, idxStart: 0, idxEnd: len(items) - 1}
+	s.mu.Unlock()
 }
 
 // fetchScrollData fetchs the scroll data and manages data returned depending on
@@ -174,18 +221,25 @@ func (s *Scroll[T]) fetchScrollData(isScrollUp bool, window app.WindowNavigator)
 		}
 		tempSize = s.pageSize * 2
 	}
-	s.mu.Unlock()
+	// Field reads/writes below stay under the mutex: refreshInPlace (a
+	// notification-refresh goroutine) writes the same fields under s.mu,
+	// and lock-on-one-side-only is still a race.
 	if s.loadedAllItems && !isScrollUp {
 		s.isLoadingItems = false
+		s.mu.Unlock()
 		return
 	}
+	offset := s.offset
+	s.mu.Unlock()
 
-	items, _, _, err := s.queryFunc(s.offset, tempSize)
+	items, _, _, err := s.queryFunc(offset, tempSize)
 	if len(items) <= 0 {
+		s.mu.Lock()
 		s.isLoadingItems = false
 		if s.itemsCount == -1 {
 			s.itemsCount = 0
 		}
+		s.mu.Unlock()
 		return
 	}
 

@@ -43,6 +43,7 @@ const (
 	TxFilterRewardPoS   = utils.TxFilterRewardPoS
 
 	TxFilterStakingNoSplit = utils.TxFilterStakingNoSplit
+	TxFilterRegularNoSplit = utils.TxFilterRegularNoSplit
 
 	TxDirectionInvalid     = txhelper.TxDirectionInvalid
 	TxDirectionSent        = txhelper.TxDirectionSent
@@ -294,6 +295,11 @@ func (asset *Asset) TxMatchesFilter(tx *sharedW.Transaction, txFilter int32) boo
 		// exists for isolating them).
 		return (tx.Type == TxTypeRegular || tx.Type == TxTypeMixed) &&
 			!tx.IsStakeFee
+	case TxFilterRegularNoSplit:
+		// "All without Split" — the default Regular view: plain payments
+		// only, without the ticket-funding self-transfers.
+		return (tx.Type == TxTypeRegular || tx.Type == TxTypeMixed) &&
+			!tx.IsStakeFee && !IsSplitTx(tx)
 	case TxFilterStakingList:
 		return tx.Type == TxTypeTicketPurchase || IsSplitTx(tx)
 	case TxFilterStakingNoSplit:

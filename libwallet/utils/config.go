@@ -99,6 +99,11 @@ const (
 	// (default->default self-transfer) rows TxFilterStakingList includes.
 	TxFilterStakingNoSplit int32 = 24
 
+	// TxFilterRegularNoSplit is the Regular tab's "All without Split" choice
+	// (and its default): every plain regular/mixed movement, but none of the
+	// split (ticket-funding self-transfer) rows TxFilterRegularList includes.
+	TxFilterRegularNoSplit int32 = 25
+
 	TypeFilter          = "Type"
 	DirectionFilter     = "Direction"
 	HeightFilter        = "BlockHeight"

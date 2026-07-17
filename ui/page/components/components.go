@@ -185,7 +185,13 @@ func TransactionTitleIcon(l *load.Load, wal sharedW.Asset, tx *sharedW.Transacti
 					txStatus.ProgressBarColor = l.Theme.Color.OrangeYellow
 					txStatus.ProgressTrackColor = l.Theme.Color.Gray6
 					txStatus.Background = l.Theme.Color.Yellow
-				} else if wal.TxMatchesFilter(tx, libutils.TxFilterLive) {
+				} else if ticketSpender, _ := wal.(*dcr.Asset).TicketSpender(tx.Hash); ticketSpender == nil &&
+					wal.TxMatchesFilter(tx, libutils.TxFilterLive) {
+					// The spender LOOKUP outranks the stored TicketSpender
+					// field the Live/Expired filters read: an interrupted
+					// or pre-v8 batched reindex can leave a voted ticket's
+					// row spender-less, and the field-based checks would
+					// then label (and tile-count) it "Live".
 					txStatus.Title = values.String(values.StrLive)
 					txStatus.Icon = l.Theme.Icons.TicketLiveIcon
 					txStatus.Color = l.Theme.Color.Success2
@@ -193,14 +199,13 @@ func TransactionTitleIcon(l *load.Load, wal sharedW.Asset, tx *sharedW.Transacti
 					txStatus.ProgressBarColor = l.Theme.Color.Success2
 					txStatus.ProgressTrackColor = l.Theme.Color.Success2
 					txStatus.Background = l.Theme.Color.Success2
-				} else if wal.TxMatchesFilter(tx, libutils.TxFilterExpired) {
+				} else if ticketSpender == nil && wal.TxMatchesFilter(tx, libutils.TxFilterExpired) {
 					txStatus.Title = values.String(values.StrExpired)
 					txStatus.Icon = l.Theme.Icons.TicketExpiredIcon
 					txStatus.Color = l.Theme.Color.GrayText2
 					txStatus.TicketStatus = dcr.TicketStatusExpired
 					txStatus.Background = l.Theme.Color.Gray4
 				} else {
-					ticketSpender, _ := wal.(*dcr.Asset).TicketSpender(tx.Hash)
 					if ticketSpender != nil {
 						if ticketSpender.Type == txhelper.TxTypeVote {
 							txStatus.Title = values.String(values.StrVoted)
@@ -669,18 +674,21 @@ func TxPageDropDownFields(wType libutils.AssetType, tabIndex int) (mapInfo map[s
 		// DCR Regular Transactions dropdown fields.
 		// "Mixed" (CoinShuffle++) is intentionally omitted — the mixer was removed
 		// from Skarb, so a Mixed tx filter would always be empty and just confuses.
-		// "All" uses TxFilterRegularList (regular sends/receives only, excluding
-		// the staking/reward types that live on the other tabs) rather than
-		// TxFilterAll.
+		// "All types" includes split rows; "All without Split" (the tab's
+		// default — see refreshAvailableTxType) hides the ticket-funding
+		// self-transfers. Both exclude the staking/reward types that live
+		// on the other tabs.
 		mapInfo = map[string]int32{
-			values.String(values.StrAll):         libutils.TxFilterRegularList,
-			values.String(values.StrSent):        libutils.TxFilterSent,
-			values.String(values.StrReceived):    libutils.TxFilterReceived,
-			values.String(values.StrTransferred): libutils.TxFilterTransferred,
-			values.String(values.StrSplit):       libutils.TxFilterSplit,
+			values.String(values.StrAllTypes):        libutils.TxFilterRegularList,
+			values.String(values.StrAllWithoutSplit): libutils.TxFilterRegularNoSplit,
+			values.String(values.StrSent):            libutils.TxFilterSent,
+			values.String(values.StrReceived):        libutils.TxFilterReceived,
+			values.String(values.StrTransferred):     libutils.TxFilterTransferred,
+			values.String(values.StrSplit):           libutils.TxFilterSplit,
 		}
 		keysInfo = []string{
-			values.String(values.StrAll),
+			values.String(values.StrAllTypes),
+			values.String(values.StrAllWithoutSplit),
 			values.String(values.StrSent),
 			values.String(values.StrReceived),
 			values.String(values.StrTransferred),

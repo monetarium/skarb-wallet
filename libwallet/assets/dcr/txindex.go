@@ -55,7 +55,17 @@ const (
 	//     minted reward) instead of the cumulative augmented-UTXO value, and
 	//     their Fee/FeeAtoms are zeroed (previously a negative VAR "fee").
 	//     Bump reindexes persisted reward rows to the new semantics.
-	currentTxParserVersion int32 = 7
+	// v8: two persisted vote/ticket fixes. (a) VoteReward is now vote output −
+	//     ticket price (the SStx stake-submission value) instead of − the
+	//     purchase tx's total wallet inputs, which also charged the ticket's
+	//     purchase fee against every displayed reward. (b) flushPending now
+	//     carries a ticket's TicketSpender across the batch buffer: the v7
+	//     batched reindex could commit a spender-less ticket row OVER the
+	//     back-fill the vote's decode had just written (SaveOrUpdate is
+	//     delete-then-save) whenever a ticket and its vote shared one chunk —
+	//     leaving voted tickets stored, counted and labelled as "Live".
+	//     Reindexing heals both in existing wallets.
+	currentTxParserVersion int32 = 8
 
 	// indexTxBatchSize is how many decoded rows IndexTransactions
 	// commits per storm/bbolt write transaction. Small enough to keep
@@ -115,6 +125,32 @@ func (asset *Asset) IndexTransactions() error {
 	flushPending := func() error {
 		if len(pending) == 0 && pendingHeight < 0 {
 			return nil
+		}
+		// A ticket and its vote can share one chunk. The ticket was decoded
+		// (and buffered) before its vote existed in the storm DB, so the
+		// decode-time TicketSpender back-fill found nothing — and the batch
+		// save below would then overwrite the spender the vote's own decode
+		// direct-wrote onto the stored ticket row (SaveOrUpdate is
+		// delete-then-save). Resolve spenders against the buffer itself
+		// first, then against the already-stored row, before committing.
+		spenderOf := make(map[string]string)
+		for _, tx := range pending {
+			if tx.TicketSpentHash != "" {
+				spenderOf[tx.TicketSpentHash] = tx.Hash
+			}
+		}
+		for _, tx := range pending {
+			if tx.Type != TxTypeTicketPurchase || tx.TicketSpender != "" {
+				continue
+			}
+			if spender, ok := spenderOf[tx.Hash]; ok {
+				tx.TicketSpender = spender
+				continue
+			}
+			var stored sharedW.Transaction
+			if err := asset.GetWalletDataDb().FindOne("Hash", tx.Hash, &stored); err == nil && stored.TicketSpender != "" {
+				tx.TicketSpender = stored.TicketSpender
+			}
 		}
 		batch, err := asset.GetWalletDataDb().BeginBatch()
 		if err != nil {
