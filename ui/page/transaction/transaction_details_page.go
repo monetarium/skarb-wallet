@@ -488,8 +488,14 @@ func (pg *TxDetailsPage) txDetailsHeader(gtx C) D {
 										if pg.transaction.Direction == txhelper.TxDirectionSent && !strings.Contains(title, "-") {
 											title = "-" + title
 										}
-									case txhelper.TxTypeRevocation, txhelper.TxTypeVote:
+									case txhelper.TxTypeRevocation:
 										return pg.Theme.Label(values.TextSize20, pg.txnWidgets.txStatus.Title).Layout(gtx)
+									case txhelper.TxTypeVote:
+										// The headline is the earned reward, not the tx
+										// name: vote output minus the ticket price that
+										// merely came home (VoteReward) — the same figure
+										// the Reward list row shows.
+										title = dcr.FormatTxAmountBig("", pg.transaction.VoteReward, pg.transaction.CoinType)
 									}
 									return components.LayoutBalanceWithUnit(gtx, pg.Load, title)
 								}),
@@ -822,10 +828,24 @@ func (pg *TxDetailsPage) txnTypeAndID(gtx C) D {
 			if pg.transaction.Type == txhelper.TxTypeTicketPurchase {
 				return D{}
 			}
-			// A split keeps consensus Type "Regular"; surface the
-			// classification so it doesn't read as a plain transfer.
+			// Consensus reward types read by their protocol role rather
+			// than the raw wallet type: the VAR coinbase carries both the
+			// block subsidy and the miner's VAR fees; an SSFee keeps
+			// Type "Regular" but is really the MF/SF fee distribution; a
+			// vote is the staker's subsidy payout. A split also keeps
+			// Type "Regular"; surface the classification so it doesn't
+			// read as a plain transfer.
 			typeText := pg.transaction.Type
-			if dcr.IsSplitTx(pg.transaction) {
+			switch {
+			case pg.transaction.Type == txhelper.TxTypeCoinBase:
+				typeText = values.String(values.StrTypeMinerCoinbase)
+			case pg.transaction.IsStakeFee && pg.transaction.StakeFeeKind == "MF":
+				typeText = values.String(values.StrTypeMinerFee)
+			case pg.transaction.IsStakeFee && pg.transaction.StakeFeeKind == "SF":
+				typeText = values.String(values.StrTypeStakerFee)
+			case pg.transaction.Type == txhelper.TxTypeVote:
+				typeText = values.String(values.StrTypeStakerCoinbase)
+			case dcr.IsSplitTx(pg.transaction):
 				typeText = fmt.Sprintf("%s (%s)", typeText, values.String(values.StrSplit))
 			}
 			return pg.keyValue(gtx, values.String(values.StrType), pg.Theme.Label(values.TextSize14, typeText).Layout)

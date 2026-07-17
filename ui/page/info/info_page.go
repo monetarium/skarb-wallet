@@ -531,9 +531,10 @@ func (pg *WalletInfo) loadTransactions() {
 		return
 	}
 
-	// The Regular-tab "All" filter — same classification as the Transactions
-	// page Regular list (no splits, no stake-fees, no rewards).
-	txs := pg.loadRecentByFilter(mapInfo[values.String(values.StrAll)], 3)
+	// The Regular tab's default "All without Split" filter — same
+	// classification as the Transactions page Regular list opens with
+	// (no splits, no stake-fees, no rewards).
+	txs := pg.loadRecentByFilter(mapInfo[values.String(values.StrAllWithoutSplit)], 3)
 	// Diagnostic log: surfaces what's in storm DB at the moment Info
 	// page (re)mounts. If the user reports "I sent a tx but it doesn't
 	// appear", grep for "InfoPage.loadTransactions" in the wallet log

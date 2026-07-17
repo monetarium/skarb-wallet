@@ -84,11 +84,10 @@ func (pg *Page) stakePriceSection(gtx C) D {
 				return pg.stakeStatusLayout(gtx, ticketsCanBuy)
 			}),
 			// Row 1: Total Reward across the full width, every visible
-			// coin's amount inline on ONE line (dataRows carries its own
-			// vertical inset).
+			// coin's amount inline on ONE line (totalRewardRow carries its
+			// own vertical inset).
 			layout.Rigid(func(gtx C) D {
-				return pg.dataRows(gtx, values.String(values.StrTotalReward),
-					strings.Join(pg.rewardRows, "  ·  "), flexAxis, alignment)
+				return pg.totalRewardRow(gtx, flexAxis, alignment)
 			}),
 			layout.Rigid(layout.Spacer{Height: values.MarginPadding12}.Layout),
 			// Row 2: Ticket Price (left) and Time Left (right).
@@ -190,6 +189,55 @@ func (pg *Page) stakeStatusLayout(gtx C, ticketsCanBuy int) D {
 		Padding:    layout.UniformInset(values.MarginPadding12),
 		Margin:     layout.Inset{Bottom: values.MarginPadding16},
 	}.Layout2(gtx, lbl.Layout)
+}
+
+// totalRewardRow renders the Total Reward line: every visible coin's total
+// inline, with each AMOUNT in semibold and the coin name in regular weight —
+// the coin name is a unit, not a figure, so bolding it read as part of the
+// number.
+func (pg *Page) totalRewardRow(gtx C, axis layout.Axis, alignment layout.Alignment) D {
+	textSize16 := values.TextSizeTransform(pg.IsMobileView(), values.TextSize16)
+	return components.VerticalInset(values.MarginPadding6).Layout(gtx, func(gtx C) D {
+		return layout.Flex{Axis: axis, Alignment: alignment}.Layout(gtx,
+			layout.Rigid(func(gtx C) D {
+				label := pg.Theme.Label(textSize16, values.String(values.StrTotalReward))
+				label.Color = pg.Theme.Color.GrayText2
+				return label.Layout(gtx)
+			}),
+			layout.Rigid(func(gtx C) D {
+				return layout.Inset{Left: values.MarginPadding4}.Layout(gtx, func(gtx C) D {
+					var children []layout.FlexChild
+					for i, row := range pg.rewardRows {
+						if i > 0 {
+							children = append(children, layout.Rigid(func(gtx C) D {
+								sep := pg.Theme.Label(textSize16, "  ·  ")
+								sep.Color = pg.Theme.Color.GrayText2
+								return sep.Layout(gtx)
+							}))
+						}
+						amount, unit := row, ""
+						if idx := strings.LastIndex(row, " "); idx > 0 {
+							amount, unit = row[:idx], row[idx:]
+						}
+						children = append(children,
+							layout.Rigid(func(gtx C) D {
+								lbl := pg.Theme.Label(textSize16, amount)
+								lbl.Color = pg.Theme.Color.Text
+								lbl.Font.Weight = font.SemiBold
+								return lbl.Layout(gtx)
+							}),
+							layout.Rigid(func(gtx C) D {
+								lbl := pg.Theme.Label(textSize16, unit)
+								lbl.Color = pg.Theme.Color.Text
+								return lbl.Layout(gtx)
+							}),
+						)
+					}
+					return layout.Flex{Axis: layout.Horizontal, Alignment: layout.Baseline}.Layout(gtx, children...)
+				})
+			}),
+		)
+	})
 }
 
 func (pg *Page) dataRows(gtx C, title1, value1 string, axis layout.Axis, alignment layout.Alignment) D {

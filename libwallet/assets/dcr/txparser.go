@@ -142,14 +142,6 @@ func (asset *Asset) decodeTransactionWithTxSummary(txSummary *w.TransactionSumma
 		timeDifferenceInSeconds := decodedTx.Timestamp - ticketPurchaseTx.Timestamp
 		decodedTx.DaysToVoteOrRevoke = int32(timeDifferenceInSeconds / 86400) // seconds to days conversion
 
-		// calculate reward
-		var ticketInvestment int64
-		for _, input := range ticketPurchaseTx.Inputs {
-			if input.AccountNumber > -1 {
-				ticketInvestment += input.Amount
-			}
-		}
-
 		var ticketOutput int64
 		for _, output := range walletTx.Outputs {
 			if output.AccountNumber > -1 {
@@ -157,7 +149,13 @@ func (asset *Asset) decodeTransactionWithTxSummary(txSummary *w.TransactionSumma
 			}
 		}
 
-		decodedTx.VoteReward = ticketOutput - ticketInvestment
+		// The reward is what the vote pays beyond the ticket price coming
+		// home: vote output − ticket price. The ticket price is the SStx's
+		// stake-submission value (tx.Amount = TxOut[0].Value, decodetx.go).
+		// It must NOT be the sum of the purchase tx's wallet inputs — those
+		// also cover the purchase fee (and any change), which silently
+		// charged that fee against every displayed reward.
+		decodedTx.VoteReward = ticketOutput - ticketPurchaseTx.Amount
 
 		// update ticket with spender hash
 		ticketPurchaseTx.TicketSpender = decodedTx.Hash
