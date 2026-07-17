@@ -2,13 +2,14 @@ package device
 
 import (
 	"fmt"
+	"sync/atomic"
 
 	"gioui.org/app"
 	"gioui.org/io/event"
 	"git.wow.st/gmp/jni"
 )
 
-//go:generate javac -source 8 -target 8 -bootclasspath $ANDROID_HOME/platforms/android-30/android.jar -d $TEMP/x_device/classes device_android.java
+//go:generate javac -source 8 -target 8 -bootclasspath $ANDROID_HOME/platforms/android-34/android.jar -d $TEMP/x_device/classes device_android.java qr_scanner.java
 //go:generate jar cf device_android.jar -C $TEMP/x_device/classes .
 
 var (
@@ -17,7 +18,10 @@ var (
 
 type device struct {
 	window *app.Window
-	view   uintptr
+	// view is the JNI global ref of the Android view. Written by the
+	// window-event goroutine (listenEvents) and read by UI code and the
+	// QR-scan poll goroutine — always through atomics.
+	view uintptr
 	// libObject jni.Object
 	libClass jni.Class
 	methodID jni.MethodID
@@ -29,8 +33,14 @@ func newDevice(w *app.Window) *device {
 
 func (d *Device) listenEvents(evt event.Event) {
 	if evt, ok := evt.(app.AndroidViewEvent); ok {
-		d.view = evt.View
+		atomic.StoreUintptr(&d.view, evt.View)
 	}
+}
+
+// viewHandle atomically snapshots the current Android view reference (0
+// when no view is attached).
+func (d *Device) viewHandle() uintptr {
+	return atomic.LoadUintptr(&d.view)
 }
 
 func (d *Device) init(env jni.Env) error {
@@ -59,7 +69,7 @@ func (d *Device) setScreenAwake(isOn bool) error {
 				value = jni.TRUE
 			}
 			return jni.CallStaticVoidMethod(env, d.libClass, d.device.methodID,
-				jni.Value(d.view),
+				jni.Value(d.viewHandle()),
 				jni.Value(value),
 			)
 		})

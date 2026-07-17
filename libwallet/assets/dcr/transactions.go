@@ -288,22 +288,30 @@ func (asset *Asset) TxMatchesFilter(tx *sharedW.Transaction, txFilter int32) boo
 		}
 		return spender != nil && spender.Type == TxTypeVote
 	case TxFilterRegularList:
+		// Split rows deliberately stay in the Regular "All types" view —
+		// they are ordinary self-transfers that fund tickets, and users
+		// look for them next to their sends (a dedicated Split filter
+		// exists for isolating them).
 		return (tx.Type == TxTypeRegular || tx.Type == TxTypeMixed) &&
-			!IsSplitTx(tx) && !tx.IsStakeFee
+			!tx.IsStakeFee
 	case TxFilterStakingList:
 		return tx.Type == TxTypeTicketPurchase || IsSplitTx(tx)
 	case TxFilterStakingNoSplit:
 		// Staking "All without Split": every ticket purchase, no split rows.
 		return tx.Type == TxTypeTicketPurchase
 	case TxFilterRewardList:
+		// Only actual rewards: mining (coinbase + MF stake fees) and
+		// staking (votes + SF stake fees). Revocations merely return the
+		// ticket price without any reward, so they don't belong here —
+		// they remain visible through the Staking page statuses.
 		return tx.Type == TxTypeCoinBase || tx.IsStakeFee ||
-			tx.Type == TxTypeVote || tx.Type == TxTypeRevocation
+			tx.Type == TxTypeVote
 	case TxFilterRewardPoW:
-		// Proof-of-work side: coinbase block reward, or a miner-fee (MF) SSFee.
+		// Mining rewards: coinbase block reward, or a miner-fee (MF) SSFee.
 		return tx.Type == TxTypeCoinBase || (tx.IsStakeFee && tx.StakeFeeKind == "MF")
 	case TxFilterRewardPoS:
-		// Proof-of-stake side: votes, revocations, or a staker-fee (SF) SSFee.
-		return tx.Type == TxTypeVote || tx.Type == TxTypeRevocation ||
+		// Staking rewards: votes, or a staker-fee (SF) SSFee.
+		return tx.Type == TxTypeVote ||
 			(tx.IsStakeFee && tx.StakeFeeKind == "SF")
 	case TxFilterMissed:
 		// Missed tickets aren't detectable over SPV; the filter exists so the

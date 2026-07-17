@@ -51,9 +51,11 @@ var (
 	// contain Decred/DCR strings and a few "Cryptopower" mentions, so they're
 	// hidden from the user picker until properly translated. The .go files
 	// stay in the repo (and in `Languages`) so existing fallbacks keep working.
+	// English first: the first entry is what a fresh install starts in
+	// (the onboarding dropdown applies item 0 before any user choice).
 	LangOptions = []ItemPreference{
-		{Key: localizable.UKRAINIAN, Value: values.StrUkrainian},
 		{Key: localizable.ENGLISH, Value: values.StrEnglish},
+		{Key: localizable.UKRAINIAN, Value: values.StrUkrainian},
 	}
 
 	// LogOptions are the selectable debug levels.

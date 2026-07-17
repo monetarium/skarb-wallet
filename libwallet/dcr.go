@@ -36,7 +36,7 @@ func (mgr *AssetsManager) CreateNewDCRWallet(walletName, privatePassphrase strin
 		return nil, err
 	}
 
-	mgr.Assets.DCR.Wallets[wallet.GetWalletID()] = wallet
+	mgr.addWallet(wallet)
 
 	// Allow spending from the default account by default.
 	wallet.SetBoolConfigValueForKey(sharedW.SpendUnmixedFundsKey, true)
@@ -51,7 +51,7 @@ func (mgr *AssetsManager) CreateNewDCRWatchOnlyWallet(walletName, extendedPublic
 		return nil, err
 	}
 
-	mgr.Assets.DCR.Wallets[wallet.GetWalletID()] = wallet
+	mgr.addWallet(wallet)
 
 	// Allow spending from the default account by default.
 	wallet.SetBoolConfigValueForKey(sharedW.SpendUnmixedFundsKey, true)
@@ -72,7 +72,7 @@ func (mgr *AssetsManager) RestoreDCRWallet(walletName, seedMnemonic, privatePass
 		return nil, err
 	}
 
-	mgr.Assets.DCR.Wallets[wallet.GetWalletID()] = wallet
+	mgr.addWallet(wallet)
 
 	// Allow spending from the default account by default.
 	wallet.SetBoolConfigValueForKey(sharedW.SpendUnmixedFundsKey, true)

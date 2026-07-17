@@ -50,6 +50,7 @@ func newRecipient(l *load.Load, selectedWallet sharedW.Asset, pageParam getPageF
 	rp.amount = newSendAmount(l.Theme, assetType)
 	rp.amount.amountEditor.TextSize = values.TextSizeTransform(l.IsMobileView(), values.TextSize16)
 	rp.sendDestination = newSendDestination(l, assetType)
+	rp.sendDestination.reload = navigator.Reload
 
 	rp.description = rp.Theme.Editor(new(widget.Editor), values.String(values.StrNote))
 	rp.description.Editor.SingleLine = false

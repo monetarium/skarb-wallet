@@ -3,8 +3,10 @@ package staking
 import (
 	"context"
 	"strconv"
+	"strings"
 
 	"gioui.org/font"
+	"gioui.org/io/key"
 	"gioui.org/layout"
 	"gioui.org/widget"
 
@@ -50,6 +52,7 @@ func newTicketBuyerModal(l *load.Load, wallet *dcr.Asset) *ticketBuyerModal {
 
 	tb.balToMaintainEditor = l.Theme.Editor(new(widget.Editor), values.String(values.StrBalToMaintain))
 	tb.balToMaintainEditor.Editor.SingleLine = true
+	tb.balToMaintainEditor.Editor.InputHint = key.HintNumeric
 
 	tb.saveSettingsBtn.SetEnabled(false)
 
@@ -232,7 +235,10 @@ func (tb *ticketBuyerModal) Handle(gtx C) {
 			return
 		}
 		vspHost := tb.vspSelector.SelectedVSP().Host
-		amount, err := strconv.ParseFloat(tb.balToMaintainEditor.Editor.Text(), 64)
+		// Accept a comma decimal separator: uk-locale Android numeric
+		// keypads expose only ",".
+		balText := strings.Replace(tb.balToMaintainEditor.Editor.Text(), ",", ".", 1)
+		amount, err := strconv.ParseFloat(balText, 64)
 		if err != nil {
 			tb.SetError(err.Error())
 			return

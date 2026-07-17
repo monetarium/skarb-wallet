@@ -49,6 +49,24 @@ type IconButtonStyle struct {
 type IconButton struct {
 	IconButtonStyle
 	colorStyle *values.ColorStyle
+	// onLayout, when set, runs every time the button is drawn. Back
+	// arrows use it to report themselves as hardware-back targets.
+	onLayout func()
+}
+
+// TrackBackTarget makes this button report itself on every draw as a
+// target for the Android hardware back key, so the key activates the
+// arrow that is actually on screen (see Theme.OnTapBack).
+func (ib *IconButton) TrackBackTarget(t *Theme) {
+	click := ib.Button
+	ib.onLayout = func() { t.MarkBackButtonLaidOut(click) }
+}
+
+// UntrackBackTarget removes the hardware-back registration. Call it when
+// a button built by a back-arrow constructor is repurposed as something
+// that must NOT respond to the back key (e.g. a forward arrow).
+func (ib *IconButton) UntrackBackTarget() {
+	ib.onLayout = nil
 }
 
 func (t *Theme) Button(txt string) Button {
@@ -104,32 +122,32 @@ func (t *Theme) ButtonLayout() ButtonLayout {
 
 func (t *Theme) IconButton(icon *widget.Icon) IconButton {
 	return IconButton{
-		IconButtonStyle{
+		IconButtonStyle: IconButtonStyle{
 			Icon:   icon,
 			Button: new(widget.Clickable),
 			Size:   values.MarginPadding24,
 			Inset:  layout.UniformInset(values.MarginPadding12),
 		},
-		t.Styles.IconButtonColorStyle,
+		colorStyle: t.Styles.IconButtonColorStyle,
 	}
 }
 
 func (t *Theme) NewIconButton(icon *widget.Icon, click *widget.Clickable) IconButton {
 	return IconButton{
-		IconButtonStyle{
+		IconButtonStyle: IconButtonStyle{
 			Icon:   icon,
 			Button: click,
 			Size:   values.MarginPadding24,
 			Inset:  layout.UniformInset(values.MarginPadding12),
 		},
-		t.Styles.IconButtonColorStyle,
+		colorStyle: t.Styles.IconButtonColorStyle,
 	}
 }
 
 func (t *Theme) IconButtonWithStyle(ibs IconButtonStyle, colorStyle *values.ColorStyle) IconButton {
 	return IconButton{
-		ibs,
-		colorStyle,
+		IconButtonStyle: ibs,
+		colorStyle:      colorStyle,
 	}
 }
 
@@ -244,6 +262,9 @@ func (ib IconButton) ChangeColorStyle(colorStyle *values.ColorStyle) {
 }
 
 func (ib IconButton) Layout(gtx layout.Context) layout.Dimensions {
+	if ib.onLayout != nil {
+		ib.onLayout()
+	}
 	ibs := material.IconButtonStyle{
 		Background: ib.colorStyle.Background,
 		Color:      ib.colorStyle.Foreground,

@@ -176,9 +176,9 @@ func (sp *startPage) initPage() {
 		langItems, nil, values.MarginPadding150, values.StartPageDropdownGroup, false)
 
 	// The dropdown is created with selectedIndex=0 — i.e. it visually shows
-	// the first locale (Ukrainian) — but no Changed event ever fires for the
+	// the first locale (English) — but no Changed event ever fires for the
 	// initial selection, so the active locale stays whatever values.UserLanguages
-	// happens to default to (English). Push the selected option into the
+	// happens to default to. Push the selected option into the
 	// translator now so the very first paint already uses the displayed locale.
 	values.SetUserLanguage(sp.selectedLanguageKey())
 

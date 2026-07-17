@@ -71,6 +71,8 @@ func NewWalletSyncInfo(l *load.Load, wallet sharedW.Asset, reload func(), backup
 	wsi.ForwardButton, _ = SubpageHeaderButtons(l)
 	wsi.ForwardButton.Icon = wsi.Theme.Icons.NavigationArrowForward
 	wsi.ForwardButton.Size = values.MarginPadding20
+	// Repurposed as a FORWARD arrow — must not react to hardware back.
+	wsi.ForwardButton.UntrackBackTarget()
 
 	// Initialize sync progress info if an active instance did not exist.
 	if syncProgressInfo == nil {

@@ -92,6 +92,9 @@ type Editor struct {
 
 func (t *Theme) EditorPassword(editor *widget.Editor, hint string) Editor {
 	editor.Mask = '*'
+	// Password keyboards suppress the IME's autocorrection/learning so
+	// secrets don't leak into keyboard dictionaries on mobile.
+	editor.InputHint = key.HintPassword
 	e := t.Editor(editor, hint)
 	e.isPassword = true
 	e.showEditorIcon = false
@@ -160,20 +163,20 @@ func (t *Theme) Editor(editor *widget.Editor, hint string) Editor {
 		m5: unit.Dp(5),
 
 		editorIconButton: IconButton{
-			IconButtonStyle{
+			IconButtonStyle: IconButtonStyle{
 				Size:   values.MarginPadding24,
 				Inset:  layout.UniformInset(m0),
 				Button: new(widget.Clickable),
 			},
-			t.Styles.IconButtonColorStyle, // automatically changes on theme change, to use fixed colors, pass a &values.ColorStyle{} instead.
+			colorStyle: t.Styles.IconButtonColorStyle, // automatically changes on theme change, to use fixed colors, pass a &values.ColorStyle{} instead.
 		},
 		showHidePassword: IconButton{
-			IconButtonStyle{
+			IconButtonStyle: IconButtonStyle{
 				Size:   values.MarginPadding24,
 				Inset:  layout.UniformInset(m0),
 				Button: new(widget.Clickable),
 			},
-			t.Styles.IconButtonColorStyle,
+			colorStyle: t.Styles.IconButtonColorStyle,
 		},
 		CustomButton: t.Button(""),
 		copy:         t.Button(values.String(values.StrCopy)),

@@ -6,7 +6,9 @@ import (
 	"os"
 	"os/signal"
 	"runtime"
+	"sync"
 	"syscall"
+	"time"
 
 	giouiApp "gioui.org/app"
 	"gioui.org/gesture"
@@ -52,6 +54,12 @@ type Window struct {
 	drag       gesture.Drag
 	isClick    bool
 	isDragging bool
+
+	// screenAwake mirrors the mobile keep-screen-on flag: while a wallet
+	// is syncing the screen must not sleep — mobile OSes cut background
+	// networking, stranding the SPV sync half-finished.
+	screenAwake    bool
+	lastAwakeCheck time.Time
 }
 
 type (
@@ -61,6 +69,47 @@ type (
 
 type WriteClipboard struct {
 	Text string
+}
+
+// reloadMinInterval paces app-triggered redraws (navigator.Reload).
+// During SPV sync the progress/tx listeners fire Reload for every header
+// batch and transaction, redrawing the whole window at up to 60fps for
+// minutes — a battery killer on phones. 50ms still allows 20fps of
+// notification-driven updates; input-driven redraws are unaffected (gio
+// invalidates on its own for those).
+const reloadMinInterval = 50 * time.Millisecond
+
+// throttledInvalidate rate-limits calls to invalidate to one per
+// reloadMinInterval. A call arriving inside the quiet window schedules a
+// single trailing invalidate instead of being dropped, so the final
+// state after a burst is always rendered.
+func throttledInvalidate(invalidate func()) func() {
+	var mu sync.Mutex
+	var last time.Time
+	var pending bool
+	return func() {
+		mu.Lock()
+		if pending { // a trailing invalidate is already scheduled
+			mu.Unlock()
+			return
+		}
+		wait := reloadMinInterval - time.Since(last)
+		if wait <= 0 {
+			last = time.Now()
+			mu.Unlock()
+			invalidate()
+			return
+		}
+		pending = true
+		mu.Unlock()
+		time.AfterFunc(wait, func() {
+			mu.Lock()
+			last = time.Now()
+			pending = false
+			mu.Unlock()
+			invalidate()
+		})
+	}
 }
 
 // CreateWindow creates and initializes a new window with start
@@ -94,7 +143,7 @@ func CreateWindow(appInfo *load.AppInfo) (*Window, error) {
 		ctx:        ctx,
 		ctxCancel:  cancel,
 		Window:     giouiWindow,
-		navigator:  app.NewSimpleWindowNavigator(giouiWindow.Invalidate),
+		navigator:  app.NewSimpleWindowNavigator(throttledInvalidate(giouiWindow.Invalidate)),
 		Quit:       make(chan struct{}, 1),
 		IsShutdown: make(chan struct{}, 1),
 	}
@@ -284,7 +333,13 @@ func (win *Window) HandleEvents() {
 // describes what to display and how to handle input. This operations list
 // is returned to the caller for displaying on screen.
 func (win *Window) handleFrameEvent(evt giouiApp.FrameEvent) *op.Ops {
-	win.load.SetCurrentAppWidth(evt.Size.X, evt.Metric)
+	// The usable width excludes system decorations (status/navigation
+	// bars, notches) — giouiApp.NewContext below clamps the layout to
+	// that safe area, so the mobile-view breakpoint must match it.
+	usableWidth := evt.Size.X -
+		evt.Metric.Dp(evt.Insets.Left) - evt.Metric.Dp(evt.Insets.Right)
+	win.load.SetCurrentAppWidth(usableWidth, evt.Metric)
+	win.updateScreenAwake()
 	ops := &op.Ops{}
 	gtx := giouiApp.NewContext(ops, evt)
 
@@ -312,11 +367,41 @@ func (win *Window) handleFrameEvent(evt giouiApp.FrameEvent) *op.Ops {
 	return ops
 }
 
+// updateScreenAwake keeps the phone screen on while any wallet is
+// actively syncing or rescanning: mobile OSes stop networking the moment
+// the screen sleeps, stranding the SPV sync half-finished. The sync
+// state is read from in-memory flags (no DB) at most once a second; the
+// native keep-screen-on call fires only when the state flips, on a
+// separate goroutine so the JNI round-trip never blocks a frame.
+func (win *Window) updateScreenAwake() {
+	if runtime.GOOS != "android" && runtime.GOOS != "ios" {
+		return
+	}
+	if time.Since(win.lastAwakeCheck) < time.Second {
+		return
+	}
+	win.lastAwakeCheck = time.Now()
+	syncing := false
+	for _, wal := range win.load.AssetsManager.AllWallets() {
+		if wal.IsSyncing() || wal.IsRescanning() {
+			syncing = true
+			break
+		}
+	}
+	if syncing != win.screenAwake {
+		win.screenAwake = syncing
+		go func() { _ = win.load.Device.SetScreenAwake(syncing) }()
+	}
+}
+
 // prepareToDisplayUI creates an operation list and writes the layout of all the
 // window UI components into it. The created ops is returned and may be used to
 // record further operations before finally being rendered on screen via
 // system.FrameEvent.Frame(ops).
 func (win *Window) prepareToDisplayUI(gtx layout.Context) {
+	// Back arrows re-register as hardware-back targets while the pages
+	// lay out below; handleEvents at the end of this frame reads them.
+	win.load.Theme.ResetBackTargets()
 	backgroundWidget := layout.Expanded(func(gtx C) D {
 		return win.load.Theme.DropdownBackdrop.Layout(gtx, func(gtx C) D {
 			return cryptomaterial.Fill(gtx, win.load.Theme.Color.Gray4)
@@ -426,6 +511,15 @@ func (win *Window) handleUserClick(gtx C) {
 func (win *Window) listenSoftKey(gtx C) {
 	// check for presses of the back key.
 	if runtime.GOOS == "android" {
+		// Claim the back key only while a back target is on screen.
+		// Registering the filter marks the key handled at the driver
+		// (GioView.onBack returns JNI_TRUE), so an unconditional claim
+		// would swallow the press on root pages where there is nothing
+		// to go back to — with no claim Android's default applies and
+		// the app is backgrounded, as users expect.
+		if !win.load.Theme.HasBackTarget() {
+			return
+		}
 		for {
 			event, ok := gtx.Event(key.Filter{
 				Name: key.NameBack,
@@ -437,8 +531,14 @@ func (win *Window) listenSoftKey(gtx C) {
 			switch event := event.(type) {
 			case key.Event:
 				if event.Name == key.NameBack && event.State == key.Press {
-					win.load.Theme.OnTapBack()
-					win.navigator.Reload()
+					// A visible modal owns the screen: never navigate the
+					// page underneath it. Modals expose their own cancel
+					// controls, and some (seed backup, password prompts)
+					// must not be silently dismissed.
+					if win.navigator.TopModal() == nil {
+						win.load.Theme.OnTapBack()
+						win.navigator.Reload()
+					}
 				}
 			}
 		}

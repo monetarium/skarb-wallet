@@ -56,6 +56,12 @@ const (
 	//     their Fee/FeeAtoms are zeroed (previously a negative VAR "fee").
 	//     Bump reindexes persisted reward rows to the new semantics.
 	currentTxParserVersion int32 = 7
+
+	// indexTxBatchSize is how many decoded rows IndexTransactions
+	// commits per storm/bbolt write transaction. Small enough to keep
+	// the single-writer lock short-lived, large enough that fsync stops
+	// dominating the initial index on slow (phone) storage.
+	indexTxBatchSize = 250
 )
 
 func (asset *Asset) IndexTransactions() error {
@@ -96,41 +102,72 @@ func (asset *Asset) IndexTransactions() error {
 	ctx, _ := asset.ShutdownContextWithCancel()
 
 	var totalIndex int32
-	var txEndHeight uint32
-	rangeFn := func(block *w.Block) (bool, error) {
-		for _, transaction := range block.Transactions {
 
-			var blockHash *chainhash.Hash
-			if block.Header != nil {
-				hash := block.Header.BlockHash()
-				blockHash = &hash
-			} else {
-				blockHash = nil
+	// Decoded rows are buffered and committed in chunks: one bbolt
+	// write transaction (one fsync) per indexTxBatchSize rows instead
+	// of one per row, which is what made the initial index crawl on
+	// slow (phone) storage. The resume checkpoint commits atomically
+	// with the rows it covers, so an interrupt mid-pass re-ranges from
+	// the last committed chunk — same recovery as the per-block
+	// checkpoint this replaces, just a coarser step.
+	pending := make([]*sharedW.Transaction, 0, indexTxBatchSize)
+	pendingHeight := int32(-1) // highest fully-decoded block in pending; -1 = no checkpoint yet
+	flushPending := func() error {
+		if len(pending) == 0 && pendingHeight < 0 {
+			return nil
+		}
+		batch, err := asset.GetWalletDataDb().BeginBatch()
+		if err != nil {
+			return err
+		}
+		for _, tx := range pending {
+			if _, err = batch.SaveOrUpdate(&sharedW.Transaction{}, tx); err != nil {
+				_ = batch.Rollback()
+				log.Errorf("[%d] Index tx replace tx err : %v", asset.ID, err)
+				return err
 			}
+		}
+		if pendingHeight >= 0 {
+			if err = batch.SaveLastIndexPoint(pendingHeight); err != nil {
+				_ = batch.Rollback()
+				log.Errorf("[%d] Set tx index end block height error: %v", asset.ID, err)
+				return err
+			}
+		}
+		if err = batch.Commit(); err != nil {
+			return err
+		}
+		pending = pending[:0]
+		pendingHeight = -1
+		return nil
+	}
 
+	rangeFn := func(block *w.Block) (bool, error) {
+		var blockHash *chainhash.Hash
+		if block.Header != nil {
+			hash := block.Header.BlockHash()
+			blockHash = &hash
+		}
+
+		for _, transaction := range block.Transactions {
 			tx, err := asset.decodeTransactionWithTxSummary(&transaction, blockHash)
 			if err != nil {
 				return false, err
 			}
 
-			_, err = asset.GetWalletDataDb().SaveOrUpdate(&sharedW.Transaction{}, tx)
-			if err != nil {
-				log.Errorf("[%d] Index tx replace tx err : %v", asset.ID, err)
-				return false, err
-			}
-
+			pending = append(pending, tx)
 			totalIndex++
 		}
 
 		if block.Header != nil {
-			txEndHeight = block.Header.Height
-			err := asset.GetWalletDataDb().SaveLastIndexPoint(int32(txEndHeight))
-			if err != nil {
-				log.Errorf("[%d] Set tx index end block height error: ", asset.ID, err)
+			pendingHeight = int32(block.Header.Height)
+			log.Debugf("[%d] Indexed transactions in block %d", asset.ID, block.Header.Height)
+		}
+
+		if len(pending) >= indexTxBatchSize {
+			if err := flushPending(); err != nil {
 				return false, err
 			}
-
-			log.Debugf("[%d] Index saved for transactions in block %d", asset.ID, txEndHeight)
 		}
 
 		select {
@@ -200,6 +237,11 @@ func (asset *Asset) IndexTransactions() error {
 
 	log.Infof("[%d] Indexing transactions start height: %d, end height: %d", asset.ID, beginHeight, endHeight)
 	indexErr = asset.Internal().DCR.GetTransactions(ctx, rangeFn, startBlock, endBlock)
+	if indexErr == nil {
+		// Commit whatever the last partial chunk holds before the
+		// deferred completion stamp above runs.
+		indexErr = flushPending()
+	}
 	return indexErr
 }
 

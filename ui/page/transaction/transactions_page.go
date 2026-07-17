@@ -94,10 +94,21 @@ type txDecodedCache struct {
 // DCR wallets (see Layout) and surfaces ticket/vote/revocation txs via the
 // tabIndex==1 filter set in components.TxPageDropDownFields. The tab bar hides
 // itself when only one category is present (len(txTabs) == 1).
+// The Staking Activities tab was removed from this page — staking lives on
+// the dedicated Staking page. Position 1 is now the Reward tab; tableTab
+// maps page positions back onto TxPageDropDownFields' semantic indices.
 var txTabs = []string{
 	values.StrTxRegular,
-	values.StrStakingTx,
 	values.StrRewardTx,
+}
+
+// tableTab maps this page's tab position to the semantic tab index used by
+// components.TxPageDropDownFields (0 Regular, 1 Staking, 2 Reward).
+func tableTab(categoryTab int) int {
+	if categoryTab == 1 {
+		return 2
+	}
+	return 0
 }
 
 // TransactionsPage shows transactions for a specific wallet or for all wallets.
@@ -438,7 +449,7 @@ func (pg *TransactionsPage) getAssetType() utils.AssetType {
 
 func (pg *TransactionsPage) refreshAvailableTxType() {
 	items := []cryptomaterial.DropDownItem{}
-	_, keysInfo := components.TxPageDropDownFields(pg.getAssetType(), pg.selectedTxCategoryTab)
+	_, keysInfo := components.TxPageDropDownFields(pg.getAssetType(), tableTab(pg.selectedTxCategoryTab))
 	for _, name := range keysInfo {
 		items = append(items, cryptomaterial.DropDownItem{Text: name})
 	}
@@ -534,14 +545,6 @@ func (pg *TransactionsPage) snapshotView() txView {
 	if pg.coinTypeDropDown != nil {
 		v.coinSymbol = pg.coinTypeDropDown.Selected()
 	}
-	// The Staking tab is VAR-only and hides the Assets dropdown, so a coin
-	// selection left over from another tab must not (invisibly) filter it —
-	// a stale SKA pick would empty the tab with no visible control to undo
-	// it. Neutralizing here also keeps the tx cache key stable for the tab.
-	if v.categoryTab == 1 {
-		v.coinType = nil
-		v.coinSymbol = ""
-	}
 	v.txFilter = pg.resolveTxFilter(v)
 	return v
 }
@@ -555,7 +558,7 @@ func (pg *TransactionsPage) resolveTxFilter(v txView) int32 {
 	if v.selectedWallet != nil {
 		assetType = v.selectedWallet.GetAssetType()
 	}
-	mapInfo, _ := components.TxPageDropDownFields(assetType, v.categoryTab)
+	mapInfo, _ := components.TxPageDropDownFields(assetType, tableTab(v.categoryTab))
 	if f, ok := mapInfo[v.statusLabel]; ok {
 		return f
 	}
@@ -773,19 +776,22 @@ func coarseFetchFilter(logical int32) int32 {
 		return utils.TxFilterTickets // voted ⊆ tickets; spender==vote refined in UI
 	case utils.TxFilterStakingNoSplit:
 		return utils.TxFilterTickets // tickets only — the DB Tickets filter is already exact
-	case utils.TxFilterStakeFee, utils.TxFilterRegularList:
-		// Stake-fee and the Regular-tab "All" are Regular/Mixed-typed (an SSFee
-		// keeps Type=Regular), fully covered by TxFilterAll — no need to scan
+	case utils.TxFilterStakeFee:
+		// Stake-fee rows are Regular/Mixed-typed (an SSFee keeps
+		// Type=Regular), fully covered by TxFilterAll — no need to scan
 		// the stake rows.
 		return utils.TxFilterAll
-	case utils.TxFilterSplit, utils.TxFilterStakingList, utils.TxFilterRewardList, utils.TxFilterRewardPoW,
+	case utils.TxFilterSplit, utils.TxFilterRegularList, utils.TxFilterStakingList,
+		utils.TxFilterRewardList, utils.TxFilterRewardPoW,
 		utils.TxFilterRewardPoS, utils.TxFilterMissed:
-		// TxFilterSplit is deliberately NOT collapsed onto TxFilterAll even
+		// TxFilterSplit and TxFilterRegularList (which now includes split
+		// rows) are deliberately NOT collapsed onto TxFilterAll even
 		// though splits are Regular-typed: dcr.ApplySplitAmounts needs the
 		// ticket rows alongside the splits to price them, and TxFilterAll
 		// excludes tickets.
-		// Need ticket / vote / revocation rows that TxFilterAll omits. Pass the
-		// logical value through so prepareTxQuery's default returns q.True().
+		// The reward filters need vote rows that TxFilterAll omits. Pass
+		// the logical value through so prepareTxQuery's default returns
+		// q.True().
 		return logical
 	default:
 		return logical // 0-14 are DB-supported and already exact
@@ -805,42 +811,39 @@ func (pg *TransactionsPage) reclassifyByTab(v txView, in []*multiWalletTx) []*mu
 }
 
 // keepForTab is the per-tab/status membership predicate (the reclassification
-// core for tasks 7-12). Regular = everything that isn't a reward or a split;
-// Staking = tickets + splits (votes/revocations moved to Reward); Reward =
-// coinbase + stake-fee + vote + revocation.
+// core). Regular = plain regular/mixed movements INCLUDING splits (a split is
+// an ordinary self-transfer that funds tickets; the dedicated Split filter
+// isolates them); Reward = mining rewards (coinbase + MF) and staking rewards
+// (votes + SF).
 func (pg *TransactionsPage) keepForTab(v txView, mw *multiWalletTx) bool {
 	tx := mw.Transaction
 	switch v.categoryTab {
-	case 0: // Regular: only plain regular/mixed movements. Tickets, votes,
-		// revocations and coinbase have their own tx types (Staking/Reward);
-		// stake-fees (SF) and split self-transfers are excluded explicitly. This
-		// type restriction is what keeps the three tabs mutually exclusive — a
-		// ticket must NOT also appear here.
-		return (tx.Type == txhelper.TxTypeRegular || tx.Type == txhelper.TxTypeMixed) &&
-			!tx.IsStakeFee && !dcr.IsSplitTx(tx)
-	case 1: // Staking
+	case 0: // Regular
 		switch v.txFilter {
 		case utils.TxFilterSplit:
 			return dcr.IsSplitTx(tx)
-		case utils.TxFilterMissed:
-			return false // missed tickets aren't detectable over SPV — always empty
-		case utils.TxFilterTicketVoted:
-			return tx.Type == txhelper.TxTypeTicketPurchase && pg.ticketVoted(mw)
-		case utils.TxFilterStakingList: // "All" = tickets + splits
-			return tx.Type == txhelper.TxTypeTicketPurchase || dcr.IsSplitTx(tx)
-		case utils.TxFilterStakingNoSplit:
-			// "All without Split": every ticket purchase, no split rows.
-			return tx.Type == txhelper.TxTypeTicketPurchase
-		default: // Unmined / Immature / Live / Expired — coarse filter already exact
-			return tx.Type == txhelper.TxTypeTicketPurchase
+		case utils.TxFilterRegularList: // "All types" includes split rows
+			// Tickets, votes and coinbase have their own tx types
+			// (Staking page / Reward tab); stake-fees are excluded
+			// explicitly. This type restriction keeps the tabs mutually
+			// exclusive — a ticket must NOT also appear here.
+			return (tx.Type == txhelper.TxTypeRegular || tx.Type == txhelper.TxTypeMixed) &&
+				!tx.IsStakeFee
+		default: // Sent / Received / Transferred — direction views.
+			// Splits stay out of these: they have their own filter, and
+			// these statuses' exact DB fetch lacks the ticket rows
+			// ApplySplitAmounts needs, so a split here would display its
+			// fee instead of the split amount.
+			return (tx.Type == txhelper.TxTypeRegular || tx.Type == txhelper.TxTypeMixed) &&
+				!tx.IsStakeFee && !dcr.IsSplitTx(tx)
 		}
-	case 2: // Reward
+	case 1: // Reward
 		switch v.txFilter {
 		case utils.TxFilterRewardPoW:
 			return isPoWReward(tx)
 		case utils.TxFilterRewardPoS:
 			return isPoSReward(tx)
-		default: // "All"
+		default: // "All rewards"
 			return isRewardTx(tx)
 		}
 	}
@@ -848,28 +851,29 @@ func (pg *TransactionsPage) keepForTab(v txView, mw *multiWalletTx) bool {
 }
 
 // isRewardTx reports whether tx belongs to the Reward tab: a consensus reward —
-// PoW coinbase, a stake-fee distribution (SF or MF), a vote or a revocation.
+// PoW coinbase, a stake-fee distribution (SF or MF), or a vote. Revocations
+// return the ticket price without any reward, so they are not rewards.
 func isRewardTx(tx *sharedW.Transaction) bool {
 	if tx.IsStakeFee {
 		return true
 	}
 	switch tx.Type {
-	case txhelper.TxTypeCoinBase, txhelper.TxTypeVote, txhelper.TxTypeRevocation:
+	case txhelper.TxTypeCoinBase, txhelper.TxTypeVote:
 		return true
 	}
 	return false
 }
 
-// isPoWReward reports whether tx is a proof-of-work reward: the coinbase block
+// isPoWReward reports whether tx is a mining reward: the coinbase block
 // reward, or a miner-fee (MF) stake-fee distribution.
 func isPoWReward(tx *sharedW.Transaction) bool {
 	return tx.Type == txhelper.TxTypeCoinBase || (tx.IsStakeFee && tx.StakeFeeKind == "MF")
 }
 
-// isPoSReward reports whether tx is a proof-of-stake reward: a vote, a
-// revocation, or a staker-fee (SF) stake-fee distribution.
+// isPoSReward reports whether tx is a staking reward: a vote, or a
+// staker-fee (SF) stake-fee distribution.
 func isPoSReward(tx *sharedW.Transaction) bool {
-	if tx.Type == txhelper.TxTypeVote || tx.Type == txhelper.TxTypeRevocation {
+	if tx.Type == txhelper.TxTypeVote {
 		return true
 	}
 	return tx.IsStakeFee && tx.StakeFeeKind == "SF"
@@ -960,7 +964,7 @@ func (pg *TransactionsPage) filterByCoinType(v txView, in []*multiWalletTx) []*m
 }
 
 func (pg *TransactionsPage) loadTransactions(v txView, wal sharedW.Asset, offset, pageSize int32) ([]*multiWalletTx, int, error) {
-	mapInfo, _ := components.TxPageDropDownFields(wal.GetAssetType(), v.categoryTab)
+	mapInfo, _ := components.TxPageDropDownFields(wal.GetAssetType(), tableTab(v.categoryTab))
 	if len(mapInfo) < 1 {
 		err := fmt.Errorf("unable to resolve asset filters for asset type (%v)", wal.GetAssetType())
 		return nil, -1, err
@@ -1135,9 +1139,7 @@ func (pg *TransactionsPage) rightDropdown(gtx C) D {
 		return layout.Flex{}.Layout(gtx,
 			layout.Rigid(pg.statusDropDown.Layout),
 			layout.Rigid(func(gtx C) D {
-				// The Staking tab is VAR-only (tickets and splits), so an
-				// Assets filter there is noise — hide it on that tab.
-				if pg.coinTypeDropDown == nil || pg.selectedTxCategoryTab == 1 {
+				if pg.coinTypeDropDown == nil {
 					return D{}
 				}
 				return pg.coinTypeDropDown.Layout(gtx)

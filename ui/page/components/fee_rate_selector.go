@@ -5,6 +5,7 @@ import (
 	"strconv"
 
 	"gioui.org/font"
+	"gioui.org/io/key"
 	"gioui.org/layout"
 	"gioui.org/widget"
 
@@ -90,6 +91,7 @@ func NewFeeRateSelector(l *load.Load, callback walletTypeCallbackFunc) *FeeRateS
 	fs.ratesEditor.HasCustomButton = false
 	fs.ratesEditor.Bordered = false
 	fs.ratesEditor.Editor.SingleLine = true
+	fs.ratesEditor.Editor.InputHint = key.HintNumeric
 	fs.ratesEditor.TextSize = values.TextSize14
 	fs.ratesEditor.IsTitleLabel = false
 

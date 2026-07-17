@@ -3,10 +3,15 @@ package send
 import (
 	"errors"
 	"strings"
+	"sync/atomic"
+	"time"
 
+	"gioui.org/io/key"
 	"gioui.org/widget"
+	"golang.org/x/exp/shiny/materialdesign/icons"
 
 	"github.com/monetarium/monetarium-node/cointype"
+	"github.com/monetarium/skarb-wallet/device"
 	sharedW "github.com/monetarium/skarb-wallet/libwallet/assets/wallet"
 	libUtil "github.com/monetarium/skarb-wallet/libwallet/utils"
 	"github.com/monetarium/skarb-wallet/ui/cryptomaterial"
@@ -31,6 +36,15 @@ type destination struct {
 	accountDropdown *components.AccountDropdown
 
 	accountSwitch *cryptomaterial.SegmentedControl
+
+	// QR scanning (Android): the poll goroutine never touches UI state —
+	// results land in these atomics and handle() applies them on the UI
+	// thread (CLAUDE.md §3). reload is the owning window's Reload, wired
+	// by newRecipient.
+	reload       func()
+	qrScanGen    atomic.Int32           // bump to cancel a running poll loop
+	qrScanResult atomic.Pointer[string] // decoded text pending UI apply
+	qrScanFailed atomic.Bool            // scanner error pending toast
 }
 
 func newSendDestination(l *load.Load, assetType libUtil.AssetType) *destination {
@@ -42,9 +56,20 @@ func newSendDestination(l *load.Load, assetType libUtil.AssetType) *destination 
 	dst.accountSwitch.SetEnableSwipe(false)
 	dst.accountSwitch.DisableUniform(true)
 
-	dst.destinationAddressEditor = l.Theme.Editor(new(widget.Editor), values.String(values.StrDestAddr))
+	if l.Device.QRScanSupported() {
+		// Trailing camera button opens the in-app QR scanner.
+		scanIcon, _ := widget.NewIcon(icons.ImagePhotoCamera)
+		dst.destinationAddressEditor = l.Theme.IconEditor(new(widget.Editor),
+			values.String(values.StrDestAddr), scanIcon, true)
+		dst.destinationAddressEditor.EditorIconButtonEvent = dst.startQRScan
+	} else {
+		dst.destinationAddressEditor = l.Theme.Editor(new(widget.Editor), values.String(values.StrDestAddr))
+	}
 	dst.destinationAddressEditor.TextSize = values.TextSizeTransform(l.IsMobileView(), values.TextSize16)
 	dst.destinationAddressEditor.Editor.SingleLine = true
+	// URI keyboards disable autocorrection — a base58 address must never
+	// be "corrected" into dictionary words by a mobile IME.
+	dst.destinationAddressEditor.Editor.InputHint = key.HintURL
 	dst.destinationAddressEditor.Editor.SetText("")
 	dst.destinationAddressEditor.IsTitleLabel = false
 
@@ -190,7 +215,109 @@ func (dst *destination) HandleDropdownInteraction(gtx C) {
 	dst.walletDropdown.Handle(gtx)
 }
 
+// startQRScan opens the Android camera overlay (EditorIconButtonEvent)
+// and polls it off-thread until a QR decodes, the user cancels, the page
+// stops the scan, or a 2-minute deadline passes.
+func (dst *destination) startQRScan() {
+	hint := values.String(values.StrScanQRHint)
+	cancelLabel := values.String(values.StrCancel)
+	// A previous session's undelivered outcome must not fire now.
+	dst.qrScanResult.Store(nil)
+	dst.qrScanFailed.Store(false)
+	if err := dst.Device.QRScanStart(hint, cancelLabel); err != nil {
+		dst.Toast.NotifyError(values.String(values.StrScannerUnavailable))
+		return
+	}
+	gen := dst.qrScanGen.Add(1)
+	go func() {
+		deadline := time.Now().Add(2 * time.Minute)
+		var requestingSince time.Time
+		lastSeq := 0
+		for time.Now().Before(deadline) {
+			time.Sleep(150 * time.Millisecond)
+			if dst.qrScanGen.Load() != gen {
+				return // cancelled by stopQRScan (page left / new scan)
+			}
+			state, seq, frame, w, h, err := dst.Device.QRScanTick(hint, cancelLabel, lastSeq)
+			switch {
+			case err != nil || state == device.QRStateError:
+				dst.Device.QRScanStop()
+				dst.qrScanFailed.Store(true)
+				dst.reloadWindow()
+				return
+			case state == device.QRStateIdle:
+				return // user tapped ✕
+			case state == device.QRStateRequesting:
+				// GioActivity drops the permission-result callback, so a
+				// denial is indistinguishable from an unanswered dialog —
+				// give up after 30s instead of the icon looking dead for
+				// the full deadline.
+				if requestingSince.IsZero() {
+					requestingSince = time.Now()
+				}
+				if time.Since(requestingSince) > 30*time.Second {
+					dst.Device.QRScanStop()
+					dst.qrScanFailed.Store(true)
+					dst.reloadWindow()
+					return
+				}
+				continue
+			}
+			if frame == nil {
+				continue
+			}
+			lastSeq = seq
+			text, err := device.DecodeQRLuma(frame, w, h)
+			if err != nil {
+				continue // no QR in this frame — keep aiming
+			}
+			dst.Device.QRScanStop()
+			addr := normalizeScannedAddress(text)
+			dst.qrScanResult.Store(&addr)
+			dst.reloadWindow()
+			return
+		}
+		dst.Device.QRScanStop()
+	}()
+}
+
+// stopQRScan cancels any in-flight scan; safe on every platform.
+func (dst *destination) stopQRScan() {
+	dst.qrScanGen.Add(1)
+	if dst.Device.QRScanSupported() {
+		dst.Device.QRScanStop()
+	}
+}
+
+func (dst *destination) reloadWindow() {
+	if dst.reload != nil {
+		dst.reload()
+	}
+}
+
+// normalizeScannedAddress reduces a scanned payload to a bare address:
+// payment URIs ("monetarium:ADDR?amount=…") lose the scheme and query.
+func normalizeScannedAddress(s string) string {
+	s = strings.TrimSpace(s)
+	if i := strings.IndexByte(s, ':'); i >= 0 && strings.EqualFold(s[:i], "monetarium") {
+		s = s[i+1:]
+	}
+	if i := strings.IndexByte(s, '?'); i >= 0 {
+		s = s[:i]
+	}
+	return s
+}
+
 func (dst *destination) handle(gtx C) {
+	// Apply a finished QR scan on the UI thread.
+	if p := dst.qrScanResult.Swap(nil); p != nil {
+		dst.destinationAddressEditor.Editor.SetText(*p)
+		dst.addressChanged()
+	}
+	if dst.qrScanFailed.CompareAndSwap(true, false) {
+		dst.Toast.NotifyError(values.String(values.StrScannerUnavailable))
+	}
+
 	if dst.accountSwitch.Changed() {
 		dst.addressChanged()
 	}
