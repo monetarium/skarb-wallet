@@ -223,8 +223,11 @@ func TransactionTitleIcon(l *load.Load, wal sharedW.Asset, tx *sharedW.Transacti
 				}
 			}
 		case txhelper.TxTypeVote:
-			txStatus.Title = values.String(values.StrVote)
-			txStatus.Icon = l.Theme.Icons.TicketVotedIcon
+			// The only lists a vote row appears in are the Reward lists,
+			// where it IS the staking-reward entry: same title and green
+			// plus icon as the SF stake-fee rows.
+			txStatus.Title = values.String(values.StrPoSReward)
+			txStatus.Icon = l.Theme.Icons.ReceiveIcon
 			txStatus.Color = l.Theme.Color.Turquoise700
 			txStatus.TicketStatus = dcr.TicketStatusVotedOrRevoked
 			txStatus.ProgressBarColor = l.Theme.Color.Turquoise300
@@ -285,6 +288,12 @@ func LayoutTransactionRow(gtx C, l *load.Load, wal sharedW.Asset, tx *sharedW.Tr
 	// Use the tx's stored CoinType for the unit + scale (1e8 VAR vs 1e18 SKA);
 	// wal.ToAmount(tx.Amount).String() always renders as VAR.
 	amount := dcr.FormatTxAmountBig(tx.AmountAtoms, tx.Amount, tx.CoinType)
+	if tx.Type == txhelper.TxTypeVote {
+		// A vote's Amount bundles the returned ticket price with the
+		// earned reward; the row must show only the reward (the
+		// explorer's "Fee Reward") — the ticket price merely came home.
+		amount = dcr.FormatTxAmountBig("", tx.VoteReward, tx.CoinType)
+	}
 	assetIcon := CoinImageBySymbol(l, wal.GetAssetType(), wal.IsWatchingOnlyWallet())
 	walName := l.Theme.Label(values.TextSize14, wal.GetWalletName())
 	grayText := l.Theme.Color.GrayText2
@@ -668,12 +677,14 @@ func TxPageDropDownFields(wType libutils.AssetType, tabIndex int) (mapInfo map[s
 			values.String(values.StrSent):        libutils.TxFilterSent,
 			values.String(values.StrReceived):    libutils.TxFilterReceived,
 			values.String(values.StrTransferred): libutils.TxFilterTransferred,
+			values.String(values.StrSplit):       libutils.TxFilterSplit,
 		}
 		keysInfo = []string{
 			values.String(values.StrAll),
 			values.String(values.StrSent),
 			values.String(values.StrReceived),
 			values.String(values.StrTransferred),
+			values.String(values.StrSplit),
 		}
 	case wType == libutils.DCRWalletAsset && tabIndex == 1:
 		// DCR Staking Transactions dropdown fields. "All" uses TxFilterStakingList
@@ -703,8 +714,8 @@ func TxPageDropDownFields(wType libutils.AssetType, tabIndex int) (mapInfo map[s
 			values.String(values.StrVoted),
 		}
 	case wType == libutils.DCRWalletAsset && tabIndex == 2:
-		// DCR Reward Transactions dropdown fields: All (every consensus reward),
-		// PoW (coinbase + miner-fee SSFee) and PoS (votes, revocations +
+		// DCR Reward Transactions dropdown fields: All rewards, Mining
+		// rewards (coinbase + miner-fee SSFee) and Staking rewards (votes +
 		// staker-fee SSFee). See keepForTab / TxMatchesFilter.
 		mapInfo = map[string]int32{
 			values.String(values.StrAllRewards): libutils.TxFilterRewardList,

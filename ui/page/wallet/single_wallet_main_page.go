@@ -212,7 +212,7 @@ func (swmp *SingleWalletMasterPage) OnNavigatedTo() {
 		swmp.PageNavigationTab.SetSelectedSegment(tab)
 		swmp.navigateToSelectedTab()
 	} else if swmp.CurrentPage() == nil {
-		swmp.Display(info.NewInfoPage(swmp.Load, swmp.selectedWallet, swmp.backup)) // TODO: Should pagestack have a start page? YES!
+		swmp.Display(info.NewInfoPage(swmp.Load, swmp.selectedWallet, swmp.backup, swmp.changeTab)) // TODO: Should pagestack have a start page? YES!
 	} else {
 		swmp.CurrentPage().OnNavigatedTo()
 	}
@@ -497,7 +497,7 @@ func (swmp *SingleWalletMasterPage) HandleUserInteractions(gtx C) {
 	if swmp.navigateToSyncBtn.Button.Clicked(gtx) {
 		swmp.ToggleSync(swmp.selectedWallet, func(b bool) {
 			swmp.selectedWallet.SaveUserConfigValue(sharedW.AutoSyncConfigKey, b)
-			swmp.Display(info.NewInfoPage(swmp.Load, swmp.selectedWallet, swmp.backup))
+			swmp.Display(info.NewInfoPage(swmp.Load, swmp.selectedWallet, swmp.backup, swmp.changeTab))
 		})
 	}
 
@@ -521,7 +521,7 @@ func (swmp *SingleWalletMasterPage) navigateToSelectedTab() {
 	case values.StrReceive:
 		pg = receive.NewReceivePage(swmp.Load, swmp.selectedWallet)
 	case values.StrInfo:
-		pg = info.NewInfoPage(swmp.Load, swmp.selectedWallet, swmp.backup)
+		pg = info.NewInfoPage(swmp.Load, swmp.selectedWallet, swmp.backup, swmp.changeTab)
 	case values.StrTransactions:
 		txPage := transaction.NewTransactionsPage(swmp.Load, swmp.selectedWallet)
 		txPage.DisableUniformTab()
@@ -611,6 +611,12 @@ func (swmp *SingleWalletMasterPage) OnNavigatedFrom() {
 // to be eventually drawn on screen.
 // Part of the load.Page interface.
 func (swmp *SingleWalletMasterPage) Layout(gtx C) D {
+	// The header's back arrow was removed from this page (accidental
+	// clicks), but the Android hardware back key must still exit to the
+	// Overview: register the undrawn selector clickable as this frame's
+	// bottom-most back target. Sub-pages lay out their own arrows later
+	// in the frame, so a deeper arrow always wins.
+	swmp.Theme.MarkBackButtonLaidOut(swmp.openWalletSelector.Button)
 	return layout.Stack{}.Layout(gtx,
 		layout.Expanded(func(gtx C) D {
 			return cryptomaterial.LinearLayout{

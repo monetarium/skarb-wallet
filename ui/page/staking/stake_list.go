@@ -16,6 +16,10 @@ func (pg *Page) initTicketList() {
 }
 
 func (pg *Page) listenForTxNotifications() {
+	// Idempotent: the page re-registers when navigation returns to it
+	// (OnNavigatedFrom removed the listener) — drop any previous
+	// registration under the same ID first so re-adding never errors.
+	pg.stopTxNotificationsListener()
 	// A bare Reload() only redrew the page with its STORED fields — the
 	// overview counts, total rewards, and ticket list stayed stale until the
 	// user left and re-entered. Flag a refresh instead; the UI thread drains
@@ -45,17 +49,51 @@ func (pg *Page) stopTxNotificationsListener() {
 func (pg *Page) fetchTickets(offset, pageSize int32) ([]*transactionItem, int, bool, error) {
 	// A Statistics tile narrows the list to that ticket status; without a
 	// tile selection the full tickets list is shown.
-	filter := pg.statFilter.Load()
-	if filter == 0 {
-		filter = dcr.TxFilterTickets
+	requested := pg.statFilter.Load()
+	if requested == 0 {
+		requested = dcr.TxFilterTickets
 	}
-	txs, err := pg.dcrWallet.GetTransactionsRaw(offset, pageSize, filter, true, "")
+	// Voted/Revoked name VOTE/REVOCATION transactions in the DB query,
+	// but this list renders TICKETS. Querying them directly returns vote
+	// rows that stakeToTransactionItems drops (nothing ever spends a
+	// vote, so its TicketSpender is always nil) — the list came back
+	// empty. Instead, walk ALL tickets and refine by the spender's type
+	// (the hasFilter path built for exactly this). The whole refined set
+	// is served in the first window: refined pages are almost always
+	// shorter than pageSize, which the scroll would misread as
+	// end-of-list, and its offset arithmetic indexes the UNrefined
+	// tickets — per-page refinement both truncated and duplicated rows.
+	if requested == dcr.TxFilterVoted || requested == dcr.TxFilterRevoked {
+		if offset > 0 {
+			return nil, 0, false, nil // everything was served at offset 0
+		}
+		hasFilter := func(f int32) bool { return f == requested }
+		var all []*transactionItem
+		const chunk = int32(100)
+		for dbOffset := int32(0); ; dbOffset += chunk {
+			txs, err := pg.dcrWallet.GetTransactionsRaw(dbOffset, chunk, dcr.TxFilterTickets, true, "")
+			if err != nil {
+				return nil, -1, false, err
+			}
+			items, err := pg.stakeToTransactionItems(txs, true, hasFilter)
+			if err != nil {
+				return nil, -1, false, err
+			}
+			all = append(all, items...)
+			if int32(len(txs)) < chunk {
+				break
+			}
+		}
+		return all, len(all), false, nil
+	}
+
+	txs, err := pg.dcrWallet.GetTransactionsRaw(offset, pageSize, requested, true, "")
 	if err != nil {
 		return nil, -1, false, err
 	}
 
 	tickets, err := pg.stakeToTransactionItems(txs, true, func(f int32) bool {
-		return f == filter
+		return f == requested
 	})
 	return tickets, len(tickets), false, err
 }

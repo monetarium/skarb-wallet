@@ -79,9 +79,14 @@ type WalletInfo struct {
 	// so the relative-time string only ticks forward when the user
 	// happens to click or scroll. Cancelled in OnNavigatedFrom.
 	blockAgeTickerCancel context.CancelFunc
+
+	// changeTab switches the wallet master page's tab (same injection the
+	// settings page uses) — Staking's "View All" opens the Staking TAB,
+	// not a Transactions sub-page. Optional: nil falls back to nothing.
+	changeTab func(tab string)
 }
 
-func NewInfoPage(l *load.Load, wallet sharedW.Asset, backup func(sharedW.Asset)) *WalletInfo {
+func NewInfoPage(l *load.Load, wallet sharedW.Asset, backup func(sharedW.Asset), changeTab func(string)) *WalletInfo {
 	pg := &WalletInfo{
 		Load:             l,
 		GenericPageModal: app.NewGenericPageModal(InfoID),
@@ -93,6 +98,7 @@ func NewInfoPage(l *load.Load, wallet sharedW.Asset, backup func(sharedW.Asset))
 		recentStakes:       l.Theme.NewClickableList(layout.Vertical),
 		recentRewards:      l.Theme.NewClickableList(layout.Vertical),
 		materialLoader:     material.Loader(l.Theme.Base),
+		changeTab:          changeTab,
 	}
 	pg.walletSyncInfo = components.NewWalletSyncInfo(l, wallet, pg.reload, backup)
 	pg.recentTransactions.Radius = cryptomaterial.Radius(14)
@@ -123,6 +129,8 @@ func NewInfoPage(l *load.Load, wallet sharedW.Asset, backup func(sharedW.Asset))
 	pg.mixerRedirectButton, pg.mixerInfoButton = components.SubpageHeaderButtons(l)
 	pg.mixerRedirectButton.Icon = pg.Theme.Icons.NavigationArrowForward
 	pg.mixerRedirectButton.Size = values.MarginPadding20
+	// Repurposed as a FORWARD arrow — must not react to hardware back.
+	pg.mixerRedirectButton.UntrackBackTarget()
 
 	return pg
 }
@@ -399,16 +407,19 @@ func (pg *WalletInfo) HandleUserInteractions(gtx C) {
 		}
 	}
 
-	// Each "View All" opens the Transactions page on ITS list's tab:
-	// 0 = Regular, 1 = Staking Activities, 2 = Reward.
+	// "View All" targets: Regular and Reward open the Transactions page
+	// on their tab (0 = Regular, 1 = Reward — the page's Staking tab was
+	// removed); Staking opens the dedicated Staking TAB of the wallet.
 	if pg.viewAllTxButton.Button.Clicked(gtx) {
 		pg.ParentNavigator().Display(transaction.NewTransactionsPageWithType(pg.Load, 0, pg.wallet))
 	}
 	if pg.viewAllStakeButton.Button.Clicked(gtx) {
-		pg.ParentNavigator().Display(transaction.NewTransactionsPageWithType(pg.Load, 1, pg.wallet))
+		if pg.changeTab != nil {
+			pg.changeTab(values.StrStaking)
+		}
 	}
 	if pg.viewAllRewardButton.Button.Clicked(gtx) {
-		pg.ParentNavigator().Display(transaction.NewTransactionsPageWithType(pg.Load, 2, pg.wallet))
+		pg.ParentNavigator().Display(transaction.NewTransactionsPageWithType(pg.Load, 1, pg.wallet))
 	}
 }
 
@@ -550,10 +561,12 @@ func (pg *WalletInfo) loadTransactions() {
 }
 
 func (pg *WalletInfo) loadStakes() {
-	// Same classification as the Transactions page Staking tab "All": ticket
-	// purchases + splits. Build into a local slice and publish with one locked
-	// assignment (Layout reads pg.stakes on the UI thread).
-	stakes := pg.loadRecentByFilter(libutils.TxFilterStakingList, 3)
+	// Mirrors the Staking page's own list (TxFilterTickets — ticket
+	// purchases with their lifecycle status), not the wider staking-tx
+	// classification: "View All" leads to that page, so the preview must
+	// show the same rows. Build into a local slice and publish with one
+	// locked assignment (Layout reads pg.stakes on the UI thread).
+	stakes := pg.loadRecentByFilter(libutils.TxFilterTickets, 3)
 	pg.txMu.Lock()
 	pg.stakes = stakes
 	pg.txMu.Unlock()
@@ -561,8 +574,9 @@ func (pg *WalletInfo) loadStakes() {
 }
 
 func (pg *WalletInfo) loadRewards() {
-	// Same classification as the Transactions page Reward tab "All": coinbase,
-	// stake-fee distributions, votes and revocations.
+	// Same classification as the Transactions page Reward tab "All":
+	// mining rewards (coinbase + MF stake fees) and staking rewards
+	// (votes + SF stake fees). Revocations are not rewards.
 	rewards := pg.loadRecentByFilter(libutils.TxFilterRewardList, 3)
 	pg.txMu.Lock()
 	pg.rewards = rewards

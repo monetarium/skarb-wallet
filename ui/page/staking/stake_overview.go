@@ -3,6 +3,7 @@ package staking
 import (
 	"context"
 	"fmt"
+	"runtime"
 	"sync/atomic"
 
 	"gioui.org/layout"
@@ -113,7 +114,12 @@ type Page struct {
 	// writes to the staged* fields race each other (the pendingDataApply CAS
 	// orders producer→consumer, not producer↔producer), each re-scanning the
 	// whole tx set.
+	// loadQueued marks a refresh requested WHILE a load was running: the
+	// running goroutine captured pre-notification state, so it reruns the
+	// load once before releasing — otherwise that notification was lost
+	// and the statistics tiles stayed stale until the next block.
 	loadingData atomic.Bool
+	loadQueued  atomic.Bool
 
 	// ticketRefreshInFlight coalesces ticket-list refetches, mirroring
 	// transactions_page.go's txRefreshInFlight: loadNewItem=true resets and
@@ -202,6 +208,21 @@ func (pg *Page) OnNavigatedTo() {
 	// If staking is disabled no startup func should be called
 	// Layout will draw an overlay to show that stacking is disabled.
 
+	if pg.dataLoaded {
+		// Returning from a child page (ticket details): navigating away
+		// removed the tx/block listener and blocks may have landed
+		// meanwhile — without this, the statistics tiles froze (Unmined
+		// never became Immature) until the tab was rebuilt. Deliberately
+		// NOT gated on sync state: re-listening during a rescan is
+		// harmless (the pendingRefresh drain is already rescan-gated),
+		// while skipping it here left the listener dead forever when the
+		// user returned mid-rescan.
+		pg.listenForTxNotifications()
+		pg.pendingRefresh.Store(true)
+		pg.ParentWindow().Reload()
+		return
+	}
+
 	isSyncingOrRescanning := !pg.dcrWallet.IsSynced() || pg.dcrWallet.IsRescanning()
 	if pg.isTicketsPurchaseAllowed() && !isSyncingOrRescanning {
 		pg.startPageData()
@@ -286,14 +307,19 @@ func (pg *Page) setStakingButtonsState() {
 }
 
 func (pg *Page) loadPageData() {
-	// Single-flight: skip when a load is already running — the in-flight
-	// goroutine reads current data anyway, and the next notification
-	// re-triggers a fresh load.
+	// Single-flight: when a load is already running, queue exactly one
+	// rerun — the in-flight goroutine captured pre-notification state.
 	if !pg.loadingData.CompareAndSwap(false, true) {
+		pg.loadQueued.Store(true)
 		return
 	}
 	go func() {
-		defer pg.loadingData.Store(false)
+		defer func() {
+			pg.loadingData.Store(false)
+			if pg.loadQueued.CompareAndSwap(true, false) {
+				pg.loadPageData()
+			}
+		}()
 		if len(pg.dcrWallet.KnownVSPs()) == 0 {
 			// TODO: Does this page need this list?
 			pg.dcrWallet.ReloadVSPList(context.TODO())
@@ -330,11 +356,14 @@ func (pg *Page) loadPageData() {
 			stakeBal = nil // progress bar hides, same as the old per-frame error path
 		}
 		tbConfigured := pg.dcrWallet.TicketBuyerConfigIsSet()
-		// Default the intent to tbConfigured, not false: a wallet configured
-		// BEFORE the intent key existed has no stored value, and defaulting
-		// to false would greet it with "turned off" though the user never
-		// turned it off — "paused after restart" is the truthful legacy read.
-		tbIntent := pg.dcrWallet.ReadBoolConfigValueForKey(sharedW.TicketBuyerIntentConfigKey, tbConfigured)
+		// Default the intent to false: configuring the buyer via the
+		// settings modal does NOT start it, and the missing-key case must
+		// read "currently disabled" — the earlier tbConfigured default
+		// showed a freshly configured buyer as "paused after restart"
+		// though no restart ever happened. "Paused" is now reserved for an
+		// explicitly stored true intent (the process died with the buyer
+		// running).
+		tbIntent := pg.dcrWallet.ReadBoolConfigValueForKey(sharedW.TicketBuyerIntentConfigKey, false)
 		var tbReserve string
 		if tbConfigured {
 			tbReserve = pg.dcrWallet.ToAmount(pg.dcrWallet.AutoTicketsBuyerConfig().BalanceToMaintain).String()
@@ -796,6 +825,11 @@ func (pg *Page) startTicketBuyerPasswordModal() {
 					}.Layout2(gtx, func(gtx C) D {
 						return layout.Inset{Bottom: values.MarginPadding4}.Layout(gtx, func(gtx C) D {
 							msg := values.String(values.StrAutoTicketInfo)
+							// Be honest on phones: the OS pauses backgrounded
+							// apps, so the buyer only works on screen.
+							if runtime.GOOS == "android" || runtime.GOOS == "ios" {
+								msg = values.String(values.StrAutoTicketMobileInfo)
+							}
 							txt := pg.Theme.Label(values.TextSize14, msg)
 							txt.Alignment = text.Middle
 							txt.Color = pg.Theme.Color.GrayText3
