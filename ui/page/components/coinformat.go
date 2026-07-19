@@ -21,10 +21,15 @@ var (
 	noDecimal                 = regexp.MustCompile(`([0-9]{1,3},*)+`)
 )
 
-func formatBalance(gtx C, l *load.Load, amount string, mainTextSize unit.Sp, col color.NRGBA, isBoldText, displayUnitText bool) D {
-
+// SplitBalanceParts splits a "<value> <unit>"-shaped amount string into the
+// leading figure (integer part + up to two decimal places), the remaining
+// decimal digits (rendered smaller by every balance widget), and the " UNIT"
+// suffix (leading space included; empty when the string has no unit). ok is
+// false for shapes the splitter can't handle — render the raw string then.
+// This is the exact split formatBalance applies; exported so custom renderers
+// (e.g. the staking Total Reward row) scale identically.
+func SplitBalanceParts(amount string) (mainText, subText, unitText string, ok bool) {
 	startIndex := 0
-	stopIndex := 0
 
 	if doubleOrMoreDecimalPlaces.MatchString(amount) {
 		decimalIndex := strings.Index(amount, ".")
@@ -47,17 +52,24 @@ func formatBalance(gtx C, l *load.Load, amount string, mainTextSize unit.Sp, col
 	// pure digits ("0", "0.00000000") we still need the "no unit found
 	// → use whole string as value" fallback. Renaming + fixing the
 	// condition makes the intent explicit.
-	stopIndex = getIndexUnit(amount)
+	stopIndex := getIndexUnit(amount)
 	noUnit := stopIndex == -1
 	if noUnit {
 		stopIndex = len(amount)
 	}
 
 	if startIndex > stopIndex || stopIndex <= 0 || stopIndex > len(amount) {
-		return D{}
+		return "", "", "", false
 	}
 
-	mainText, subText, unitText := amount[:startIndex], amount[startIndex:stopIndex], amount[stopIndex:]
+	return amount[:startIndex], amount[startIndex:stopIndex], amount[stopIndex:], true
+}
+
+func formatBalance(gtx C, l *load.Load, amount string, mainTextSize unit.Sp, col color.NRGBA, isBoldText, displayUnitText bool) D {
+	mainText, subText, unitText, ok := SplitBalanceParts(amount)
+	if !ok {
+		return D{}
+	}
 
 	subTextSize := unit.Sp(float32(mainTextSize) * defaultScale)
 

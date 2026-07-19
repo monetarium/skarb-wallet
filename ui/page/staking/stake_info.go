@@ -6,6 +6,7 @@ import (
 
 	"gioui.org/font"
 	"gioui.org/layout"
+	"gioui.org/unit"
 
 	"github.com/monetarium/monetarium-node/dcrutil"
 	"github.com/monetarium/skarb-wallet/ui/cryptomaterial"
@@ -192,11 +193,13 @@ func (pg *Page) stakeStatusLayout(gtx C, ticketsCanBuy int) D {
 }
 
 // totalRewardRow renders the Total Reward line: every visible coin's total
-// inline, with each AMOUNT in semibold and the coin name in regular weight —
-// the coin name is a unit, not a figure, so bolding it read as part of the
-// number.
+// inline. Each amount's leading figure (through the 2nd decimal place) is
+// semibold; the remaining decimal digits render smaller (same treatment as the
+// Ticket Price card); the coin name stays regular weight — it is a unit, not a
+// figure, so bolding it read as part of the number.
 func (pg *Page) totalRewardRow(gtx C, axis layout.Axis, alignment layout.Alignment) D {
 	textSize16 := values.TextSizeTransform(pg.IsMobileView(), values.TextSize16)
+	subSize := unit.Sp(float32(textSize16) * 0.7) // same scale as formatBalance's defaultScale
 	return components.VerticalInset(values.MarginPadding6).Layout(gtx, func(gtx C) D {
 		return layout.Flex{Axis: axis, Alignment: alignment}.Layout(gtx,
 			layout.Rigid(func(gtx C) D {
@@ -215,19 +218,25 @@ func (pg *Page) totalRewardRow(gtx C, axis layout.Axis, alignment layout.Alignme
 								return sep.Layout(gtx)
 							}))
 						}
-						amount, unit := row, ""
-						if idx := strings.LastIndex(row, " "); idx > 0 {
-							amount, unit = row[:idx], row[idx:]
+						main, sub, txtUnit, ok := components.SplitBalanceParts(row)
+						if !ok {
+							main, sub, txtUnit = row, "", ""
 						}
 						children = append(children,
 							layout.Rigid(func(gtx C) D {
-								lbl := pg.Theme.Label(textSize16, amount)
+								lbl := pg.Theme.Label(textSize16, main)
 								lbl.Color = pg.Theme.Color.Text
 								lbl.Font.Weight = font.SemiBold
 								return lbl.Layout(gtx)
 							}),
 							layout.Rigid(func(gtx C) D {
-								lbl := pg.Theme.Label(textSize16, unit)
+								lbl := pg.Theme.Label(subSize, sub)
+								lbl.Color = pg.Theme.Color.Text
+								lbl.Font.Weight = font.SemiBold
+								return lbl.Layout(gtx)
+							}),
+							layout.Rigid(func(gtx C) D {
+								lbl := pg.Theme.Label(textSize16, txtUnit)
 								lbl.Color = pg.Theme.Color.Text
 								return lbl.Layout(gtx)
 							}),

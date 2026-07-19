@@ -132,6 +132,12 @@ type TransactionsPage struct {
 	exportBtn        *cryptomaterial.Clickable
 	searchEditor     cryptomaterial.Editor
 
+	// lastViewedTxHash marks the row whose details card was opened most
+	// recently, so after closing the card the user can still see which
+	// transaction they were just looking at. Replaced when another card
+	// is opened; empty until the first one.
+	lastViewedTxHash string
+
 	transactionList *cryptomaterial.ClickableList
 	scroll          *components.Scroll[*multiWalletTx]
 
@@ -1200,26 +1206,40 @@ func (pg *TransactionsPage) dropdownLayout(gtx C) D {
 func (pg *TransactionsPage) leftDropdown(gtx C) D {
 	showOverlay := pg.walletNotReady() && pg.multiWalletLayout
 	return layout.Flex{Spacing: layout.SpaceBetween}.Layout(gtx,
+		// LEFT: page title / wallet selector, with Export anchored to the
+		// row's left edge right after it.
 		layout.Rigid(func(gtx C) D {
-			if pg.isShowTitle && pg.IsMobileView() {
-				lbl := pg.Theme.Label(values.TextSize16, values.String(values.StrTransactions))
-				lbl.Font.Weight = font.Bold
-				return layout.Inset{Top: values.MarginPadding4}.Layout(gtx, lbl.Layout)
-			}
-			if pg.walletDropDown == nil {
-				return D{}
-			}
-			return layout.W.Layout(gtx, pg.walletDropDown.Layout)
-
+			return layout.Flex{Alignment: layout.Middle}.Layout(gtx,
+				layout.Rigid(func(gtx C) D {
+					if pg.isShowTitle && pg.IsMobileView() {
+						lbl := pg.Theme.Label(values.TextSize16, values.String(values.StrTransactions))
+						lbl.Font.Weight = font.Bold
+						return layout.Inset{Top: values.MarginPadding4}.Layout(gtx, lbl.Layout)
+					}
+					if pg.walletDropDown == nil {
+						return D{}
+					}
+					return layout.W.Layout(gtx, pg.walletDropDown.Layout)
+				}),
+				layout.Rigid(func(gtx C) D {
+					// Export is not enabled on mobile yet (TODO).
+					if showOverlay || pg.IsMobileView() {
+						return D{}
+					}
+					inset := layout.Inset{Top: values.MarginPadding8}
+					if pg.walletDropDown != nil {
+						inset.Left = values.MarginPadding16
+					}
+					return inset.Layout(gtx, func(gtx C) D {
+						return pg.buttonWrap(gtx, pg.exportBtn, pg.Theme.Icons.ShareIcon, values.String(values.StrExport))
+					})
+				}),
+			)
 		}),
+		// RIGHT: the filter dropdowns, right-aligned. On mobile they live
+		// on their own second row (rightDropdown) instead.
 		layout.Rigid(func(gtx C) D {
-			if showOverlay {
-				return D{}
-			}
-			// Mobile: the dropdowns live on their own second row
-			// (rightDropdown) and Export is not enabled yet (TODO) —
-			// nothing to render on the top row's right side.
-			if pg.IsMobileView() {
+			if showOverlay || pg.IsMobileView() {
 				return D{}
 			}
 			return layout.Flex{Alignment: layout.Middle}.Layout(gtx,
@@ -1231,11 +1251,6 @@ func (pg *TransactionsPage) leftDropdown(gtx C) D {
 					return pg.coinTypeDropDown.Layout(gtx)
 				}),
 				layout.Rigid(pg.orderDropDown.Layout),
-				layout.Rigid(func(gtx C) D {
-					return layout.Inset{Left: values.MarginPadding20, Top: values.MarginPadding8}.Layout(gtx, func(gtx C) D {
-						return pg.buttonWrap(gtx, pg.exportBtn, pg.Theme.Icons.ShareIcon, values.String(values.StrExport))
-					})
-				}),
 			)
 		}),
 	)
@@ -1332,7 +1347,21 @@ func (pg *TransactionsPage) txListLayout(gtx C) D {
 										return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
 											layout.Rigid(func(gtx C) D {
 												hideAssetInfo := pg.selectedWallet != nil
-												return components.LayoutTransactionRow(gtx, pg.Load, wal, tx, hideAssetInfo)
+												row := func(gtx C) D {
+													return components.LayoutTransactionRow(gtx, pg.Load, wal, tx, hideAssetInfo)
+												}
+												// The most recently viewed tx keeps a subtle
+												// highlight so it's findable after closing
+												// its details card.
+												if tx.Hash != "" && tx.Hash == pg.lastViewedTxHash {
+													return cryptomaterial.LinearLayout{
+														Width:      cryptomaterial.MatchParent,
+														Height:     cryptomaterial.WrapContent,
+														Background: pg.Theme.Color.Gray4,
+														Border:     cryptomaterial.Border{Radius: cryptomaterial.Radius(8)},
+													}.Layout2(gtx, row)
+												}
+												return row(gtx)
 											}),
 											layout.Rigid(func(gtx C) D {
 												// No divider for last row
@@ -1431,8 +1460,11 @@ func (pg *TransactionsPage) HandleUserInteractions(gtx C) {
 
 	if clicked, selectedItem := pg.transactionList.ItemClicked(); clicked {
 		transactions := pg.scroll.FetchedData()
-		tx, wal := pg.txAndWallet(transactions[selectedItem])
-		pg.ParentNavigator().Display(NewTransactionDetailsPage(pg.Load, wal, tx))
+		if selectedItem >= 0 && selectedItem < len(transactions) {
+			tx, wal := pg.txAndWallet(transactions[selectedItem])
+			pg.lastViewedTxHash = tx.Hash
+			pg.ParentNavigator().Display(NewTransactionDetailsPage(pg.Load, wal, tx))
+		}
 	}
 
 	dropDownList := []*cryptomaterial.DropDown{pg.statusDropDown}

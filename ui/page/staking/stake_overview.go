@@ -59,6 +59,11 @@ type Page struct {
 	infoButton     cryptomaterial.IconButton
 	materialLoader material.LoaderStyle
 
+	// lastViewedTicketHash marks the ticket whose details card was opened
+	// most recently — the row keeps a subtle highlight after the card is
+	// closed (mirrors the Transactions page behavior).
+	lastViewedTicketHash string
+
 	ticketPrice string
 	// rewardRows holds one pre-formatted "12.34 VAR" / "1.50 SKA1" staking-
 	// reward line per visibility-allowed coin (VAR first), zeros included —
@@ -589,6 +594,7 @@ func (pg *Page) HandleUserInteractions(gtx C) {
 		// refetches from sync/notifications) — ignore a stale out-of-range index.
 		if selectedItem >= 0 && selectedItem < len(tickets) {
 			ticketTx := tickets[selectedItem].transaction
+			pg.lastViewedTicketHash = ticketTx.Hash
 			pg.ParentNavigator().Display(tpage.NewTransactionDetailsPage(pg.Load, pg.dcrWallet, ticketTx))
 
 			// Check if this ticket is fully registered with a VSP and process any
