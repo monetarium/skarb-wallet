@@ -549,6 +549,7 @@ const EN = `
 "scheduler" = "Scheduler"
 "schedulerRunning" = "Order Scheduler is running"
 "search" = "Search"
+"searchTxHint" = "Hash, address or amount"
 "secs" = "Secs"
 "security" = "Security"
 "securityTools" = "Security tools"

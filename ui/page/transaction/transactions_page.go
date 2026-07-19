@@ -177,6 +177,22 @@ type TransactionsPage struct {
 	fetchErrMu      sync.Mutex
 	pendingFetchErr error
 
+	// searchText mirrors the search editor's text for off-UI-thread readers.
+	// snapshotView runs on fetch/notification goroutines while the UI thread
+	// mutates the editor buffer every frame — reading Editor.Text() there is
+	// the §3 race. The UI thread stores here on every editor change; holds a
+	// string (empty until the first change).
+	searchText atomic.Value
+
+	// searchFetchPending/-Busy implement the single-worker search refresh:
+	// each keystroke marks pending and at most ONE goroutine drains it,
+	// re-fetching until the text stops changing. Coalesces a fast burst of
+	// keystrokes into few full-wallet scans and guarantees the LAST scan uses
+	// the final text — N racing goroutines could finish out of order and
+	// leave a stale query's rows on screen.
+	searchFetchPending atomic.Bool
+	searchFetchBusy    atomic.Bool
+
 	txCategoryTab *cryptomaterial.SegmentedControl
 
 	materialLoader material.LoaderStyle
@@ -201,7 +217,7 @@ func NewTransactionsPage(l *load.Load, wallet sharedW.Asset) *TransactionsPage {
 		isShowTitle:      true,
 	}
 
-	pg.searchEditor = l.Theme.SearchEditor(new(widget.Editor), values.String(values.StrSearch), l.Theme.Icons.SearchIcon)
+	pg.searchEditor = l.Theme.SearchEditor(new(widget.Editor), values.String(values.StrSearchTxHint), l.Theme.Icons.SearchIcon)
 	pg.searchEditor.Editor.SingleLine = true
 	pg.searchEditor.TextSize = pg.ConvertTextSize(l.Theme.TextSize)
 
@@ -356,7 +372,7 @@ func NewTransactionsPageWithType(l *load.Load, selectedTab int, wallet sharedW.A
 	}
 	pg.selectedTxCategoryTab = selectedTab
 	pg.txCategoryTab.SetSelectedSegment(txTabs[selectedTab])
-	pg.searchEditor = l.Theme.SearchEditor(new(widget.Editor), values.String(values.StrSearch), l.Theme.Icons.SearchIcon)
+	pg.searchEditor = l.Theme.SearchEditor(new(widget.Editor), values.String(values.StrSearchTxHint), l.Theme.Icons.SearchIcon)
 	pg.searchEditor.Editor.SingleLine = true
 	pg.searchEditor.TextSize = pg.ConvertTextSize(l.Theme.TextSize)
 	// init the wallet selector if no wallet was pre-selected
@@ -533,7 +549,10 @@ func (pg *TransactionsPage) snapshotView() txView {
 		categoryTab:    pg.selectedTxCategoryTab,
 		orderNewest:    pg.orderDropDown.Selected() != values.String(values.StrOldest),
 		coinType:       pg.selectedCoinType(),
-		searchKey:      pg.searchEditor.Editor.Text(),
+		// NOT pg.searchEditor.Editor.Text(): snapshotView runs on fetch
+		// goroutines and the editor buffer is UI-thread state (§3). The UI
+		// thread mirrors the text into searchText on every change.
+		searchKey: pg.searchKeyText(),
 	}
 	if pg.selectedWallet == nil {
 		v.assetWallets = append([]sharedW.Asset(nil), pg.assetWallets...)
@@ -706,16 +725,18 @@ func (pg *TransactionsPage) loadAllTransactions(v txView) ([]*multiWalletTx, err
 	}
 	dcr.ApplySplitAmounts(all)
 
-	// A hash search bypasses the coarse superset (the DB returns only the
-	// matched tx), so a searched split has no ticket rows to price against
-	// and would show its fee. Re-derive from the ticket index directly.
+	// Under search, price EVERY split up front — batched, one ticket fetch per
+	// wallet — BEFORE keepForTab's search gate reads amounts. Two traps this
+	// shape avoids:
+	//   * the default no-split view fetches TxFilterAll, which omits the
+	//     ticket rows dcr.ApplySplitAmounts needs — a split still holds its
+	//     fee here, so an amount search for the DISPLAYED value would drop it
+	//     at the gate (chicken-and-egg: the gate reads the unpriced amount);
+	//   * gating the pricing on the per-row search match instead re-paged
+	//     tickets per split per keystroke — "t"/"s" is a substring of nearly
+	//     every address, so short queries matched almost all rows.
 	if v.searchKey != "" {
-		for _, mw := range raw {
-			if mw.Transaction != nil {
-				_, wal := pg.txAndWallet(mw)
-				ensureSplitAmount(wal, mw.Transaction)
-			}
-		}
+		pg.priceAllSplits(raw)
 	}
 
 	raw = pg.filterByCoinType(v, raw)
@@ -739,10 +760,73 @@ func (pg *TransactionsPage) loadAllTransactions(v txView) ([]*multiWalletTx, err
 	return raw, nil
 }
 
+// priceAllSplits prices every split in raw (Amount = the outputs its ticket
+// purchases consumed) with ONE ticket fetch per wallet, for views whose coarse
+// superset lacks the ticket rows dcr.ApplySplitAmounts needs. Wallets whose
+// rows already include a ticket purchase are skipped — their superset came
+// from q.True() (all rows), so the ApplySplitAmounts pass over the raw set
+// has already priced them. Tickets are paged newest-first down to the oldest
+// split's timestamp (a ticket spending a split is never older than it).
+func (pg *TransactionsPage) priceAllSplits(raw []*multiWalletTx) {
+	type walletSplits struct {
+		wal        sharedW.Asset
+		splits     []*sharedW.Transaction
+		oldest     int64
+		hasTickets bool
+	}
+	byWallet := make(map[int]*walletSplits)
+	for _, mw := range raw {
+		tx := mw.Transaction
+		if tx == nil {
+			continue
+		}
+		isTicket := tx.Type == txhelper.TxTypeTicketPurchase
+		if !isTicket && !dcr.IsSplitTx(tx) {
+			continue
+		}
+		_, wal := pg.txAndWallet(mw)
+		if wal == nil {
+			continue
+		}
+		ws := byWallet[wal.GetWalletID()]
+		if ws == nil {
+			ws = &walletSplits{wal: wal, oldest: tx.Timestamp}
+			byWallet[wal.GetWalletID()] = ws
+		}
+		if isTicket {
+			ws.hasTickets = true
+			continue
+		}
+		ws.splits = append(ws.splits, tx)
+		if tx.Timestamp < ws.oldest {
+			ws.oldest = tx.Timestamp
+		}
+	}
+
+	const ticketPage = int32(200)
+	for _, ws := range byWallet {
+		if ws.hasTickets || len(ws.splits) == 0 {
+			continue
+		}
+		supplement := append([]*sharedW.Transaction(nil), ws.splits...)
+		for page := int32(0); page < 10; page++ {
+			tickets, err := ws.wal.GetTransactionsRaw(page*ticketPage, ticketPage, utils.TxFilterTickets, true, "")
+			if err != nil || len(tickets) == 0 {
+				break
+			}
+			supplement = append(supplement, tickets...)
+			if tickets[len(tickets)-1].Timestamp < ws.oldest || int32(len(tickets)) < ticketPage {
+				break
+			}
+		}
+		dcr.ApplySplitAmounts(supplement)
+	}
+}
+
 // ensureSplitAmount prices a single split transaction's Amount (the sum of
 // outputs its ticket purchases consumed) when the tx arrives from a path that
-// carries no ticket rows alongside it — a hash search, a direct details open,
-// or a single-tx refresh. It pages the newest tickets down to the split's
+// carries no ticket rows alongside it — a direct details open or a single-tx
+// refresh. It pages the newest tickets down to the split's
 // timestamp (a spender is never older than its split) and runs
 // dcr.ApplySplitAmounts over {split + tickets}. No-op for non-splits; a split
 // whose tickets can't be found keeps its stored Amount (the fee).
@@ -830,6 +914,14 @@ func (pg *TransactionsPage) reclassifyByTab(v txView, in []*multiWalletTx) []*mu
 // (votes + SF).
 func (pg *TransactionsPage) keepForTab(v txView, mw *multiWalletTx) bool {
 	tx := mw.Transaction
+	// Search narrows every tab first: a row must match the query (hash prefix
+	// / address / amount) before its tab membership matters. An empty query
+	// makes TxMatchesSearch return true, so this is a no-op for the normal
+	// view. Tab-scoped by design — a searched vote still shows only on the
+	// Reward tab, mirroring the pre-existing behaviour.
+	if !dcr.TxMatchesSearch(tx, v.searchKey) {
+		return false
+	}
 	switch v.categoryTab {
 	case 0: // Regular
 		switch v.txFilter {
@@ -843,9 +935,10 @@ func (pg *TransactionsPage) keepForTab(v txView, mw *multiWalletTx) bool {
 			return (tx.Type == txhelper.TxTypeRegular || tx.Type == txhelper.TxTypeMixed) &&
 				!tx.IsStakeFee
 		case utils.TxFilterRegularNoSplit: // "All without Split" — the default view
-			// An explicit search must still find a split by its hash even
-			// under the no-split default — hiding an exact match the user
-			// asked for reads as "transaction lost".
+			// An explicit search must still find a split it matches (by hash
+			// prefix, address or amount — TxMatchesSearch above already
+			// passed) even under the no-split default — hiding a match the
+			// user asked for reads as "transaction lost".
 			if v.searchKey != "" {
 				return (tx.Type == txhelper.TxTypeRegular || tx.Type == txhelper.TxTypeMixed) &&
 					!tx.IsStakeFee
@@ -1006,7 +1099,15 @@ func (pg *TransactionsPage) loadTransactions(v txView, wal sharedW.Asset, offset
 	}
 	// Fetch a DB-supported coarse superset; reclassifyByTab refines it (the
 	// reclassification filters aren't understood by prepareTxQuery).
-	walletTxs, err := wal.GetTransactionsRaw(offset, pageSize, coarseFetchFilter(txFilter), v.orderNewest, v.searchKey)
+	//
+	// Deliberately NOT passing v.searchKey to the DB: its only search mode is
+	// an exact, full-hash q.Eq that returns a single row and ignores the
+	// filter/paging — which collapses this full scan and can never match a
+	// hash PREFIX, an address, or an amount. Search is applied instead as a
+	// post-filter in keepForTab (dcr.TxMatchesSearch) over the same complete
+	// scan the unsearched view already performs, so all three match dimensions
+	// work and the cost is unchanged.
+	walletTxs, err := wal.GetTransactionsRaw(offset, pageSize, coarseFetchFilter(txFilter), v.orderNewest, "")
 	if err != nil {
 		err = fmt.Errorf("error loading transactions: %v", err)
 	}
@@ -1386,15 +1487,57 @@ func (pg *TransactionsPage) HandleUserInteractions(gtx C) {
 	}
 
 	if pg.orderDropDown.Changed(gtx) {
-		pg.scroll.FetchScrollData(false, pg.ParentWindow(), true)
+		// Goroutine like the other dropdown handlers: fetchTransactions walks
+		// the whole wallet, which must never run inside the frame handler.
+		go pg.scroll.FetchScrollData(false, pg.ParentWindow(), true)
 	}
 
 	// When focus on search editor
 	if gtx.Source.Focused(pg.searchEditor.Editor) {
 		if pg.searchEditor.Changed() {
-			pg.scroll.FetchScrollData(false, pg.ParentWindow(), true)
+			// Mirror the text for goroutine readers (snapshotView), then hand
+			// the refetch to the single search worker. Every search fetch is a
+			// guaranteed cache miss (searchKey is part of the cache key) and a
+			// full wallet scan — running it inline here froze the frame, and
+			// one goroutine per keystroke could finish out of order.
+			pg.searchText.Store(pg.searchEditor.Editor.Text())
+			pg.kickSearchFetch()
 		}
 	}
+}
+
+// searchKeyText returns the UI thread's latest mirror of the search editor
+// text. Safe on any goroutine.
+func (pg *TransactionsPage) searchKeyText() string {
+	if s, ok := pg.searchText.Load().(string); ok {
+		return s
+	}
+	return ""
+}
+
+// kickSearchFetch schedules a search-driven list refresh on a SINGLE worker
+// goroutine. The worker drains searchFetchPending: it refetches until no new
+// keystroke arrived mid-scan, so a typing burst coalesces into few scans and
+// the last scan always snapshots the final text. The busy/pending re-check
+// after clearing busy closes the classic lost-wakeup window (a keystroke
+// landing between the drain loop's last miss and Store(false)).
+func (pg *TransactionsPage) kickSearchFetch() {
+	pg.searchFetchPending.Store(true)
+	if !pg.searchFetchBusy.CompareAndSwap(false, true) {
+		return // the running worker will observe pending and loop again
+	}
+	window := pg.ParentWindow()
+	go func() {
+		for {
+			for pg.searchFetchPending.CompareAndSwap(true, false) {
+				pg.scroll.FetchScrollData(false, window, true)
+			}
+			pg.searchFetchBusy.Store(false)
+			if !pg.searchFetchPending.Load() || !pg.searchFetchBusy.CompareAndSwap(false, true) {
+				return
+			}
+		}
+	}()
 }
 
 func exportTxs(assets []sharedW.Asset, fileName string) error {
