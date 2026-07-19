@@ -7,6 +7,7 @@ import (
 
 	"github.com/monetarium/skarb-wallet/libwallet/assets/dcr"
 	sharedW "github.com/monetarium/skarb-wallet/libwallet/assets/wallet"
+	"github.com/monetarium/skarb-wallet/ui/cryptomaterial"
 	"github.com/monetarium/skarb-wallet/ui/page/components"
 	"github.com/monetarium/skarb-wallet/ui/values"
 )
@@ -155,7 +156,20 @@ func (pg *Page) ticketListLayout(gtx C) D {
 										return layout.Inset{
 											Bottom: values.MarginPadding5,
 										}.Layout(gtx, func(gtx C) D {
-											return components.LayoutTransactionRow(gtx, pg.Load, pg.dcrWallet, ticket.transaction, true)
+											row := func(gtx C) D {
+												return components.LayoutTransactionRow(gtx, pg.Load, pg.dcrWallet, ticket.transaction, true)
+											}
+											// Keep the most recently viewed ticket findable
+											// after its details card is closed.
+											if ticket.transaction.Hash != "" && ticket.transaction.Hash == pg.lastViewedTicketHash {
+												return cryptomaterial.LinearLayout{
+													Width:      cryptomaterial.MatchParent,
+													Height:     cryptomaterial.WrapContent,
+													Background: pg.Theme.Color.Gray4,
+													Border:     cryptomaterial.Border{Radius: cryptomaterial.Radius(8)},
+												}.Layout2(gtx, row)
+											}
+											return row(gtx)
 										})
 									}),
 								)

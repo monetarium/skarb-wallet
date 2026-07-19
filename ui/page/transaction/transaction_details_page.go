@@ -793,21 +793,17 @@ func (pg *TxDetailsPage) txnTypeAndID(gtx C) D {
 			return D{}
 		}),
 		layout.Rigid(func(gtx C) D {
-			// hide this section for sent, received and mixed transaction
-			if pg.transaction.Type == txhelper.TxTypeRegular &&
-				pg.transaction.Direction == txhelper.TxDirectionSent ||
-				pg.transaction.Direction == txhelper.TxDirectionReceived ||
-				pg.transaction.Direction == txhelper.TxDirectionTransferred ||
-				pg.transaction.Type == txhelper.TxTypeMixed {
+			// Ticket price — for EVERY ticket status, right under the
+			// Account row (the To/From rows above are regular-tx only).
+			// The old direction-based condition hid it for tickets (their
+			// direction is Transferred) while leaking a mislabelled row
+			// for some non-ticket types.
+			if pg.transaction.Type != txhelper.TxTypeTicketPurchase {
 				return D{}
 			}
-
-			amount := pg.wallet.ToAmount(pg.transaction.Amount).String()
-			if pg.transaction.Type == txhelper.TxTypeMixed {
-				amount = pg.wallet.ToAmount(pg.transaction.MixDenomination).String()
-			} else if pg.transaction.Type == txhelper.TxTypeRegular && pg.transaction.Direction == txhelper.TxDirectionSent {
-				amount = "-" + amount
-			}
+			// tx.Amount of an SStx is the stake-submission value — the
+			// price the ticket was bought at (VAR-only by consensus).
+			amount := dcr.FormatTxAmountBig("", pg.transaction.Amount, pg.transaction.CoinType)
 			return pg.keyValue(gtx, values.String(values.StrTicketPrice), pg.Theme.Label(values.TextSize14, amount).Layout)
 		}),
 		layout.Rigid(func(gtx C) D {
@@ -856,11 +852,22 @@ func (pg *TxDetailsPage) txnTypeAndID(gtx C) D {
 				return D{}
 			}
 
+			// Purchase time first, for EVERY ticket status — the voted /
+			// revoked / expired branches used to REPLACE it with their own
+			// dates, leaving no purchase date on those tickets at all.
+			rows := []layout.FlexChild{
+				layout.Rigid(func(gtx C) D {
+					return pg.keyValue(gtx, values.String(values.StrPurchasedOn), pg.Theme.Label(values.TextSize14, timeString(pg.transaction.Timestamp)).Layout)
+				}),
+			}
+
 			if pg.ticketSpender != nil { // voted or revoked
 				if pg.ticketSpender.Type == txhelper.TxTypeVote {
-					return pg.keyValue(gtx, values.String(values.StrVotedOn), pg.Theme.Label(values.TextSize14, timeString(pg.ticketSpender.Timestamp)).Layout)
+					rows = append(rows, layout.Rigid(func(gtx C) D {
+						return pg.keyValue(gtx, values.String(values.StrVotedOn), pg.Theme.Label(values.TextSize14, timeString(pg.ticketSpender.Timestamp)).Layout)
+					}))
 				} else if pg.ticketSpender.Type == txhelper.TxTypeRevocation {
-					return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
+					rows = append(rows,
 						layout.Rigid(func(gtx C) D {
 							return pg.keyValue(gtx, values.String(values.StrMissedOn), pg.Theme.Label(values.TextSize14, timeString(pg.ticketSpender.Timestamp)).Layout)
 						}),
@@ -869,15 +876,24 @@ func (pg *TxDetailsPage) txnTypeAndID(gtx C) D {
 						}),
 					)
 				}
+			} else if pg.wallet.TxMatchesFilter(pg.transaction, libutils.TxFilterExpired) {
+				// Estimate the moment the ticket's lifetime ran out:
+				// purchase time + (maturity+expiry) blocks at the target
+				// block time. The old code reused the purchase timestamp
+				// here, which now — with Purchased On always shown above —
+				// rendered two adjacent rows with identical dates claiming
+				// different events.
+				expiredAt := pg.transaction.Timestamp
+				if dcrImpl, ok := pg.wallet.(*dcr.Asset); ok {
+					lifetimeBlocks := float64(dcrImpl.TicketMaturity() + dcrImpl.TicketExpiry())
+					expiredAt += int64(lifetimeBlocks * pg.wallet.TargetTimePerBlockMinutes() * 60)
+				}
+				rows = append(rows, layout.Rigid(func(gtx C) D {
+					return pg.keyValue(gtx, values.String(values.StrExpiredOn), pg.Theme.Label(values.TextSize14, timeString(expiredAt)).Layout)
+				}))
 			}
 
-			if pg.wallet.TxMatchesFilter(pg.transaction, libutils.TxFilterExpired) {
-				return pg.keyValue(gtx, values.String(values.StrExpiredOn), pg.Theme.Label(values.TextSize14, timeString(pg.transaction.Timestamp)).Layout)
-			}
-
-			// TODO vote transaction progress bar (V2 UI missing)
-			// missed tickets currently not implemented on libwallet
-			return pg.keyValue(gtx, values.String(values.StrPurchasedOn), pg.Theme.Label(values.TextSize14, timeString(pg.transaction.Timestamp)).Layout)
+			return layout.Flex{Axis: layout.Vertical}.Layout(gtx, rows...)
 		}),
 		layout.Rigid(func(gtx C) D {
 			stat := func(gtx C) D {
@@ -936,6 +952,34 @@ func (pg *TxDetailsPage) txnTypeAndID(gtx C) D {
 			// reward itself is already the headline Amount, so the row is noise.
 			if pg.transaction.IsStakeFee {
 				return D{}
+			}
+			// A vote (StakerCoinbase) pays no fee either — its wire
+			// inputs−outputs is the negated subsidy, not a cost.
+			if pg.transaction.Type == txhelper.TxTypeVote {
+				return D{}
+			}
+			if pg.transaction.Type == txhelper.TxTypeCoinBase {
+				// The coinbase's wire "fee" is the NEGATED sum of the VAR tx
+				// fees the block collected. Instead of a minus-signed
+				// "Transaction Fee" row, break the headline amount down into
+				// its two sources: the pure block subsidy (Miner Coinbase)
+				// and the collected fees (Miner Fee).
+				minerFee := transaction.Fee
+				if minerFee < 0 {
+					minerFee = -minerFee
+				}
+				minerCoinbase := transaction.Amount - minerFee
+				if minerCoinbase < 0 {
+					minerCoinbase = 0
+				}
+				return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
+					layout.Rigid(func(gtx C) D {
+						return pg.keyValue(gtx, values.String(values.StrMinerCoinbase), pg.Theme.Label(values.TextSize14, dcr.FormatTxAmountBig("", minerCoinbase, transaction.CoinType)).Layout)
+					}),
+					layout.Rigid(func(gtx C) D {
+						return pg.keyValue(gtx, values.String(values.StrMinerFee), pg.Theme.Label(values.TextSize14, dcr.FormatTxAmountBig("", minerFee, transaction.CoinType)).Layout)
+					}),
+				)
 			}
 			if pg.wallet.GetAssetType() == libutils.BTCWalletAsset && transaction.Direction == txhelper.TxDirectionReceived {
 				return D{}

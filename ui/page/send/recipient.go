@@ -50,7 +50,16 @@ func newRecipient(l *load.Load, selectedWallet sharedW.Asset, pageParam getPageF
 	rp.amount = newSendAmount(l.Theme, assetType)
 	rp.amount.amountEditor.TextSize = values.TextSizeTransform(l.IsMobileView(), values.TextSize16)
 	rp.sendDestination = newSendDestination(l, assetType)
-	rp.sendDestination.reload = navigator.Reload
+	// Lazy closure, NOT `navigator.Reload`: the page constructs its first
+	// recipient BEFORE it is attached to a navigator, so `navigator` is a
+	// nil interface here — evaluating the method value panicked the moment
+	// the Send tab was opened. rp.navigator is re-bound to the live
+	// navigator in OnNavigatedTo.
+	rp.sendDestination.reload = func() {
+		if rp.navigator != nil {
+			rp.navigator.Reload()
+		}
+	}
 
 	rp.description = rp.Theme.Editor(new(widget.Editor), values.String(values.StrNote))
 	rp.description.Editor.SingleLine = false

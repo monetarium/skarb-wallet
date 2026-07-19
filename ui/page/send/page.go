@@ -519,6 +519,18 @@ func (pg *Page) UpdateSelectedUTXOs(utxos []*sharedW.UnspentOutput) {
 // Part of the load.Page interface.
 func (pg *Page) OnNavigatedTo() {
 	pg.RestyleWidgets()
+
+	// Recipients created in the page constructor captured a nil
+	// ParentWindow() (the page is only attached to its navigator after
+	// construction). Re-bind them to the live navigator FIRST — before any
+	// early return below — so the delete-recipient modal and the QR-scan
+	// reload have a real window to talk to.
+	for _, rp := range pg.recipients {
+		if rp.navigator == nil {
+			rp.navigator = pg.ParentWindow()
+		}
+	}
+
 	if pg.selectedWallet == nil {
 		return
 	}

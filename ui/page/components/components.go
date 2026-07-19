@@ -482,7 +482,10 @@ func LayoutTransactionRow(gtx C, l *load.Load, wal sharedW.Asset, tx *sharedW.Tr
 													remaining = 0
 												}
 												days := int(math.Ceil(float64(remaining) * wal.TargetTimePerBlockMinutes() / (24 * 60)))
-												lbl := l.Theme.Label(l.ConvertTextSize(values.TextSize16), fmt.Sprintf("%dd to %s", days, values.String(values.StrRevoke)))
+												// "to Expire", not "to Revoke": what runs out at
+												// maturity+expiry is the ticket's LIFETIME —
+												// revocation is merely the cleanup that follows.
+												lbl := l.Theme.Label(l.ConvertTextSize(values.TextSize16), values.StringF(values.StrDaysToExpire, days))
 												lbl.Color = grayText
 												return lbl.Layout(gtx)
 											}
