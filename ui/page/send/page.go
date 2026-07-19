@@ -541,6 +541,15 @@ func (pg *Page) OnNavigatedTo() {
 	}
 
 	pg.walletDropdown.ListenForTxNotifications(pg.ParentWindow()) // listener is stopped in OnNavigatedFrom()
+	// The ACCOUNT dropdown needs its own listener (distinct listener ID —
+	// see AccountSelectorListenerID): its per-account Balance values are
+	// snapshots taken at Setup time, and without a refresh on tx/block
+	// events the form kept validating against pre-broadcast balances —
+	// letting an over-balance amount through with no error (stale-low) or
+	// firing false insufficient-funds (stale-high).
+	if pg.accountDropdown != nil {
+		pg.accountDropdown.ListenForTxNotifications(pg.ParentWindow())
+	}
 
 	// Auto-default the asset dropdown to a coin type that has a spendable
 	// balance on the chosen source account. Without this, a wallet holding
@@ -857,6 +866,18 @@ func (pg *Page) addSendDestination() (sharedW.AssetAmount, sharedW.AssetAmount, 
 	sourceAccount := pg.accountDropdown.SelectedAccount()
 	selectedUTXOs := pg.manualSelectionFor(sourceAccount)
 
+	// Re-read the source account LIVE. The dropdown's Account (and its
+	// Balance) is a snapshot from the moment the dropdown was built; after a
+	// broadcast or an incoming tx it goes stale, and every figure derived
+	// from it lies in both directions: a stale-low spendable let the user
+	// type an amount "over" the displayed balance with no error while
+	// "Баланс після відправлення" went negative, and a stale-high one
+	// produced false insufficient-funds. The wallet-level input selection
+	// always reads the live store, so the form must too.
+	if fresh, err := pg.selectedWallet.GetAccount(sourceAccount.Number); err == nil && fresh != nil && fresh.Balance != nil {
+		sourceAccount = fresh
+	}
+
 	// Note: we no longer call EstimateFeeAndSize up here. The legacy code
 	// did it BEFORE adding the destinations to TxAuthoredInfo, which made
 	// the wallet build an empty tx for the estimate; that worked for VAR
@@ -875,31 +896,43 @@ func (pg *Page) addSendDestination() (sharedW.AssetAmount, sharedW.AssetAmount, 
 	// clamping, and to detect the case where the user has > int64 atoms
 	// available and SendMax would otherwise silently send only ~9.22 SKA.
 	var spendableBig *big.Int
+	// spendableUnknown marks the case where the active coin is SKA and its
+	// live per-coin balance could not be read (a walletdb error — rare, but
+	// GetCoinBalance can fail). spendableAmount then still holds the STALE
+	// VAR-scale figure from sourceAccount.Balance above (VAR is 1e8
+	// atoms/coin, SKA is 1e18) — comparing it against a SKA send amount
+	// below would compare across scales and could false-block a perfectly
+	// fundable send. The manual-UTXO-selection branch always supplies its
+	// own trustworthy total and clears this flag when it runs.
+	spendableUnknown := false
 	if pg.coinTypeDropdown != nil && pg.coinTypeDropdown.Selected().IsSKA() {
-		if dcrAsset, ok := pg.selectedWallet.(*dcr.Asset); ok {
-			if bal, err := dcrAsset.GetCoinBalance(sourceAccount.Number, pg.coinTypeDropdown.Selected()); err == nil {
-				// SKAAmount is a value type; BigInt() returns the
-				// underlying *big.Int (never nil for a real balance).
-				// Fall back to the int64-clamped Spendable if the
-				// SKA accessor somehow yields a nil internal — shouldn't
-				// happen for active balances but defensive.
-				spendableBig = bal.SKASpendable.BigInt()
-				if spendableBig == nil {
-					spendableBig = big.NewInt(int64(bal.Spendable))
-				}
-				// Mirror the big-int spendable into the int64 channel so
-				// VAR-style arithmetic below behaves sanely for SKA
-				// balances that fit. For balances that overflow int64
-				// we clamp here, but the SendMax path below detects this
-				// and refuses to silently truncate the request — the
-				// authoring path is still int64-capped in phase 1
-				// (see MakeCoinTypeTxOutput).
-				if spendableBig.IsInt64() {
-					spendableAmount = spendableBig.Int64()
-				} else {
-					spendableAmount = int64(bal.Spendable) // already clamped to MaxInt64 upstream
-				}
+		dcrAsset, ok := pg.selectedWallet.(*dcr.Asset)
+		if !ok {
+			spendableUnknown = true
+		} else if bal, err := dcrAsset.GetCoinBalance(sourceAccount.Number, pg.coinTypeDropdown.Selected()); err == nil {
+			// SKAAmount is a value type; BigInt() returns the
+			// underlying *big.Int (never nil for a real balance).
+			// Fall back to the int64-clamped Spendable if the
+			// SKA accessor somehow yields a nil internal — shouldn't
+			// happen for active balances but defensive.
+			spendableBig = bal.SKASpendable.BigInt()
+			if spendableBig == nil {
+				spendableBig = big.NewInt(int64(bal.Spendable))
 			}
+			// Mirror the big-int spendable into the int64 channel so
+			// VAR-style arithmetic below behaves sanely for SKA
+			// balances that fit. For balances that overflow int64
+			// we clamp here, but the SendMax path below detects this
+			// and refuses to silently truncate the request — the
+			// authoring path is still int64-capped in phase 1
+			// (see MakeCoinTypeTxOutput).
+			if spendableBig.IsInt64() {
+				spendableAmount = spendableBig.Int64()
+			} else {
+				spendableAmount = int64(bal.Spendable) // already clamped to MaxInt64 upstream
+			}
+		} else {
+			spendableUnknown = true
 		}
 	}
 	if len(selectedUTXOs) > 0 {
@@ -917,6 +950,7 @@ func (pg *Page) addSendDestination() (sharedW.AssetAmount, sharedW.AssetAmount, 
 		} else {
 			spendableAmount = int64(^uint64(0) >> 1) // MaxInt64 placeholder; big channel carries truth
 		}
+		spendableUnknown = false
 	}
 
 	wal := pg.selectedWallet
@@ -975,6 +1009,33 @@ func (pg *Page) addSendDestination() (sharedW.AssetAmount, sharedW.AssetAmount, 
 		totalCost += amountAtom
 	}
 
+	// availableBig is the LIVE spendable for the active coin (or the manual
+	// UTXO selection's total when one is set): the big channel for SKA, the
+	// int64 spendable lifted for VAR. Drives the fail-fast check below and
+	// the fee-shortfall classification after the estimate.
+	availableBig := spendableBig
+	if availableBig == nil {
+		availableBig = big.NewInt(spendableAmount)
+	}
+
+	// Fail fast when the entered amounts ALONE exceed the spendable balance
+	// — before asking the wallet for an estimate. Without this the only
+	// over-spend signal was the wallet's input selection, which (a) phrased
+	// it as a generic insufficient-funds with no hint, and (b) read the live
+	// store while the form read a stale snapshot, so the two could disagree
+	// and let an over-balance amount through with no error at all (the
+	// "negative Баланс після відправлення" report). SendMax recipients
+	// contribute 0 to totalSendAmountBig, so a pure Max send never trips this.
+	// Skipped when spendableUnknown: availableBig would be the stale
+	// VAR-scale fallback there, which would false-fire against a SKA
+	// amount — better to let the real (live) estimate below be the sole
+	// judge, same as before this pre-check existed.
+	if !spendableUnknown && totalSendAmountBig.Sign() > 0 && totalSendAmountBig.Cmp(availableBig) > 0 {
+		err := fmt.Errorf("%s", libUtil.ErrInsufficientBalance)
+		pg.setRecipientsAmountErr(err)
+		return nil, nil, 0, err
+	}
+
 	// Now that destinations are in place, ask the wallet for a real
 	// fee+size estimate against the actual outputs. For the SKA path the
 	// wallet picks UTXOs of the matching coin type via
@@ -987,6 +1048,19 @@ func (pg *Page) addSendDestination() (sharedW.AssetAmount, sharedW.AssetAmount, 
 		// wallet's input selection return InsufficientBalance here, and the
 		// form would otherwise just blank ("- SKA1") with no diagnostic.
 		log.Errorf("addSendDestination: EstimateFeeAndSize failed: %v", feeErr)
+		// The fail-fast above guarantees the amounts fit the balance, so an
+		// insufficient-balance verdict HERE means it's the fee that doesn't:
+		// the classic "typed the full balance by hand" (or re-typed the
+		// number Max produced — a change-bearing tx pays slightly more fee
+		// than Max's sweep). Say that, with the way out, instead of the
+		// bare "Insufficient funds".
+		if feeErr.Error() == libUtil.ErrInsufficientBalance {
+			for _, recipient := range pg.recipients {
+				recipient.amountValidationError(values.String(values.StrInsufficientFundForFee))
+			}
+			pg.clearEstimates()
+			return nil, nil, 0, feeErr
+		}
 		pg.setRecipientsAmountErr(feeErr)
 		return nil, nil, 0, feeErr
 	}
@@ -1631,6 +1705,9 @@ func (pg *Page) HandleKeyPress(_ *key.Event) {}
 // Part of the load.Page interface.
 func (pg *Page) OnNavigatedFrom() {
 	pg.walletDropdown.StopTxNtfnListener()
+	if pg.accountDropdown != nil {
+		pg.accountDropdown.StopTxNtfnListener()
+	}
 	for _, rc := range pg.recipients {
 		rc.sendDestination.stopQRScan()
 	}

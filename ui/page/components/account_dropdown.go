@@ -274,9 +274,16 @@ func (d *AccountDropdown) SetChangedCallback(callback func(*sharedW.Account)) *A
 
 func (d *AccountDropdown) Handle(gtx C) {
 	// Drain a deferred tx/block-notification refresh on the UI thread.
+	// Re-run the full Setup rather than just firing the callback: every
+	// Account (and its Balance) in allAccounts is a snapshot from the last
+	// build, so a bare callback would hand consumers the same stale
+	// pre-broadcast figures the refresh exists to replace. Setup re-reads
+	// GetAccountsRaw (fresh balances + row labels), re-applies the current
+	// selection by account number, and re-fires the changed callback with
+	// the FRESH account — same UI-thread build path as the initial Setup.
 	if d.pendingRefresh.CompareAndSwap(true, false) {
-		if d.accountChangedCallback != nil && d.selectedAccount != nil {
-			d.accountChangedCallback(d.selectedAccount)
+		if d.selectedWallet != nil {
+			d.Setup(d.selectedWallet, d.selectedAccount)
 		}
 	}
 	if d.dropdown.Changed(gtx) {

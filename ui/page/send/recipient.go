@@ -129,7 +129,21 @@ func (rp *recipient) isAccountValid(sourceAccount, account *sharedW.Account) boo
 func (rp *recipient) initializeAccountSelectors(sourceAccount *sharedW.Account) {
 	rp.selectedSourceAccount = sourceAccount
 	rp.sendDestination.sourceAccount = sourceAccount
-	_ = rp.sendDestination.accountDropdown.Setup(rp.sendDestination.walletDropdown.SelectedWallet())
+	// Preserve whatever destination account the user already picked (for a
+	// send-to-own-wallet recipient). This runs on every wallet/account
+	// notification refresh, not just recipient creation — the source
+	// account dropdown's own tx/block-notification handling cascades here
+	// (see AccountDropdown.Handle's re-Setup and the wallet dropdown's
+	// changed-callback, both call initAccountsSelectorForRecipients).
+	// Setup with NO account arg falls back to "select the first valid
+	// account", which silently redirected an intra-wallet send to a
+	// different account than the one the user chose the moment any new
+	// tx/block notification arrived — passing the dropdown's own current
+	// selection re-matches it by account number instead of resetting it.
+	_ = rp.sendDestination.accountDropdown.Setup(
+		rp.sendDestination.walletDropdown.SelectedWallet(),
+		rp.sendDestination.accountDropdown.SelectedAccount(),
+	)
 }
 
 func (rp *recipient) isShowSendToWallet() bool {

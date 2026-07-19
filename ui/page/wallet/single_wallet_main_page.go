@@ -26,6 +26,7 @@ import (
 	"github.com/monetarium/skarb-wallet/ui/modal"
 	"github.com/monetarium/skarb-wallet/ui/page/accounts"
 	"github.com/monetarium/skarb-wallet/ui/page/components"
+	"github.com/monetarium/skarb-wallet/ui/page/governance"
 	"github.com/monetarium/skarb-wallet/ui/page/info"
 	"github.com/monetarium/skarb-wallet/ui/page/receive"
 	"github.com/monetarium/skarb-wallet/ui/page/seedbackup"
@@ -53,6 +54,7 @@ var PageNavigationMap = map[string]string{
 	values.StrReceive:      receive.ReceivePageID,
 	values.StrTransactions: transaction.TransactionsPageID,
 	values.StrStaking:      staking.OverviewPageID,
+	values.StrGovernance:   governance.GovernancePageID,
 	values.StrSettings:     WalletSettingsPageID,
 }
 
@@ -271,14 +273,15 @@ func (swmp *SingleWalletMasterPage) initTabOptions() {
 		commonTabs = append(commonTabs[:1], append(sendTab, commonTabs[1:]...)...)
 	}
 
-	// Staking tab for DCR wallets that can sign (not watch-only). Inserted just
-	// before 'Accounts', mirroring Cryptopower's tab order. CoinShuffle++ mixing
-	// (StakeShuffle) stays out — only PoS staking is restored.
+	// Staking + Governance tabs for DCR wallets that can sign (not
+	// watch-only). Inserted just before 'Accounts', mirroring Cryptopower's
+	// tab order. CoinShuffle++ mixing (StakeShuffle) and Politeia stay out —
+	// only PoS staking and consensus-agenda voting are restored.
 	if swmp.selectedWallet.GetAssetType() == libutils.DCRWalletAsset && !swmp.selectedWallet.IsWatchingOnlyWallet() {
-		withStaking := make([]string, 0, len(commonTabs)+1)
+		withStaking := make([]string, 0, len(commonTabs)+2)
 		for _, t := range commonTabs {
 			if t == values.StrAccounts {
-				withStaking = append(withStaking, values.StrStaking)
+				withStaking = append(withStaking, values.StrStaking, values.StrGovernance)
 			}
 			withStaking = append(withStaking, t)
 		}
@@ -529,6 +532,10 @@ func (swmp *SingleWalletMasterPage) navigateToSelectedTab() {
 	case values.StrStaking:
 		if dcrW, ok := swmp.selectedWallet.(*dcr.Asset); ok {
 			pg = staking.NewStakingPage(swmp.Load, dcrW)
+		}
+	case values.StrGovernance:
+		if dcrW, ok := swmp.selectedWallet.(*dcr.Asset); ok {
+			pg = governance.NewGovernancePage(swmp.Load, dcrW)
 		}
 	case values.StrAccounts:
 		pg = accounts.NewAccountPage(swmp.Load, swmp.selectedWallet)

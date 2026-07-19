@@ -80,6 +80,7 @@ const UK = `
 "invalidAmount" = "Некоректна сума"
 "invalidAddress" = "Некоректна адреса"
 "insufficientFund" = "Недостатньо коштів"
+"insufficientFundForFee" = "Не вистачає на мережеву комісію — натисніть Max, щоб надіслати весь баланс, або увімкніть списання комісії з отримувача"
 
 // Receive page
 "yourAddress" = "Ваша адреса"
@@ -821,6 +822,16 @@ const UK = `
 // світити англійську, поки код не вичищено остаточно.
 "staking" = "Стейкінг"
 "governance" = "Управління"
+"consensusChange" = "Зміни консенсусу"
+"noAgendaYet" = "Наразі немає голосувань"
+"upcoming" = "Очікується"
+"inprogress" = "Триває"
+"finished" = "Завершено"
+"votingPreference" = "Вибір голосу:"
+"voteUpdated" = "Вибір голосу збережено"
+"voteVersion" = "Версія голосування"
+"forcedChoice" = "Примусовий вибір"
+"abstain" = "Утриматися"
 "proposals" = "Пропозиції"
 "exchange" = "Обмін"
 "dex" = "DEX"

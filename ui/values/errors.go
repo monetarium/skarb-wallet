@@ -42,6 +42,17 @@ func TranslateErr(errStr string) string {
 		if strings.Contains(errStr, "no spendable VAR") {
 			return String(StrInsufficientFund)
 		}
+		// "subtractfeefromamount: recipient amount ... is less than fee ..." /
+		// "... is below SKA dust threshold ..." / "... does not cover fee ..." /
+		// "... minus fee ... is dust" fire from the vendored txauthor when
+		// "subtract fee from recipient" is on and the typed amount can't
+		// even cover its own fee. Became reachable from the live pre-send
+		// estimate (not just Broadcast) once the estimate started honoring
+		// SFFA — surface the same actionable message as any other
+		// too-small-amount case instead of the raw English + atom counts.
+		if strings.Contains(errStr, "subtractfeefromamount") {
+			return String(StrInsufficientFundForFee)
+		}
 	}
 	return errStr
 }

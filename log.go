@@ -23,6 +23,7 @@ import (
 	"github.com/monetarium/skarb-wallet/ui/page"
 	account "github.com/monetarium/skarb-wallet/ui/page/accounts"
 	"github.com/monetarium/skarb-wallet/ui/page/components"
+	"github.com/monetarium/skarb-wallet/ui/page/governance"
 	"github.com/monetarium/skarb-wallet/ui/page/info"
 	"github.com/monetarium/skarb-wallet/ui/page/receive"
 	"github.com/monetarium/skarb-wallet/ui/page/root"
@@ -94,6 +95,7 @@ func init() {
 	wallet.UseLogger(winLog)
 	receive.UseLogger(winLog)
 	staking.UseLogger(winLog)
+	governance.UseLogger(winLog)
 
 	logger.New(subsystemSLoggers)
 	// SPV used to be muted to ERROR-only — that hid the "Headers synced
