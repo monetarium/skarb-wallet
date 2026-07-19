@@ -4,7 +4,6 @@ import (
 	"fmt"
 
 	vspd "github.com/decred/vspd/types/v2"
-	"github.com/monetarium/monetarium-node/chaincfg"
 	"github.com/monetarium/monetarium-node/dcrutil"
 	"github.com/monetarium/monetarium-wallet/wallet"
 	"github.com/monetarium/monetarium-wallet/wallet/udb"
@@ -176,35 +175,10 @@ func (v *VSP) IsDirectBuy() bool {
 
 /** begin agenda types */
 
-// Agenda contains information about a consensus deployment
-type Agenda struct {
-	AgendaID         string            `json:"agenda_id"`
-	Description      string            `json:"description"`
-	Mask             uint32            `json:"mask"`
-	Choices          []chaincfg.Choice `json:"choices"`
-	VotingPreference string            `json:"voting_preference"`
-	StartTime        int64             `json:"start_time"`
-	ExpireTime       int64             `json:"expire_time"`
-	Status           string            `json:"status"`
-}
-
-// DcrdataAgenda models agenda information for the active network from the
-// dcrdata api https://dcrdata.decred.org/api/agendas for mainnet or
-// https://testnet.decred.org/api/agendas for testnet.
-type DcrdataAgenda struct {
-	ID            int    `storm:"id,increment"`
-	Name          string `json:"name"`
-	Description   string `json:"description"`
-	Status        string `json:"status"`
-	VotingStarted int64  `json:"votingStarted"`
-	VotingDone    int64  `json:"votingdone"`
-	Activated     int64  `json:"activated"`
-	HardForked    int64  `json:"hardforked"`
-	StartTime     string `json:"starttime"`
-	ExpireTime    string `json:"expiretime"`
-	VoteVersion   uint32 `json:"voteversion"`
-	Mask          uint16 `json:"mask"`
-}
+// Agenda lives in consensus.go: it is built locally from
+// chainParams.Deployments. The legacy dcrdata-backed types (DcrdataAgenda)
+// are gone with the dcrdata dependency itself — Monetarium has no dcrdata
+// instance to query.
 
 /** end agenda types */
 

@@ -522,12 +522,12 @@ func (asset *Asset) Broadcast(privatePassphrase, transactionLabel string) (strin
 	}
 
 	// Build the tx to broadcast WITH subtract-fee-from-amount applied (if the
-	// user toggled it). The cached unsignedTransaction() is the SFFA-free
-	// estimate, so we construct a fresh one here rather than reuse it — the
-	// fee amount is identical, only the recipient output (and absence of a
-	// separate fee-from-change) differs. SFFA's recipient-covers-fee+dust
-	// validation runs here, at send time, where surfacing the error to the
-	// user is appropriate (vs blanking the live estimate).
+	// user toggled it). Constructed fresh here rather than reusing the
+	// cached unsignedTransaction(): both now pass applySFFA=true and should
+	// converge to the same tx, but re-deriving at broadcast time keeps this
+	// path correct even if the cache is stale (a construct cycle the user
+	// didn't wait out) and keeps SFFA's recipient-covers-fee+dust validation
+	// error surfacing here, at send time, independent of the live estimate.
 	unsignedTx, err := asset.constructTransaction(true)
 	if err != nil {
 		return "", utils.TranslateError(err)
@@ -684,15 +684,19 @@ func (asset *Asset) updateTxLabel(hash *chainhash.Hash, txLabel string) error {
 
 // unsignedTransaction builds (and caches) the ESTIMATE transaction — the one
 // behind EstimateFeeAndSize / the pre-send "Загальна сума" display. It is
-// constructed WITHOUT subtract-fee-from-amount: SFFA only changes WHO pays the
-// fee (recipient vs sender's change), never the fee amount itself, and routing
-// the live estimate through SFFA made every keystroke subject to SFFA's
-// "recipient must cover fee + dust" validation — which fails mid-typing and
-// blanked the whole form. SFFA is applied only at broadcast time (Broadcast →
-// constructTransaction(true)).
+// constructed WITH subtract-fee-from-amount so the estimate's input selection
+// matches what Broadcast will actually author: under SFFA the inputs only have
+// to cover the amount itself (the fee comes out of the recipient's output).
+// The previous SFFA-free estimate required amount+fee of inputs even in SFFA
+// mode, so manually typing the FULL spendable balance — the exact send that
+// SFFA exists for, and that the Max button performs — failed the estimate with
+// a false "insufficient funds". The trade-off (known, accepted): with SFFA on,
+// an amount below fee+dust now fails the estimate too — but that send is
+// impossible to broadcast anyway, so surfacing the error at estimate time is
+// correct, not noise.
 func (asset *Asset) unsignedTransaction() (*txauthor.AuthoredTx, error) {
 	if asset.TxAuthoredInfo.needsConstruct || asset.TxAuthoredInfo.unsignedTx == nil {
-		unsignedTx, err := asset.constructTransaction(false)
+		unsignedTx, err := asset.constructTransaction(true)
 		if err != nil {
 			return nil, err
 		}
@@ -705,10 +709,10 @@ func (asset *Asset) unsignedTransaction() (*txauthor.AuthoredTx, error) {
 }
 
 // constructTransaction builds the unsigned tx. applySFFA controls whether a
-// recipient flagged SubtractFeeFromAmount actually absorbs the fee: false for
-// the cached estimate path (kept SFFA-free so the fee/total display never
-// blanks), true for the real broadcast. With no SFFA destination the flag is a
-// no-op (index stays -1 → fee from change, the default).
+// recipient flagged SubtractFeeFromAmount actually absorbs the fee: with no
+// SFFA destination the flag is a no-op (index stays -1 → fee from change, the
+// default). Both the estimate path and the broadcast path pass true now, so
+// the displayed fee/total and the authored tx always agree on who pays.
 func (asset *Asset) constructTransaction(applySFFA bool) (*txauthor.AuthoredTx, error) {
 	var err error
 	outputs := make([]*wire.TxOut, 0)
