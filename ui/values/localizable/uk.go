@@ -47,6 +47,7 @@ const UK = `
 "copied" = "Скопійовано"
 "loading" = "Завантаження…"
 "search" = "Пошук"
+"searchTxHint" = "Хеш, адреса або сума"
 "filter" = "Фільтр"
 
 // Balances

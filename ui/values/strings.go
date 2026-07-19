@@ -654,6 +654,7 @@ const (
 	StrScheduler                             = "scheduler"
 	StrSchedulerRunning                      = "schedulerRunning"
 	StrSearch                                = "search"
+	StrSearchTxHint                          = "searchTxHint"
 	StrSeconds                               = "secs"
 	StrSecurity                              = "security"
 	StrSecurityTools                         = "securityTools"

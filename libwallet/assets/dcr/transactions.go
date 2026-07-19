@@ -139,6 +139,82 @@ func (asset *Asset) GetTransactionsRaw(offset, limit, txFilter int32, newestFirs
 	return
 }
 
+// TxMatchesSearch reports whether tx matches a free-text search query. The
+// query is tried, case-insensitively, against three dimensions and matches on
+// ANY one of them:
+//
+//   - transaction hash, by PREFIX — so a short hex fragment copied from the
+//     list still finds the row (a full hash is just the longest prefix);
+//   - any input sender address or output address, by SUBSTRING — the user may
+//     paste only a recognizable chunk of a long address;
+//   - the displayed amount, by SUBSTRING of its numeric part — the unit suffix
+//     from FormatTxAmountBig is stripped first, so "1" does not match the
+//     "SKA1" coin name and the symbol does not match every row.
+//
+// An empty (or whitespace-only) query matches everything, so callers can gate
+// on it without a separate emptiness check. The old behaviour — an exact,
+// full-hash DB query — is a strict subset of the hash-prefix case here.
+func TxMatchesSearch(tx *sharedW.Transaction, query string) bool {
+	query = strings.ToLower(strings.TrimSpace(query))
+	if query == "" {
+		return true
+	}
+	if tx == nil {
+		return false
+	}
+
+	if strings.HasPrefix(strings.ToLower(tx.Hash), query) {
+		return true
+	}
+
+	for _, out := range tx.Outputs {
+		if out != nil && out.Address != "" && strings.Contains(strings.ToLower(out.Address), query) {
+			return true
+		}
+	}
+	for _, in := range tx.Inputs {
+		if in != nil && in.SenderAddress != "" && strings.Contains(strings.ToLower(in.SenderAddress), query) {
+			return true
+		}
+	}
+
+	// Amount: match the numeric part of the DISPLAYED amount so the search
+	// tracks exactly what the row shows. FormatTxAmountBig prefers the
+	// lossless SKA atom-string channel, so this stays exact-precision and
+	// never round-trips through float64 (CLAUDE.md §1).
+	//
+	// Normalize the query the way a user copies an amount off the screen:
+	// drop a leading sign (rows render sent amounts as "-1.55" but tx.Amount
+	// is stored positive) and anything from the first space on (a pasted
+	// "1.55 VAR" carries the unit; the unit itself must never match, so a
+	// bare "var"/"ska1" query is simply a non-matching numeric).
+	amtQuery := strings.TrimLeft(query, "+-")
+	if i := strings.IndexByte(amtQuery, ' '); i >= 0 {
+		amtQuery = amtQuery[:i]
+	}
+	if amtQuery == "" {
+		return false // query was only signs/spaces — nothing numeric to match
+	}
+	if tx.Type == txhelper.TxTypeVote {
+		// Vote rows display VoteReward (vote output − ticket price), NOT the
+		// bundled vote-output Amount (≈ ticket price + reward): match what
+		// the user sees, and only that — otherwise a ticket-price query
+		// surfaces every vote.
+		return amountMatches(FormatTxAmountBig("", tx.VoteReward, tx.CoinType), amtQuery)
+	}
+	return amountMatches(FormatTxAmountBig(tx.AmountAtoms, tx.Amount, tx.CoinType), amtQuery)
+}
+
+// amountMatches reports whether query is a substring of the numeric part of a
+// FormatTxAmountBig result ("1.50 VAR" → "1.50"). The unit suffix is dropped
+// so a digit in the coin name ("SKA1") never matches an amount query.
+func amountMatches(formatted, query string) bool {
+	if i := strings.LastIndexByte(formatted, ' '); i >= 0 {
+		formatted = formatted[:i]
+	}
+	return strings.Contains(formatted, query)
+}
+
 func (asset *Asset) CountTransactions(txFilter int32) (int, error) {
 	return asset.GetWalletDataDb().Count(txFilter, asset.RequiredConfirmations(), asset.GetBestBlockHeight(), &sharedW.Transaction{})
 }
