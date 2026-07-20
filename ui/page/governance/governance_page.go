@@ -22,6 +22,7 @@ import (
 	"github.com/monetarium/skarb-wallet/ui/cryptomaterial"
 	"github.com/monetarium/skarb-wallet/ui/load"
 	"github.com/monetarium/skarb-wallet/ui/modal"
+	"github.com/monetarium/skarb-wallet/ui/page/components"
 	"github.com/monetarium/skarb-wallet/ui/values"
 )
 
@@ -59,6 +60,15 @@ type Page struct {
 	// SS3: never mutate Layout-read state off the UI thread).
 	resultMu      sync.Mutex
 	pendingResult *voteResult
+
+	// Header actions: refreshBtn re-reads the agenda list and saved
+	// preferences in place; dashboardBtn offers the block explorer's live
+	// voting dashboard — the tallies live on-chain and this wallet keeps no
+	// chain index to compute them locally. copyRedirect backs the copy
+	// control inside the dashboard-link modal.
+	refreshBtn   *cryptomaterial.Clickable
+	dashboardBtn cryptomaterial.Button
+	copyRedirect *cryptomaterial.Clickable
 }
 
 type voteResult struct {
@@ -66,7 +76,7 @@ type voteResult struct {
 }
 
 func NewGovernancePage(l *load.Load, dcrWallet *dcr.Asset) *Page {
-	return &Page{
+	pg := &Page{
 		Load:             l,
 		GenericPageModal: app.NewGenericPageModal(GovernancePageID),
 		dcrWallet:        dcrWallet,
@@ -74,7 +84,16 @@ func NewGovernancePage(l *load.Load, dcrWallet *dcr.Asset) *Page {
 			List: layout.List{Axis: layout.Vertical},
 		},
 		choiceDropdowns: make(map[string]*cryptomaterial.DropDown),
+		refreshBtn:      l.Theme.NewClickable(false),
+		copyRedirect:    l.Theme.NewClickable(false),
 	}
+	pg.dashboardBtn = l.Theme.OutlineButton(values.String(values.StrVotingDashboard))
+	pg.dashboardBtn.TextSize = values.TextSize14
+	pg.dashboardBtn.Inset = layout.Inset{
+		Top: values.MarginPadding4, Bottom: values.MarginPadding4,
+		Left: values.MarginPadding8, Right: values.MarginPadding8,
+	}
+	return pg
 }
 
 // loadAgendas (re)reads the deployment list and the wallet's saved
@@ -148,6 +167,17 @@ func (pg *Page) HandleUserInteractions(gtx C) {
 		pg.loadAgendas()
 	}
 
+	if pg.refreshBtn.Clicked(gtx) {
+		// Cheap by design (see loadAgendas) — safe directly on the UI
+		// thread, and the rebuilt dropdown map is only read further down
+		// this same sequential call.
+		pg.loadAgendas()
+	}
+
+	if pg.dashboardBtn.Clicked(gtx) {
+		pg.showVotingDashboardModal()
+	}
+
 	for agendaID, dropdown := range pg.choiceDropdowns {
 		if !dropdown.Changed(gtx) {
 			continue
@@ -175,6 +205,34 @@ func (pg *Page) HandleUserInteractions(gtx C) {
 	}
 }
 
+// showVotingDashboardModal offers the block explorer's live voting dashboard.
+// Vote tallies live on-chain and the wallet keeps no chain index to compute
+// them, so the page links out instead of charting its own results (matching
+// upstream Cryptopower, which doesn't chart consensus tallies either — owner
+// decision, 2026-07-20). The modal shows the URL with a copy control plus an
+// explicit "open in browser" action rather than launching a browser
+// unannounced.
+func (pg *Page) showVotingDashboardModal() {
+	url := pg.AssetsManager.BlockExplorerURLForAgendas()
+	if url == "" {
+		return // no deployed explorer for this net; the button is hidden too
+	}
+	info := modal.NewCustomModal(pg.Load).
+		Title(values.String(values.StrVotingDashboard)).
+		Body(values.String(values.StrCopyLink)).
+		SetCancelable(true).
+		UseCustomWidget(func(gtx C) D {
+			return components.BrowserURLWidget(gtx, pg.Load, url, pg.copyRedirect)
+		}).
+		SetNegativeButtonText(values.String(values.StrCancel)).
+		SetPositiveButtonText(values.String(values.StrOpenInBrowser)).
+		SetPositiveButtonCallback(func(_ bool, _ *modal.InfoModal) bool {
+			components.GoToURL(url)
+			return true
+		})
+	pg.ParentWindow().ShowModal(info)
+}
+
 func (pg *Page) Layout(gtx C) D {
 	isMobile := pg.IsMobileView()
 	padding := values.MarginPaddingTransform(isMobile, values.MarginPadding24)
@@ -184,9 +242,30 @@ func (pg *Page) Layout(gtx C) D {
 		return layout.UniformInset(padding).Layout(gtx, func(gtx C) D {
 			return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
 				layout.Rigid(func(gtx C) D {
-					title := pg.Theme.Label(values.TextSizeTransform(isMobile, values.TextSize20), values.String(values.StrConsensusChange))
-					title.Font.Weight = font.SemiBold
-					return layout.Inset{Bottom: values.MarginPadding16}.Layout(gtx, title.Layout)
+					return layout.Inset{Bottom: values.MarginPadding16}.Layout(gtx, func(gtx C) D {
+						return components.EndToEndRow(gtx,
+							func(gtx C) D {
+								title := pg.Theme.Label(values.TextSizeTransform(isMobile, values.TextSize20), values.String(values.StrConsensusChange))
+								title.Font.Weight = font.SemiBold
+								return title.Layout(gtx)
+							},
+							func(gtx C) D {
+								return layout.Flex{Alignment: layout.Middle}.Layout(gtx,
+									layout.Rigid(func(gtx C) D {
+										return layout.Inset{Right: values.MarginPadding12}.Layout(gtx, func(gtx C) D {
+											return pg.refreshBtn.Layout(gtx, pg.Theme.NewIcon(pg.Theme.Icons.NavigationRefresh).Layout24dp)
+										})
+									}),
+									layout.Rigid(func(gtx C) D {
+										if pg.AssetsManager.BlockExplorerURLForAgendas() == "" {
+											return D{}
+										}
+										return pg.dashboardBtn.Layout(gtx)
+									}),
+								)
+							},
+						)
+					})
 				}),
 				layout.Rigid(func(gtx C) D {
 					if len(pg.agendas) == 0 {
@@ -257,18 +336,26 @@ func (pg *Page) agendaCard(gtx C, agenda *dcr.Agenda) D {
 		Padding:     layout.UniformInset(values.MarginPadding16),
 	}.Layout(gtx,
 		layout.Rigid(func(gtx C) D {
-			return layout.Flex{Axis: layout.Horizontal, Spacing: layout.SpaceBetween, Alignment: layout.Middle}.Layout(gtx,
-				layout.Rigid(func(gtx C) D {
-					lbl := pg.Theme.Label(textSize16, agenda.AgendaID)
-					lbl.Font.Weight = font.SemiBold
-					return lbl.Layout(gtx)
-				}),
-				layout.Rigid(func(gtx C) D {
+			// EndToEndRow (Rigid left + Flexed east) instead of a
+			// SpaceBetween flex: inside this card the row is measured with
+			// Min.X == 0, so SpaceBetween had no leftover width to
+			// distribute and the status chip rendered glued to the agenda
+			// ID. The Flexed side always takes the remaining width, and the
+			// inset keeps a gap even when the title grows to fill the row.
+			return components.EndToEndRow(gtx,
+				func(gtx C) D {
+					return layout.Inset{Right: values.MarginPadding16}.Layout(gtx, func(gtx C) D {
+						lbl := pg.Theme.Label(textSize16, agenda.AgendaID)
+						lbl.Font.Weight = font.SemiBold
+						return lbl.Layout(gtx)
+					})
+				},
+				func(gtx C) D {
 					text, color := pg.statusLabel(agenda.Status)
 					lbl := pg.Theme.Label(textSize14, text)
 					lbl.Color = color
 					return lbl.Layout(gtx)
-				}),
+				},
 			)
 		}),
 		layout.Rigid(func(gtx C) D {

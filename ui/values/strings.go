@@ -555,6 +555,7 @@ const (
 	StrOldest                                = "oldest"
 	StrOnChainVote                           = "onChainVote"
 	StrOnline                                = "online"
+	StrOpenInBrowser                         = "openInBrowser"
 	StrOpeningWallet                         = "openingWallet"
 	StrOrderCeated                           = "orderCreated"
 	StrOrderDetails                          = "orderDetails"
