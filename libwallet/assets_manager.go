@@ -11,11 +11,11 @@ import (
 
 	"github.com/asdine/storm"
 	"github.com/asdine/storm/q"
+	"github.com/monetarium/monetarium-wallet/errors"
 	"github.com/monetarium/skarb-wallet/appos"
 	"github.com/monetarium/skarb-wallet/libwallet/utils"
 	libutils "github.com/monetarium/skarb-wallet/libwallet/utils"
 	"github.com/monetarium/skarb-wallet/ui/notification"
-	"github.com/monetarium/monetarium-wallet/errors"
 	bolt "go.etcd.io/bbolt"
 
 	"github.com/monetarium/skarb-wallet/libwallet/assets/dcr"
@@ -556,6 +556,22 @@ func (mgr *AssetsManager) BlockExplorerURLForTx(assetType utils.AssetType, txHas
 		return "https://monetarium.online/tx/" + txHash
 	case utils.Testnet:
 		return "https://testnet.monetarium.online/tx/" + txHash
+	default:
+		return ""
+	}
+}
+
+// BlockExplorerURLForAgendas returns the Monetarium block explorer's
+// consensus-voting dashboard (current agenda tallies) for the active
+// network. Same hostname policy as BlockExplorerURLForTx: mainnet at
+// monetarium.online, testnet under the testnet subdomain, any other net
+// returns "" and callers hide their button.
+func (mgr *AssetsManager) BlockExplorerURLForAgendas() string {
+	switch mgr.NetType() {
+	case utils.Mainnet:
+		return "https://monetarium.online/agendas"
+	case utils.Testnet:
+		return "https://testnet.monetarium.online/agendas"
 	default:
 		return ""
 	}

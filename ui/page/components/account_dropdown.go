@@ -272,6 +272,16 @@ func (d *AccountDropdown) SetChangedCallback(callback func(*sharedW.Account)) *A
 	return d
 }
 
+// RequestRefresh schedules a full Setup rebuild (fresh accounts, balances and
+// row labels) for the next Handle call on the UI thread — the same deferred
+// path the tx/block notifications use. Safe to call from any goroutine. Used
+// by the send form when its live balance read disagrees with the labels this
+// dropdown is showing (e.g. the notification listener isn't registered
+// because the wallet was still syncing when the page opened).
+func (d *AccountDropdown) RequestRefresh() {
+	d.pendingRefresh.Store(true)
+}
+
 func (d *AccountDropdown) Handle(gtx C) {
 	// Drain a deferred tx/block-notification refresh on the UI thread.
 	// Re-run the full Setup rather than just firing the callback: every

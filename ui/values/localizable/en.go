@@ -448,6 +448,7 @@ const EN = `
 "oldest" = "Oldest"
 "onChainVote" = "On-chain voting for upgrading the Decred network consensus rules."
 "online" = "Online, "
+"openInBrowser" = "Open in browser"
 "openingWallet" = "Opening wallets..."
 "orderCreated" = "Order created successfully"
 "orderDetails" = "Order Details"

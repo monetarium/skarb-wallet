@@ -105,6 +105,17 @@ type Page struct {
 	pendingExchangeRate      float64
 	pendingExchangeRateApply atomic.Bool
 
+	// txListenersRegistered arms once per page visit when the wallet/account
+	// dropdown tx+block listeners are actually registered. Registration is
+	// deferred until the wallet reports synced (per-block notifications
+	// during initial sync would rebuild the dropdowns at block-attach rate),
+	// but OnNavigatedTo runs only once per visit — so the sync gate used to
+	// mean "opened the page mid-sync → listeners never registered at all"
+	// and the dropdown balance labels stayed frozen at their page-open
+	// snapshots. maybeRegisterTxListeners retries each frame until it arms;
+	// OnNavigatedFrom stops the listeners and re-arms the flag.
+	txListenersRegistered bool
+
 	// Custom fee override (user-typed relay-fee rate in atoms/KB). The
 	// backend hooks (SetFeeRateOverride / ClearFeeRateOverride) live on
 	// the DCR asset and validate against per-coin chainparams MinRelayTxFee.
@@ -535,20 +546,16 @@ func (pg *Page) OnNavigatedTo() {
 		return
 	}
 
+	// Attempt listener registration BEFORE the sync gate: the helper no-ops
+	// until the wallet is synced and is retried from HandleUserInteractions,
+	// so a page opened mid-sync still gets its listeners the moment sync
+	// completes — the old unconditional-after-gate registration never ran at
+	// all in that case (OnNavigatedTo is not re-run when sync finishes).
+	pg.maybeRegisterTxListeners()
+
 	if !pg.selectedWallet.IsSynced() {
 		// Events are disabled until the wallet is fully synced.
 		return
-	}
-
-	pg.walletDropdown.ListenForTxNotifications(pg.ParentWindow()) // listener is stopped in OnNavigatedFrom()
-	// The ACCOUNT dropdown needs its own listener (distinct listener ID —
-	// see AccountSelectorListenerID): its per-account Balance values are
-	// snapshots taken at Setup time, and without a refresh on tx/block
-	// events the form kept validating against pre-broadcast balances —
-	// letting an over-balance amount through with no error (stale-low) or
-	// firing false insufficient-funds (stale-high).
-	if pg.accountDropdown != nil {
-		pg.accountDropdown.ListenForTxNotifications(pg.ParentWindow())
 	}
 
 	// Auto-default the asset dropdown to a coin type that has a spendable
@@ -576,6 +583,28 @@ func (pg *Page) OnNavigatedTo() {
 		// TODO: @Wisdom Why was this line necessary?
 		// go load.GetAPIFeeRate(pg.selectedWallet)
 		go pg.feeRateSelector.UpdatedFeeRate(pg.selectedWallet)
+	}
+}
+
+// maybeRegisterTxListeners registers the wallet/account dropdowns' tx+block
+// notification listeners exactly once per page visit, and only once the
+// wallet reports synced — per-block notifications during initial sync would
+// rebuild the dropdowns at block-attach rate. The wallet-dropdown listener is
+// stopped in OnNavigatedFrom, which also re-arms the flag; the ACCOUNT
+// dropdown registers under its own listener ID (see AccountSelectorListenerID)
+// so the two never collide.
+func (pg *Page) maybeRegisterTxListeners() {
+	if pg.txListenersRegistered || pg.selectedWallet == nil || !pg.selectedWallet.IsSynced() {
+		return
+	}
+	pg.txListenersRegistered = true
+	pg.walletDropdown.ListenForTxNotifications(pg.ParentWindow())
+	// Without the account-dropdown refresh on tx/block events the form kept
+	// validating against pre-broadcast balances — letting an over-balance
+	// amount through with no error (stale-low) or firing false
+	// insufficient-funds (stale-high).
+	if pg.accountDropdown != nil {
+		pg.accountDropdown.ListenForTxNotifications(pg.ParentWindow())
 	}
 }
 
@@ -875,6 +904,22 @@ func (pg *Page) addSendDestination() (sharedW.AssetAmount, sharedW.AssetAmount, 
 	// produced false insufficient-funds. The wallet-level input selection
 	// always reads the live store, so the form must too.
 	if fresh, err := pg.selectedWallet.GetAccount(sourceAccount.Number); err == nil && fresh != nil && fresh.Balance != nil {
+		// Self-heal the DISPLAY when it lags the live store. The dropdown
+		// rows cache their balance labels from the last Setup; if the
+		// tx/block listener isn't registered yet (page opened mid-sync) or
+		// the event simply hasn't landed, the user reads one number while
+		// this validation checks another — reported as "typed slightly over
+		// the shown balance, no error". Detecting the drift here, the moment
+		// it can matter, and scheduling a dropdown rebuild keeps "what you
+		// see" equal to "what is checked". The rebuild's changed-callback
+		// re-runs this validation with a snapshot that now matches the live
+		// value, so this arms at most once per actual balance change — no
+		// refresh loop.
+		if pg.accountDropdown != nil && sourceAccount.Balance != nil &&
+			fresh.Balance.Spendable.ToInt() != sourceAccount.Balance.Spendable.ToInt() {
+			pg.accountDropdown.RequestRefresh()
+			pg.ParentWindow().Reload()
+		}
 		sourceAccount = fresh
 	}
 
@@ -1055,6 +1100,17 @@ func (pg *Page) addSendDestination() (sharedW.AssetAmount, sharedW.AssetAmount, 
 		// than Max's sweep). Say that, with the way out, instead of the
 		// bare "Insufficient funds".
 		if feeErr.Error() == libUtil.ErrInsufficientBalance {
+			// One special case before erroring: the user typed EXACTLY the
+			// number the Max button fills in (spendable − sweep fee) with
+			// sender-pays-fee. A change-bearing tx can't fund that — its fee
+			// is slightly higher than a sweep's — but the equivalent sweep
+			// can, and it delivers exactly the typed amount to the
+			// recipient. Convert the recipient to SendMax and rebuild
+			// instead of telling the user their correctly-typed number is
+			// wrong.
+			if !spendableUnknown && pg.convertTypedMaxToSweep(availableBig, totalSendAmountBig) {
+				return pg.addSendDestination()
+			}
 			for _, recipient := range pg.recipients {
 				recipient.amountValidationError(values.String(values.StrInsufficientFundForFee))
 			}
@@ -1214,6 +1270,67 @@ func (pg *Page) addSendDestination() (sharedW.AssetAmount, sharedW.AssetAmount, 
 	}
 	return wal.ToAmount(totalCost), balanceAfterSend, totalSendAmount, nil
 
+}
+
+// convertTypedMaxToSweep detects the "typed the Max number by hand" send and
+// switches it to the real Max path. It applies only to the one case a sweep
+// replaces 1:1 — a single recipient, sender pays the fee, no SFFA: there the
+// Max button's fill is spendable − sweepFee, and a user who types that exact
+// number means "send everything" just as much as one who clicks Max. The
+// comparison is exact big.Int atoms; any other amount keeps the fixed-output
+// path and its diagnostics.
+//
+// Mechanics: re-point the wallet's destination at a sweep, price it (the
+// estimate is local input selection, no network), and compare available −
+// sweepFee against the typed atoms. On a match the recipient's SendMax flag
+// flips on and the caller re-runs addSendDestination, which from then on
+// behaves exactly like a Max click (editor refill, totals, sweep authoring
+// at broadcast). On a miss the original fixed destination is restored so the
+// wallet's authored state never diverges from what the form shows.
+func (pg *Page) convertTypedMaxToSweep(availableBig, typedBig *big.Int) bool {
+	if pg.subtractFeeFromRecipient || len(pg.recipients) != 1 ||
+		typedBig == nil || typedBig.Sign() <= 0 || availableBig == nil {
+		return false
+	}
+	recipient := pg.recipients[0]
+	if recipient.amount.SendMax {
+		return false // already a sweep; the estimate failure is something else
+	}
+	dcrAsset, ok := pg.selectedWallet.(*dcr.Asset)
+	if !ok {
+		return false
+	}
+	address := recipient.destinationAddress()
+	if address == "" {
+		return false
+	}
+	amountAtom, amountAtomBig, _ := recipient.validAmountBig()
+	restoreFixed := func() {
+		if err := dcrAsset.AddSendDestinationBig(recipient.id, address, amountAtom, amountAtomBig, false, false); err != nil {
+			log.Errorf("convertTypedMaxToSweep: restoring fixed destination: %v", err)
+		}
+	}
+	if err := dcrAsset.AddSendDestinationBig(recipient.id, address, 0, "", true, false); err != nil {
+		return false
+	}
+	feeAndSize, err := pg.selectedWallet.EstimateFeeAndSize()
+	if err != nil {
+		restoreFixed()
+		return false
+	}
+	feeBig := big.NewInt(feeAndSize.Fee.UnitValue)
+	if s := feeAndSize.Fee.UnitValueBig; s != "" {
+		if parsed, ok := new(big.Int).SetString(s, 10); ok {
+			feeBig = parsed
+		}
+	}
+	maxBig := new(big.Int).Sub(availableBig, feeBig)
+	if maxBig.Sign() <= 0 || maxBig.Cmp(typedBig) != 0 {
+		restoreFixed()
+		return false
+	}
+	recipient.amount.SendMax = true
+	return true
 }
 
 func (pg *Page) isAllRecipientValidated() bool {
@@ -1378,6 +1495,10 @@ func (pg *Page) clearEstimates() {
 // displayed.
 // Part of the load.Page interface.
 func (pg *Page) HandleUserInteractions(gtx C) {
+	// Retry deferred listener registration: no-ops once armed, arms on the
+	// first frame after the wallet finishes syncing with this page open.
+	pg.maybeRegisterTxListeners()
+
 	// Drain the broadcast-success flag set from the goroutine. We must
 	// do this on the UI thread (Gio editor SetText is racy with Layout
 	// reads), and we must do it BEFORE per-frame validation runs below —
@@ -1708,6 +1829,9 @@ func (pg *Page) OnNavigatedFrom() {
 	if pg.accountDropdown != nil {
 		pg.accountDropdown.StopTxNtfnListener()
 	}
+	// Re-arm deferred listener registration for the next visit (see
+	// maybeRegisterTxListeners).
+	pg.txListenersRegistered = false
 	for _, rc := range pg.recipients {
 		rc.sendDestination.stopQRScan()
 	}

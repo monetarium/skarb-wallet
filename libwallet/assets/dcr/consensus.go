@@ -30,6 +30,11 @@ import (
 // half is deliberately absent here (no VSP infrastructure yet) and is part
 // of the planned monetarium-vsp integration.
 
+// minListedVoteVersion is the lowest stake (vote) version AllVoteAgendas
+// lists. Everything below it is the ancestor chain's deployment history —
+// hidden entirely, not just marked historical.
+const minListedVoteVersion = 11
+
 // AgendaStatusType labels an agenda's lifecycle stage as derivable locally
 // from its deployment time window.
 type AgendaStatusType string
@@ -92,6 +97,15 @@ func (asset *Asset) AllVoteAgendas(newestFirst bool) ([]*Agenda, error) {
 	now := time.Now().Unix()
 	agendas := make([]*Agenda, 0, len(chainParams.Deployments))
 	for version, deployments := range chainParams.Deployments {
+		// The chain parameters inherit the ancestor chain's (Decred's)
+		// deployment history — stake versions 4–10 are that legacy noise
+		// (SDiffAlgorithm through the DCP-10 era) and none of it is
+		// actionable or even informative on this network. Monetarium's own
+		// consensus work starts at vote version 11 (VoteIDActivateSKA2);
+		// list nothing older (owner decision, 2026-07-20).
+		if version < minListedVoteVersion {
+			continue
+		}
 		for i := range deployments {
 			d := &deployments[i]
 
