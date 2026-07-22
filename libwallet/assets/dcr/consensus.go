@@ -3,6 +3,7 @@ package dcr
 import (
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -116,6 +117,16 @@ func (asset *Asset) AllVoteAgendas(newestFirst bool) ([]*Agenda, error) {
 			case now >= int64(d.ExpireTime):
 				status = AgendaStatusEnded
 			}
+			// The wall-clock window is only the OUTER deadline — on chain a
+			// vote concludes as soon as the agenda locks in and activates,
+			// which on this network happened months before the window
+			// closes. The explorer (which has a chain index) shows such an
+			// agenda as Finished; without this override the page claimed
+			// "in progress" for a long-decided vote (owner report,
+			// 2026-07-22).
+			if status == AgendaStatusInProgress && asset.agendaConcludedOnChain(d.Vote.Id) {
+				status = AgendaStatusEnded
+			}
 
 			agenda := &Agenda{
 				AgendaID:       d.Vote.Id,
@@ -146,6 +157,34 @@ func (asset *Asset) AllVoteAgendas(newestFirst bool) ([]*Agenda, error) {
 		return agendas[i].AgendaID < agendas[j].AgendaID
 	})
 	return agendas, nil
+}
+
+// agendaConcludedOnChain reports whether an agenda's outcome is already
+// visible on chain even though its wall-clock window is still open. The
+// wallet keeps no per-interval vote tally (that needs a chain index à la
+// dcrdata), so this recognizes the one agenda family whose outcome has a
+// direct local witness: "activateskaN" activated iff the SKA-N coin type is
+// live — protocol-active in chainparams AND past its emission height at the
+// wallet's best block (EmittedCoinTypes). Emission is configured strictly
+// after the best-case activation height (see the SKACoinConfig comments in
+// chainparams), so a live coin implies the vote finished. Agendas outside
+// that family keep their time-window status until a real chain index exists
+// (the monetarium-vsp / explorer-API era).
+func (asset *Asset) agendaConcludedOnChain(agendaID string) bool {
+	numStr, ok := strings.CutPrefix(agendaID, "activateska")
+	if !ok {
+		return false
+	}
+	n, err := strconv.Atoi(numStr)
+	if err != nil || n <= 0 || n > 255 {
+		return false
+	}
+	for _, ct := range asset.EmittedCoinTypes() {
+		if int(ct) == n {
+			return true
+		}
+	}
+	return false
 }
 
 // AgendaChoices returns the wallet's saved vote preferences for the agendas

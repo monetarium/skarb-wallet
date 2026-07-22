@@ -410,7 +410,7 @@ func (asset *Asset) DecodeTransaction(walletTx *sharedW.TxInfoFromWallet, netPar
 		feeOverride = 0
 		feeAtoms = ""
 	}
-	return &sharedW.Transaction{
+	tx := &sharedW.Transaction{
 		Hash:        msgTx.TxHash().String(),
 		Type:        txType,
 		Hex:         walletTx.Hex,
@@ -441,7 +441,14 @@ func (asset *Asset) DecodeTransaction(walletTx *sharedW.TxInfoFromWallet, netPar
 		LastBlockValid:  lastBlockValid,
 		VoteBits:        voteBits,
 		TicketSpentHash: ticketSpentHash,
-	}, nil
+	}
+	// Persist the split classification alongside the decode: IsSplitTx needs
+	// the fully-decoded Inputs/Outputs (per-entry AccountNumber), which only
+	// exist right here. Storing the verdict lets prepareTxQuery exclude the
+	// ticket-funding split flood at the storm layer instead of paging every
+	// split row past the in-memory refine (see utils.SplitFilter).
+	tx.IsSplit = IsSplitTx(tx)
+	return tx, nil
 }
 
 func (asset *Asset) decodeTxInputs(mtx *wire.MsgTx, netParams *chaincfg.Params, walletInputs []*sharedW.WInput) (inputs []*sharedW.TxInput, totalWalletInputs, totalWalletUnmixedInputs int64) {

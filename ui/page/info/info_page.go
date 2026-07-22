@@ -491,7 +491,13 @@ func (pg *WalletInfo) ListenForNewTx(walletID int) {
 // earlier page than their split — they are never older).
 func (pg *WalletInfo) loadRecentByFilter(filter int32, want int) []*sharedW.Transaction {
 	const pageSize = int32(100)
-	const maxPages = 10
+	// 40 pages × 100 rows: with the query layer now serving type-narrowed
+	// supersets (see prepareTxQuery) a page is cheap, and the deeper horizon
+	// covers the legacy rows saved before the stored IsStakeFee/IsSplit
+	// fields existed (they stay in the superset until a rescan re-saves
+	// them). The old 10-page bound over a q.True() universe was how the
+	// Info preview "lost" its third Regular row on a nonstop-voting wallet.
+	const maxPages = 40
 	fetched := make([]*sharedW.Transaction, 0, pageSize)
 	out := make([]*sharedW.Transaction, 0, want)
 	for page := int32(0); page < maxPages && len(out) < want; page++ {

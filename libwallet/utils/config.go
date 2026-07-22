@@ -108,6 +108,14 @@ const (
 	DirectionFilter     = "Direction"
 	HeightFilter        = "BlockHeight"
 	TicketSpenderFilter = "TicketSpender"
+	// StakeFeeFilter / SplitFilter address the stored IsStakeFee / IsSplit
+	// fields so prepareTxQuery can exclude the stake-fee and ticket-split
+	// row floods AT THE QUERY LAYER. The in-memory reclassification in
+	// TxMatchesFilter stays authoritative; these only narrow the paged
+	// universe so bounded scans (Info page recents) don't lose real
+	// payments beyond their page horizon on a wallet that votes nonstop.
+	StakeFeeFilter = "IsStakeFee"
+	SplitFilter    = "IsSplit"
 
 	LogLevelOff      = "off"
 	LogLevelTrace    = "trace"
