@@ -1087,36 +1087,45 @@ func (pg *Page) addSendDestination() (sharedW.AssetAmount, sharedW.AssetAmount, 
 	// MakeInputSourceWithCoinType — so this works regardless of VAR
 	// balance, which is what the legacy pre-loop call could not handle.
 	feeAndSize, feeErr := pg.selectedWallet.EstimateFeeAndSize()
-	if feeErr != nil {
-		// Surface the real reason instead of failing silently — a high
-		// custom fee whose amount exceeds the spendable balance makes the
-		// wallet's input selection return InsufficientBalance here, and the
-		// form would otherwise just blank ("- SKA1") with no diagnostic.
-		log.Errorf("addSendDestination: EstimateFeeAndSize failed: %v", feeErr)
+	if feeErr != nil && feeErr.Error() == libUtil.ErrInsufficientBalance {
 		// The fail-fast above guarantees the amounts fit the balance, so an
 		// insufficient-balance verdict HERE means it's the fee that doesn't:
 		// the classic "typed the full balance by hand" (or re-typed the
 		// number Max produced — a change-bearing tx pays slightly more fee
-		// than Max's sweep). Say that, with the way out, instead of the
-		// bare "Insufficient funds".
-		if feeErr.Error() == libUtil.ErrInsufficientBalance {
-			// One special case before erroring: the user typed EXACTLY the
-			// number the Max button fills in (spendable − sweep fee) with
-			// sender-pays-fee. A change-bearing tx can't fund that — its fee
-			// is slightly higher than a sweep's — but the equivalent sweep
-			// can, and it delivers exactly the typed amount to the
-			// recipient. Convert the recipient to SendMax and rebuild
-			// instead of telling the user their correctly-typed number is
-			// wrong.
-			if !spendableUnknown && pg.convertTypedMaxToSweep(availableBig, totalSendAmountBig) {
-				return pg.addSendDestination()
+		// than Max's sweep).
+		//
+		// One case is fully recoverable rather than an error: the user typed
+		// EXACTLY the number the Max button fills in (spendable − sweep fee)
+		// with sender-pays-fee. A change-bearing tx can't fund that, but the
+		// equivalent sweep can — and it delivers exactly the typed amount to
+		// the recipient. typedMaxSweepEstimate re-points the wallet's
+		// destination at a sweep and returns the sweep's estimate; the cycle
+		// then continues as a normal success WITHOUT touching the
+		// recipient's SendMax flag or editor text. (The previous version
+		// flipped SendMax and re-entered this function; the SendMax display
+		// pass then rewrote the editor with the canonical "%.8f" fill, so
+		// deleting a trailing zero re-triggered the conversion and the
+		// digits were instantly restored — "the amount field won't let me
+		// delete digits" owner report, 2026-07-22.)
+		if !spendableUnknown {
+			if sweepEst := pg.typedMaxSweepEstimate(availableBig, totalSendAmountBig); sweepEst != nil {
+				feeAndSize, feeErr = sweepEst, nil
 			}
+		}
+		if feeErr != nil {
+			log.Errorf("addSendDestination: EstimateFeeAndSize failed: %v", feeErr)
 			for _, recipient := range pg.recipients {
 				recipient.amountValidationError(values.String(values.StrInsufficientFundForFee))
 			}
 			pg.clearEstimates()
 			return nil, nil, 0, feeErr
 		}
+	} else if feeErr != nil {
+		// Surface the real reason instead of failing silently — a high
+		// custom fee whose amount exceeds the spendable balance makes the
+		// wallet's input selection return InsufficientBalance here, and the
+		// form would otherwise just blank ("- SKA1") with no diagnostic.
+		log.Errorf("addSendDestination: EstimateFeeAndSize failed: %v", feeErr)
 		pg.setRecipientsAmountErr(feeErr)
 		return nil, nil, 0, feeErr
 	}
@@ -1272,51 +1281,55 @@ func (pg *Page) addSendDestination() (sharedW.AssetAmount, sharedW.AssetAmount, 
 
 }
 
-// convertTypedMaxToSweep detects the "typed the Max number by hand" send and
-// switches it to the real Max path. It applies only to the one case a sweep
-// replaces 1:1 — a single recipient, sender pays the fee, no SFFA: there the
-// Max button's fill is spendable − sweepFee, and a user who types that exact
-// number means "send everything" just as much as one who clicks Max. The
-// comparison is exact big.Int atoms; any other amount keeps the fixed-output
-// path and its diagnostics.
+// typedMaxSweepEstimate detects the "typed the Max number by hand" send and
+// re-authors it as the sweep it describes. It applies only to the one case a
+// sweep replaces 1:1 — a single recipient, sender pays the fee, no SFFA:
+// there the Max button's fill is spendable − sweepFee, and a user who types
+// that exact number means "send everything" just as much as one who clicks
+// Max. The comparison is exact big.Int atoms; any other amount keeps the
+// fixed-output path and its diagnostics.
 //
-// Mechanics: re-point the wallet's destination at a sweep, price it (the
-// estimate is local input selection, no network), and compare available −
-// sweepFee against the typed atoms. On a match the recipient's SendMax flag
-// flips on and the caller re-runs addSendDestination, which from then on
-// behaves exactly like a Max click (editor refill, totals, sweep authoring
-// at broadcast). On a miss the original fixed destination is restored so the
-// wallet's authored state never diverges from what the form shows.
-func (pg *Page) convertTypedMaxToSweep(availableBig, typedBig *big.Int) bool {
+// Mechanics: re-point the wallet's destination at a sweep, price it (local
+// input selection, no network), and compare available − sweepFee against the
+// typed atoms. On a match the sweep destination STAYS in the wallet's
+// authored state (Broadcast sweeps, delivering exactly the typed amount) and
+// the sweep's estimate is returned for the caller to continue with. The
+// recipient widget is deliberately left untouched — no SendMax flag, no
+// editor rewrite — so the user's text stays exactly as typed and remains
+// editable; each validation cycle simply re-derives the conversion while the
+// equality holds. On a miss the original fixed destination is restored (the
+// wallet's authored state must never diverge from what the form shows) and
+// nil is returned.
+func (pg *Page) typedMaxSweepEstimate(availableBig, typedBig *big.Int) *sharedW.TxFeeAndSize {
 	if pg.subtractFeeFromRecipient || len(pg.recipients) != 1 ||
 		typedBig == nil || typedBig.Sign() <= 0 || availableBig == nil {
-		return false
+		return nil
 	}
 	recipient := pg.recipients[0]
 	if recipient.amount.SendMax {
-		return false // already a sweep; the estimate failure is something else
+		return nil // already a real Max sweep; the estimate failure is something else
 	}
 	dcrAsset, ok := pg.selectedWallet.(*dcr.Asset)
 	if !ok {
-		return false
+		return nil
 	}
 	address := recipient.destinationAddress()
 	if address == "" {
-		return false
+		return nil
 	}
 	amountAtom, amountAtomBig, _ := recipient.validAmountBig()
 	restoreFixed := func() {
 		if err := dcrAsset.AddSendDestinationBig(recipient.id, address, amountAtom, amountAtomBig, false, false); err != nil {
-			log.Errorf("convertTypedMaxToSweep: restoring fixed destination: %v", err)
+			log.Errorf("typedMaxSweepEstimate: restoring fixed destination: %v", err)
 		}
 	}
 	if err := dcrAsset.AddSendDestinationBig(recipient.id, address, 0, "", true, false); err != nil {
-		return false
+		return nil
 	}
 	feeAndSize, err := pg.selectedWallet.EstimateFeeAndSize()
 	if err != nil {
 		restoreFixed()
-		return false
+		return nil
 	}
 	feeBig := big.NewInt(feeAndSize.Fee.UnitValue)
 	if s := feeAndSize.Fee.UnitValueBig; s != "" {
@@ -1327,10 +1340,9 @@ func (pg *Page) convertTypedMaxToSweep(availableBig, typedBig *big.Int) bool {
 	maxBig := new(big.Int).Sub(availableBig, feeBig)
 	if maxBig.Sign() <= 0 || maxBig.Cmp(typedBig) != 0 {
 		restoreFixed()
-		return false
+		return nil
 	}
-	recipient.amount.SendMax = true
-	return true
+	return feeAndSize
 }
 
 func (pg *Page) isAllRecipientValidated() bool {

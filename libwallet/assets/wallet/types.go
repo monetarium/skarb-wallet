@@ -362,6 +362,16 @@ type Transaction struct {
 	// decoded before this field existed read back "" until next decode.
 	StakeFeeKind string `json:"stake_fee_kind,omitempty"`
 
+	// IsSplit persists the split classification (a Regular VAR spend whose
+	// every input AND output sits on the default account — the ticket-funding
+	// self-transfer shape) so the storm query layer can exclude the split
+	// flood without decoding rows. Computed at decode from the same
+	// Inputs/Outputs the live dcr.IsSplitTx check reads, so a stored true is
+	// always confirmed by the in-memory refine; rows decoded before this
+	// field existed read back false and are still excluded by that refine —
+	// they just cost scan time until the next rescan re-saves them.
+	IsSplit bool `json:"is_split,omitempty"`
+
 	// Vote Info (DCR fields)
 	VoteVersion    int32  `json:"vote_version,omitempty"`
 	LastBlockValid bool   `json:"last_block_valid,omitempty"`
