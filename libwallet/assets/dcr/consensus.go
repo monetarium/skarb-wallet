@@ -36,18 +36,33 @@ import (
 // hidden entirely, not just marked historical.
 const minListedVoteVersion = 11
 
-// AgendaStatusType labels an agenda's lifecycle stage as derivable locally
-// from its deployment time window.
+// AgendaStatusType labels an agenda's lifecycle stage using dcrd's
+// getvoteinfo vocabulary (defined / started / lockedin / active / failed) —
+// owner decision 2026-07-24: the wallet should speak the same status
+// language as the node and the explorer. The wallet is SPV and cannot run
+// getvoteinfo itself, so each status is derived from the best local signal
+// (see the derivation in AllVoteAgendas); "lockedin" needs per-interval vote
+// tallies no local signal provides and is never emitted today — it becomes
+// reachable when a chain-index source exists (explorer API / VSP era).
 type AgendaStatusType string
 
 const (
-	// AgendaStatusUpcoming — the deployment's voting window hasn't opened.
-	AgendaStatusUpcoming AgendaStatusType = "upcoming"
-	// AgendaStatusInProgress — now is inside the deployment's time window.
-	AgendaStatusInProgress AgendaStatusType = "in progress"
-	// AgendaStatusEnded — the deployment's window has expired. Whether it
-	// locked in or failed is not locally derivable (needs a chain index).
-	AgendaStatusEnded AgendaStatusType = "ended"
+	// AgendaStatusDefined — the agenda exists but its voting window hasn't
+	// opened yet (getvoteinfo: "defined").
+	AgendaStatusDefined AgendaStatusType = "defined"
+	// AgendaStatusStarted — the voting window is open and no outcome is
+	// visible on chain yet (getvoteinfo: "started").
+	AgendaStatusStarted AgendaStatusType = "started"
+	// AgendaStatusLockedIn — the vote passed and awaits activation
+	// (getvoteinfo: "lockedin"). Not locally derivable over SPV; reserved
+	// for a future chain-index source.
+	AgendaStatusLockedIn AgendaStatusType = "lockedin"
+	// AgendaStatusActive — the voted rule is activated and enforced
+	// (getvoteinfo: "active").
+	AgendaStatusActive AgendaStatusType = "active"
+	// AgendaStatusFailed — the voting window closed without the agenda
+	// locking in (getvoteinfo: "failed").
+	AgendaStatusFailed AgendaStatusType = "failed"
 )
 
 // Agenda is one consensus deployment presented for the governance UI.
@@ -110,22 +125,27 @@ func (asset *Asset) AllVoteAgendas(newestFirst bool) ([]*Agenda, error) {
 		for i := range deployments {
 			d := &deployments[i]
 
-			status := AgendaStatusInProgress
+			// getvoteinfo-vocabulary status from local signals, checked in
+			// priority order:
+			//   defined — the window hasn't opened;
+			//   active  — the rule's activation has a direct on-chain
+			//             witness (SKA-N live for activateskaN), which wins
+			//             even after the window closes;
+			//   failed  — the window closed with no activation witness: an
+			//             agenda that never locked in by expiry failed by
+			//             definition;
+			//   started — everything else: window open, outcome not yet
+			//             visible. "lockedin" (passed, awaiting activation)
+			//             needs per-interval tallies the SPV wallet doesn't
+			//             have and is never emitted here.
+			status := AgendaStatusStarted
 			switch {
 			case now < int64(d.StartTime):
-				status = AgendaStatusUpcoming
+				status = AgendaStatusDefined
+			case asset.agendaConcludedOnChain(d.Vote.Id):
+				status = AgendaStatusActive
 			case now >= int64(d.ExpireTime):
-				status = AgendaStatusEnded
-			}
-			// The wall-clock window is only the OUTER deadline — on chain a
-			// vote concludes as soon as the agenda locks in and activates,
-			// which on this network happened months before the window
-			// closes. The explorer (which has a chain index) shows such an
-			// agenda as Finished; without this override the page claimed
-			// "in progress" for a long-decided vote (owner report,
-			// 2026-07-22).
-			if status == AgendaStatusInProgress && asset.agendaConcludedOnChain(d.Vote.Id) {
-				status = AgendaStatusEnded
+				status = AgendaStatusFailed
 			}
 
 			agenda := &Agenda{
@@ -159,17 +179,17 @@ func (asset *Asset) AllVoteAgendas(newestFirst bool) ([]*Agenda, error) {
 	return agendas, nil
 }
 
-// agendaConcludedOnChain reports whether an agenda's outcome is already
-// visible on chain even though its wall-clock window is still open. The
-// wallet keeps no per-interval vote tally (that needs a chain index à la
-// dcrdata), so this recognizes the one agenda family whose outcome has a
-// direct local witness: "activateskaN" activated iff the SKA-N coin type is
-// live — protocol-active in chainparams AND past its emission height at the
-// wallet's best block (EmittedCoinTypes). Emission is configured strictly
-// after the best-case activation height (see the SKACoinConfig comments in
-// chainparams), so a live coin implies the vote finished. Agendas outside
-// that family keep their time-window status until a real chain index exists
-// (the monetarium-vsp / explorer-API era).
+// agendaConcludedOnChain reports whether an agenda's ACTIVATION is already
+// visible on chain (the getvoteinfo "active" state), regardless of its
+// wall-clock window. The wallet keeps no per-interval vote tally (that needs
+// a chain index à la dcrdata), so this recognizes the one agenda family
+// whose outcome has a direct local witness: "activateskaN" activated iff the
+// SKA-N coin type is live — protocol-active in chainparams AND past its
+// emission height at the wallet's best block (EmittedCoinTypes). Emission is
+// configured strictly after the best-case activation height (see the
+// SKACoinConfig comments in chainparams), so a live coin implies the rule is
+// enforced. Agendas outside that family keep their time-window status until
+// a real chain index exists (the monetarium-vsp / explorer-API era).
 func (asset *Asset) agendaConcludedOnChain(agendaID string) bool {
 	numStr, ok := strings.CutPrefix(agendaID, "activateska")
 	if !ok {
