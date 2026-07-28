@@ -305,16 +305,25 @@ func choiceLabel(theme *cryptomaterial.Theme, choiceID string) layout.Widget {
 	}
 }
 
-// statusLabel maps the locally-derived agenda status onto existing
-// localized strings ("ended" reuses "Finished").
+// statusLabel maps the getvoteinfo-vocabulary agenda status onto localized
+// labels and colors (owner decision 2026-07-24: same status language as
+// `getvoteinfo` and the explorer). The unknown-status fallback renders the
+// raw protocol word so a future status added in libwallet is visible rather
+// than silently mislabeled.
 func (pg *Page) statusLabel(status dcr.AgendaStatusType) (string, color.NRGBA) {
 	switch status {
-	case dcr.AgendaStatusUpcoming:
-		return values.String(values.StrUpcoming), pg.Theme.Color.GrayText2
-	case dcr.AgendaStatusInProgress:
-		return values.String(values.StrInProgress), pg.Theme.Color.Primary
+	case dcr.AgendaStatusDefined:
+		return values.String(values.StrAgendaDefined), pg.Theme.Color.GrayText2
+	case dcr.AgendaStatusStarted:
+		return values.String(values.StrAgendaStarted), pg.Theme.Color.Primary
+	case dcr.AgendaStatusLockedIn:
+		return values.String(values.StrAgendaLockedIn), pg.Theme.Color.Success
+	case dcr.AgendaStatusActive:
+		return values.String(values.StrAgendaActive), pg.Theme.Color.Success
+	case dcr.AgendaStatusFailed:
+		return values.String(values.StrAgendaFailed), pg.Theme.Color.Danger
 	default:
-		return values.String(values.StrFinished), pg.Theme.Color.GrayText3
+		return string(status), pg.Theme.Color.GrayText3
 	}
 }
 

@@ -388,6 +388,21 @@ func (asset *Asset) EstimateFeeAndSize() (*sharedW.TxFeeAndSize, error) {
 			}
 		}
 		feeToSendTx = txrules.FeeForSerializeSize(relayRate, unsignedTx.EstimatedSignedSerializeSize)
+		if unsignedTx.ChangeIndex < 0 {
+			// Change-less shapes (the txauthor dead-zone rescue, a
+			// dust-folded change, an exact-fit SFFA): the ENTIRE
+			// inputs−outputs difference is the fee actually paid. The
+			// rate×size recompute above understates it there and would
+			// leave a phantom "Баланс після відправлення" remainder on
+			// screen that the broadcast never produces.
+			var outSum int64
+			for _, out := range unsignedTx.Tx.TxOut {
+				outSum += out.Value
+			}
+			if diff := int64(unsignedTx.TotalInput) - outSum; diff > int64(feeToSendTx) {
+				feeToSendTx = dcrutil.Amount(diff)
+			}
+		}
 	} else {
 		// Source the relay rate from the wallet's chain-params SKA config
 		// (the same channel the broadcast authoring path consults via
@@ -410,6 +425,20 @@ func (asset *Asset) EstimateFeeAndSize() (*sharedW.TxFeeAndSize, error) {
 			return nil, errors.E("no relay fee configured for SKA coin type; cannot estimate")
 		}
 		skaFee := txrules.FeeForSerializeSizeSKA(skaRelayFee, unsignedTx.EstimatedSignedSerializeSize)
+		if unsignedTx.ChangeIndex < 0 {
+			// Change-less shapes: report the true inputs−outputs fee (see
+			// the VAR branch above for the rationale).
+			outSum := new(big.Int)
+			for _, out := range unsignedTx.Tx.TxOut {
+				if out.SKAValue != nil {
+					outSum.Add(outSum, out.SKAValue)
+				}
+			}
+			diff := unsignedTx.SKATotalInput.Sub(cointype.NewSKAAmount(outSum))
+			if !diff.IsNegative() && diff.Cmp(skaFee) > 0 {
+				skaFee = diff
+			}
+		}
 		// SKA fee CAN exceed int64 once custom-fee rates approach the
 		// 1000× safety cap — a 1-KB tx at 1000× MinRelayTxFee (assume
 		// 4 SKA1/KB MinRelay → 4000 SKA1/KB cap) produces 4000e18 ≈ 4e21
