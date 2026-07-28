@@ -474,6 +474,27 @@ func (pg *Page) balanceSection(gtx C) D {
 				return inset.Layout(gtx, func(gtx C) D {
 					return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
 						layout.Rigid(func(gtx C) D {
+							// The fee as its own row above "Загальна сума"
+							// (owner request, 2026-07-26): makes the
+							// amount+fee=total arithmetic visible in place —
+							// in the change-less band the fee visibly grows
+							// as the amount shrinks (so the frozen totals
+							// stop looking like a bug), and a custom
+							// fee-rate application shows its resulting fee
+							// immediately (the Застосувати handler re-runs
+							// validateAndConstructTx before this renders).
+							feeText := pg.txFee
+							if pg.exchangeRate != -1 && pg.usdExchangeSet && pg.txFeeUSD != "" {
+								feeText = fmt.Sprintf("%s (%s)", pg.txFee, pg.txFeeUSD)
+							}
+							inset := layout.Inset{
+								Bottom: values.MarginPadding12,
+							}
+							return inset.Layout(gtx, func(gtx C) D {
+								return pg.contentRow(gtx, values.String(values.StrFee), feeText)
+							})
+						}),
+						layout.Rigid(func(gtx C) D {
 							totalCostText := pg.totalCost
 							if pg.exchangeRate != -1 && pg.usdExchangeSet {
 								totalCostText = fmt.Sprintf("%s (%s)", pg.totalCost, pg.totalCostUSD)
