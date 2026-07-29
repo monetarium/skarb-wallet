@@ -65,7 +65,19 @@ const (
 	//     delete-then-save) whenever a ticket and its vote shared one chunk —
 	//     leaving voted tickets stored, counted and labelled as "Live".
 	//     Reindexing heals both in existing wallets.
-	currentTxParserVersion int32 = 8
+	// v9: self-transfer change identification switched to account-first
+	//     (see the isChange block in DecodeTransaction): a Max sweep's
+	//     single output carries the change/Internal flag (sweep authoring
+	//     delivers via a changeSource) while sitting on the DESTINATION
+	//     account, and the old Internal-first precedence skipped it as
+	//     change — the stored row displayed the FEE as the sent amount.
+	//     The classifier fix landed without a parser bump, so rows decoded
+	//     by older builds kept the stored fee-as-amount, and a manual
+	//     rescan only helps when run on a build that already has the fix
+	//     (the owner's rescan predated it and re-created the same wrong
+	//     rows). Bump reindexes every stored row with the account-first
+	//     classifier automatically on first launch.
+	currentTxParserVersion int32 = 9
 
 	// indexTxBatchSize is how many decoded rows IndexTransactions
 	// commits per storm/bbolt write transaction. Small enough to keep
