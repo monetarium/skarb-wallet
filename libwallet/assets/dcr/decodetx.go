@@ -325,9 +325,32 @@ func (asset *Asset) DecodeTransaction(walletTx *sharedW.TxInfoFromWallet, netPar
 			}
 		}
 		transferredOut := new(big.Int)
+		// A transaction with exactly ONE output has no room for change —
+		// that output IS the delivered amount, whatever the change/Internal
+		// flag or account metadata claims. This is a SHAPE fact, immune to
+		// every udb metadata variation: sweep (Max) authoring delivers the
+		// whole balance through a changeSource, so its lone output arrives
+		// change-flagged, and trusting metadata over shape is what kept
+		// full-balance sends displaying the FEE as the amount across
+		// decoder paths (owner reports 2026-07-28/29). msgTx.TxOut is the
+		// on-wire truth for the output count; walletTx.Outputs is checked
+		// too so a (hypothetical) not-owned lone output still goes through
+		// the metadata path instead of being force-counted.
+		singleOutput := len(msgTx.TxOut) == 1 && len(walletTx.Outputs) == 1
 		for _, wo := range walletTx.Outputs {
 			if int(wo.Index) >= len(msgTx.TxOut) {
 				continue
+			}
+			if singleOutput {
+				out := msgTx.TxOut[wo.Index]
+				if isSKATx {
+					if out.SKAValue != nil {
+						transferredOut.Add(transferredOut, out.SKAValue)
+					}
+				} else {
+					transferredOut.Add(transferredOut, big.NewInt(out.Value))
+				}
+				break
 			}
 			// Skip the change output: value returning to the FUNDING account.
 			// The resolved account is the primary signal; the Internal/change
