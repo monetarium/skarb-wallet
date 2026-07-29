@@ -329,19 +329,27 @@ func (asset *Asset) DecodeTransaction(walletTx *sharedW.TxInfoFromWallet, netPar
 			if int(wo.Index) >= len(msgTx.TxOut) {
 				continue
 			}
-			// Skip the change output: value returning to the funding account.
-			// An output is change if EITHER it is flagged Internal OR its
-			// account resolves to the source account. The Internal check must
-			// come first and NOT be overridden by the account compare:
-			// augmentWalletOutputs recovers mempool change with Internal=true
-			// but a HARDCODED AccountNumber=0, so a plain `isChange =
-			// (account == source)` would evaluate `0 == N` = false for a
-			// non-default source account and wrongly count the change. Honour
-			// the Internal=true signal augment already sets, and only consult
-			// the account when the output is not already known to be internal.
-			isChange := wo.Internal
-			if !isChange && sourceAcct >= 0 && wo.WAccount != nil {
+			// Skip the change output: value returning to the FUNDING account.
+			// The resolved account is the primary signal; the Internal/change
+			// flag only decides when account metadata is unavailable. The old
+			// precedence (Internal first) misclassified the Max sweep: sweep
+			// authoring delivers the whole balance through a changeSource
+			// pointed at the DESTINATION, so its single output is recorded
+			// change-flagged even though it sits on the other account — the
+			// classifier skipped it as "change", summed 0 transferred, and
+			// the row showed the FEE as the sent amount (owner report,
+			// 2026-07-28, the 0.0000219 VAR unconfirmed row). The account
+			// compare is safe as primary now that augmentWalletOutputs
+			// resolves the real account/branch via KnownAddress instead of
+			// hardcoding acct 0 — its Internal=true/acct=0 shape survives
+			// only in the rare KnownAddress-failure fallback (briefly locked
+			// wallet), where a non-default-account mempool change can be
+			// miscounted until confirmation rebuilds the outputs.
+			var isChange bool
+			if sourceAcct >= 0 && wo.WAccount != nil {
 				isChange = wo.AccountNumber == sourceAcct
+			} else {
+				isChange = wo.Internal
 			}
 			if isChange {
 				continue
