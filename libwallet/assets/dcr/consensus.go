@@ -12,6 +12,7 @@ import (
 	"github.com/monetarium/monetarium-node/chaincfg"
 	"github.com/monetarium/monetarium-node/chaincfg/chainhash"
 	w "github.com/monetarium/monetarium-wallet/wallet"
+	"github.com/monetarium/skarb-wallet/libwallet/utils"
 )
 
 // This file provides the consensus-agenda (on-chain governance) surface for
@@ -243,6 +244,18 @@ func (asset *Asset) AgendaChoices(txHash string) (map[string]string, error) {
 // votes from the copy the VSP keeps — without the push the user's new choice
 // would silently never be cast.
 func (asset *Asset) SetVoteChoice(agendaID, choiceID, hash string) error {
+	return asset.setVoteChoice(agendaID, choiceID, hash, "")
+}
+
+// SetVoteChoiceWithPassphrase is SetVoteChoice for a wallet that has to be
+// unlocked first: pushing to a VSP is a signed request, so a wallet holding
+// VSP-managed tickets cannot complete the operation while locked. Callers use
+// it to retry after SetVoteChoice returned ErrVSPUnlockRequired.
+func (asset *Asset) SetVoteChoiceWithPassphrase(agendaID, choiceID, hash, passphrase string) error {
+	return asset.setVoteChoice(agendaID, choiceID, hash, passphrase)
+}
+
+func (asset *Asset) setVoteChoice(agendaID, choiceID, hash, passphrase string) error {
 	var ticketHash *chainhash.Hash
 	if hash != "" {
 		h, err := chainhash.NewHashFromStr(hash)
@@ -259,8 +272,16 @@ func (asset *Asset) SetVoteChoice(agendaID, choiceID, hash string) error {
 		return err
 	}
 
-	return asset.pushVoteChoicesToVSPs(ctx, ticketHash, choices)
+	return asset.pushVoteChoicesToVSPs(ctx, ticketHash, choices, passphrase)
 }
+
+// ErrVSPUnlockRequired is returned by SetVoteChoice when the preference was
+// saved locally but at least one affected ticket is VSP-managed and the
+// wallet is locked, so the signed VSP request could not be made. Callers are
+// expected to collect the passphrase and retry with
+// SetVoteChoiceWithPassphrase.
+var ErrVSPUnlockRequired = errors.New("vote choice saved locally; unlock the " +
+	"wallet to send it to the VSP")
 
 // pushVoteChoicesToVSPs updates the vote choices held by the VSP for every
 // VSP-managed ticket the change applies to: one ticket when ticketHash is
@@ -269,77 +290,119 @@ func (asset *Asset) SetVoteChoice(agendaID, choiceID, hash string) error {
 // Tickets that are not VSP-managed are skipped silently — they vote from the
 // wallet database alone, which SetVoteChoice already updated.
 func (asset *Asset) pushVoteChoicesToVSPs(ctx context.Context, ticketHash *chainhash.Hash,
-	choices map[string]string) error {
+	choices map[string]string, passphrase string) error {
 
 	hashes, err := asset.affectedTicketHashes(ticketHash)
 	if err != nil {
 		return err
 	}
 
-	// Collect the VSP-managed tickets first. Solo tickets need no push, and a
-	// wallet holding only those must not be told about a VSP failure.
-	type vspTicket struct {
-		hash   *chainhash.Hash
-		ticket *w.VSPTicket
-		info   *w.TicketInfo
+	// Which of them are VSP-managed is answered from the wallet database
+	// alone. This has to happen before any private key is touched: loading a
+	// ticket (NewVSPTicket) derives its voting key and therefore fails on a
+	// locked wallet, which would make every ticket — solo ones included —
+	// look like a failed VSP update.
+	targets, err := asset.vspManagedTickets(ctx, hashes)
+	if err != nil {
+		return err
+	}
+	if len(targets) == 0 {
+		return nil // nothing is held by a VSP; the local write is the whole job
 	}
 
-	var (
-		managed []vspTicket
-		failed  int
-	)
-	for _, h := range hashes {
+	// Signing the VSP request needs the ticket's commitment key.
+	if asset.IsLocked() {
+		if passphrase == "" {
+			return ErrVSPUnlockRequired
+		}
+		if err := asset.UnlockWallet(passphrase); err != nil {
+			return utils.TranslateError(err)
+		}
+		defer asset.LockWallet()
+	}
+
+	var loadFailed, pushFailed int
+	for _, h := range targets {
 		ticket, err := asset.Internal().DCR.NewVSPTicket(ctx, h)
 		if err != nil {
-			log.Warnf("vote choice push: cannot load ticket %s: %v", h, err)
-			failed++
+			log.Errorf("vote choice push: cannot load ticket %s: %v", h, err)
+			loadFailed++
 			continue
 		}
 
-		// A ticket with no VSP record is bought solo; nothing to push.
-		info, err := ticket.VSPTicketInfo(ctx)
+		vspTicketInfo, err := ticket.VSPTicketInfo(ctx)
 		if err != nil {
+			log.Errorf("vote choice push: cannot read VSP record of ticket %s: %v", h, err)
+			loadFailed++
 			continue
 		}
-
-		managed = append(managed, vspTicket{hash: h, ticket: ticket, info: info})
-	}
-
-	// Updating a VSP requires signing the request with the ticket's
-	// commitment key, so a locked wallet cannot push. Report it rather than
-	// leaving the user believing a VSP-managed ticket got the new choice.
-	if len(managed) > 0 && asset.IsLocked() {
-		return errors.New("vote choice saved locally, but the wallet is locked " +
-			"so it could not be sent to the VSP")
-	}
-
-	for _, m := range managed {
-		h, ticket, vspTicketInfo := m.hash, m.ticket, m.info
 
 		vspClient, err := asset.VSPClient(-1, vspTicketInfo.Host, vspTicketInfo.PubKey)
 		if err != nil {
 			log.Errorf("vote choice push: cannot reach VSP %s for ticket %s: %v",
 				vspTicketInfo.Host, h, err)
-			failed++
+			pushFailed++
 			continue
 		}
 
 		if err := vspClient.SetVoteChoice(ctx, ticket, choices, nil, nil); err != nil {
-			log.Errorf("vote choice push: VSP %s rejected the update for ticket %s: %v",
+			log.Errorf("vote choice push: VSP %s did not accept the update for ticket %s: %v",
 				vspTicketInfo.Host, h, err)
-			failed++
+			pushFailed++
 			continue
 		}
 
 		log.Debugf("vote choice push: VSP %s updated for ticket %s", vspTicketInfo.Host, h)
 	}
 
-	if failed > 0 {
-		return fmt.Errorf("vote choice saved locally, but %d of %d ticket(s) "+
-			"could not be updated at their VSP", failed, len(hashes))
+	switch {
+	case pushFailed > 0 && loadFailed > 0:
+		return fmt.Errorf("vote choice saved locally, but %d of %d VSP ticket(s) were "+
+			"rejected by their VSP and %d could not be read from the wallet",
+			pushFailed, len(targets), loadFailed)
+	case pushFailed > 0:
+		return fmt.Errorf("vote choice saved locally, but %d of %d VSP ticket(s) "+
+			"could not be updated at their VSP", pushFailed, len(targets))
+	case loadFailed > 0:
+		return fmt.Errorf("vote choice saved locally, but %d of %d VSP ticket(s) "+
+			"could not be read from the wallet", loadFailed, len(targets))
 	}
 
 	return nil
+}
+
+// vspManagedTickets narrows hashes down to the tickets this wallet has a VSP
+// record for, reading only the wallet database — no private keys, so it works
+// on a locked wallet.
+func (asset *Asset) vspManagedTickets(ctx context.Context, hashes []*chainhash.Hash) ([]*chainhash.Hash, error) {
+	// A ticket is VSP-managed whatever stage its fee is at, including the
+	// error state: the VSP still holds it and still votes it.
+	feeStatuses := []VSPFeeStatus{
+		VSPFeeProcessStarted,
+		VSPFeeProcessPaid,
+		VSPFeeProcessErrored,
+		VSPFeeProcessConfirmed,
+	}
+
+	managed := make(map[chainhash.Hash]struct{})
+	for _, status := range feeStatuses {
+		vspHashes, err := asset.Internal().DCR.GetVSPTicketsByFeeStatus(ctx, int(status))
+		if err != nil {
+			return nil, err
+		}
+		for _, h := range vspHashes {
+			managed[h] = struct{}{}
+		}
+	}
+
+	targets := make([]*chainhash.Hash, 0, len(hashes))
+	for _, h := range hashes {
+		if _, ok := managed[*h]; ok {
+			targets = append(targets, h)
+		}
+	}
+
+	return targets, nil
 }
 
 // affectedTicketHashes returns the tickets a vote-choice change applies to:

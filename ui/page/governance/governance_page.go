@@ -7,6 +7,7 @@
 package governance
 
 import (
+	"errors"
 	"fmt"
 	"image/color"
 	"sync"
@@ -73,6 +74,11 @@ type Page struct {
 
 type voteResult struct {
 	err error
+	// agendaID/choiceID identify the write this result belongs to, so a
+	// result that only failed for want of an unlocked wallet can be retried
+	// with the passphrase without re-reading the dropdowns.
+	agendaID string
+	choiceID string
 }
 
 func NewGovernancePage(l *load.Load, dcrWallet *dcr.Asset) *Page {
@@ -155,10 +161,16 @@ func (pg *Page) HandleUserInteractions(gtx C) {
 	pg.pendingResult = nil
 	pg.resultMu.Unlock()
 	if result != nil {
-		if result.err != nil {
+		switch {
+		case errors.Is(result.err, dcr.ErrVSPUnlockRequired):
+			// The preference is saved; only the signed push to the VSP is
+			// missing, and that needs the spending passphrase. Ask for it
+			// and finish the job rather than reporting a half-done write.
+			pg.showVSPUnlockModal(result.agendaID, result.choiceID)
+		case result.err != nil:
 			errModal := modal.NewErrorModal(pg.Load, result.err.Error(), modal.DefaultClickFunc())
 			pg.ParentWindow().ShowModal(errModal)
-		} else {
+		default:
 			infoModal := modal.NewSuccessModal(pg.Load, values.String(values.StrVoteUpdated), modal.DefaultClickFunc())
 			pg.ParentWindow().ShowModal(infoModal)
 		}
@@ -193,16 +205,66 @@ func (pg *Page) HandleUserInteractions(gtx C) {
 		// syncing (CLAUDE.md SS3 async->UI pattern).
 		go func(agendaID, choiceID string) {
 			err := pg.dcrWallet.SetVoteChoice(agendaID, choiceID, "")
-			if err != nil {
+			if err != nil && !errors.Is(err, dcr.ErrVSPUnlockRequired) {
 				log.Errorf("governance: SetVoteChoice(%s=%s): %v", agendaID, choiceID, err)
 			}
 			pg.resultMu.Lock()
-			pg.pendingResult = &voteResult{err: err}
+			pg.pendingResult = &voteResult{err: err, agendaID: agendaID, choiceID: choiceID}
 			pg.resultMu.Unlock()
 			pg.voteInFlight.Store(false)
 			pg.ParentWindow().Reload()
 		}(agendaID, choiceID)
 	}
+}
+
+// showVSPUnlockModal asks for the spending passphrase and re-runs the vote
+// choice so it reaches the VSP of every VSP-managed ticket.
+//
+// The wallet database already holds the new choice at this point — this only
+// completes the half that needs a signature. Cancelling is therefore safe and
+// leaves the preference saved locally; the wallet says so plainly instead of
+// pretending the VSP was updated.
+func (pg *Page) showVSPUnlockModal(agendaID, choiceID string) {
+	passwordModal := modal.NewCreatePasswordModal(pg.Load).
+		EnableName(false).
+		EnableConfirmPassword(false).
+		Title(values.String(values.StrConfirmVoteChoiceVSP)).
+		SetCancelable(true).
+		UseCustomWidget(func(gtx C) D {
+			label := pg.Theme.Label(values.TextSize14, values.String(values.StrVoteChoiceVSPUnlock))
+			return layout.Inset{Bottom: values.MarginPadding12}.Layout(gtx, label.Layout)
+		}).
+		SetNegativeButtonCallback(func() {
+			infoModal := modal.NewSuccessModal(pg.Load,
+				values.String(values.StrVoteUpdatedLocallyOnly), modal.DefaultClickFunc())
+			pg.ParentWindow().ShowModal(infoModal)
+		}).
+		SetPositiveButtonCallback(func(_, password string, pm *modal.CreatePasswordModal) bool {
+			if !pg.voteInFlight.CompareAndSwap(false, true) {
+				pm.SetError(values.String(values.StrVoteUpdating))
+				return false
+			}
+			go func() {
+				err := pg.dcrWallet.SetVoteChoiceWithPassphrase(agendaID, choiceID, "", password)
+				if err != nil {
+					log.Errorf("governance: SetVoteChoiceWithPassphrase(%s=%s): %v",
+						agendaID, choiceID, err)
+				}
+				pg.resultMu.Lock()
+				// Drop the sentinel on a second refusal: retrying the same
+				// modal forever helps nobody. Whatever comes back now is
+				// shown as-is.
+				if errors.Is(err, dcr.ErrVSPUnlockRequired) {
+					err = errors.New(values.String(values.StrVoteUpdatedLocallyOnly))
+				}
+				pg.pendingResult = &voteResult{err: err, agendaID: agendaID, choiceID: choiceID}
+				pg.resultMu.Unlock()
+				pg.voteInFlight.Store(false)
+				pg.ParentWindow().Reload()
+			}()
+			return true
+		})
+	pg.ParentWindow().ShowModal(passwordModal)
 }
 
 // showVotingDashboardModal offers the block explorer's live voting dashboard.
