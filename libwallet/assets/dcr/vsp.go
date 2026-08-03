@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"strings"
 
 	vspdClient "github.com/decred/vspd/client/v3"
 	vspd "github.com/decred/vspd/types/v2"
@@ -33,6 +32,20 @@ func builtinVSPs(net utils.NetworkType) []string {
 		// only hosts the user added.
 		return nil
 	}
+}
+
+// vspServesThisNetwork reports whether a VSP's self-declared network is the
+// one this wallet is on.
+//
+// The two sides name testnet differently: vspd reports the chain parameters'
+// own name ("testnet3"), while the wallet's NetworkType is the user-facing
+// "testnet". Comparing those directly — as both call sites used to, one with
+// equality and one with strings.Contains — rejected every testnet VSP,
+// including the built-in one, which simply never appeared in the selector.
+// Comparing against the chain parameters removes the guesswork: a matching
+// VSP runs on the same params and therefore reports exactly this name.
+func (asset *Asset) vspServesThisNetwork(vspNetwork string) bool {
+	return vspNetwork == asset.chainParams.Name
 }
 
 // VSPClient loads or creates a VSP client instance for the specified host.
@@ -115,7 +128,7 @@ func (asset *Asset) SaveVSP(host string) (err error) {
 		return err
 	}
 
-	if info.Network != string(asset.NetType()) {
+	if !asset.vspServesThisNetwork(info.Network) {
 		return fmt.Errorf("invalid net %s", info.Network)
 	}
 
@@ -179,7 +192,6 @@ func (asset *Asset) ReloadVSPList(ctx context.Context) {
 		}
 	}
 
-	network := string(asset.NetType())
 	for _, host := range builtinVSPs(asset.NetType()) {
 		if _, wasAdded := vspList[host]; wasAdded {
 			continue // the user saved this one too
@@ -194,9 +206,9 @@ func (asset *Asset) ReloadVSPList(ctx context.Context) {
 			continue
 		}
 
-		if !strings.Contains(network, vspInfo.Network) {
+		if !asset.vspServesThisNetwork(vspInfo.Network) {
 			log.Warnf("builtin vsp %s serves network %q, wallet is on %q; skipping",
-				host, vspInfo.Network, network)
+				host, vspInfo.Network, asset.chainParams.Name)
 			continue
 		}
 
