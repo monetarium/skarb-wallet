@@ -297,7 +297,17 @@ func (swmp *SingleWalletMasterPage) initTabOptions() {
 	// user had to scroll the strip horizontally. GroupMax computes
 	// per-tab Width = (layoutSize − 8) / len(tabs) — every tab gets
 	// an equal slice, no overflow, no scroll buttons.
-	swmp.PageNavigationTab = swmp.Theme.SegmentedControl(commonTabs, cryptomaterial.SegmentTypeGroupMax)
+	// …but an equal slice of a phone is ~45dp per tab, and "Transactions" or
+	// "Транзакції" in 45dp is a stack of single letters — the strip becomes
+	// unreadable exactly where it matters most. SegmentTypeGroup keeps each
+	// tab at its natural width and scrolls the strip horizontally instead:
+	// every tab is still there, in the same order, just reached by swiping
+	// the strip rather than by squeezing it.
+	tabType := cryptomaterial.SegmentTypeGroupMax
+	if swmp.IsMobileView() {
+		tabType = cryptomaterial.SegmentTypeGroup
+	}
+	swmp.PageNavigationTab = swmp.Theme.SegmentedControl(commonTabs, tabType)
 	swmp.PageNavigationTab.SetEnableSwipe(false)
 	dp5 := values.MarginPadding5
 	swmp.PageNavigationTab.ContentPadding = layout.Inset{

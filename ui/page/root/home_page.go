@@ -59,6 +59,15 @@ type HomePage struct {
 	// selectedWalletID is the wallet whose detail page is currently shown in
 	// the body, so its sidebar entry can be highlighted. -1 = none (Overview).
 	selectedWalletID int
+
+	// Phone layout. A 220dp sidebar next to the body leaves ~120dp for
+	// content on a 360dp-wide phone, which renders every page as an
+	// unreadable column of single characters. On mobile the body therefore
+	// takes the full width and the same sidebar — same items, same order,
+	// same handlers — slides in over it from a title-bar menu button.
+	drawerOpen bool
+	menuClick  *cryptomaterial.Clickable
+	scrimClick *cryptomaterial.Clickable
 }
 
 type walletEntry struct {
@@ -75,6 +84,8 @@ func NewHomePage(l *load.Load) *HomePage {
 		overviewClick:     l.Theme.NewClickable(true),
 		settingsClick:     l.Theme.NewClickable(true),
 		createWalletClick: l.Theme.NewClickable(true),
+		menuClick:         l.Theme.NewClickable(true),
+		scrimClick:        l.Theme.NewClickable(false),
 		selectedWalletID:  -1,
 	}
 
@@ -262,16 +273,28 @@ func (hp *HomePage) OnNavigatedFrom() {
 
 // HandleUserInteractions wires sidebar clicks to subpage transitions.
 func (hp *HomePage) HandleUserInteractions(gtx layout.Context) {
+	// On a phone every one of these is reached through the drawer, so each
+	// must close it — otherwise the page they open stays hidden behind the
+	// panel that launched it.
+	if hp.menuClick.Clicked(gtx) {
+		hp.drawerOpen = !hp.drawerOpen
+	}
+	if hp.scrimClick.Clicked(gtx) {
+		hp.drawerOpen = false
+	}
 	if hp.overviewClick.Clicked(gtx) {
+		hp.drawerOpen = false
 		hp.showOverview()
 	}
 	if hp.settingsClick.Clicked(gtx) {
+		hp.drawerOpen = false
 		// AppSettingsPage hosts the network (mainnet ↔ testnet) switcher,
 		// language, theme, and other process-wide knobs. It's a top-level
 		// modal-style page rather than a wallet-scoped one.
 		hp.ParentWindow().Display(settings.NewAppSettingsPage(hp.Load))
 	}
 	if hp.createWalletClick.Clicked(gtx) {
+		hp.drawerOpen = false
 		// Reuse the onboarding wallet-creation flow. (The wallet-selector page
 		// that used to host "Add wallet" is unused in this fork, so without
 		// this button there was no in-app way to create a second wallet after
@@ -309,6 +332,7 @@ func (hp *HomePage) HandleUserInteractions(gtx layout.Context) {
 	}
 	for _, entry := range hp.walletEntries {
 		if entry.click != nil && entry.click.Clicked(gtx) {
+			hp.drawerOpen = false
 			hp.openWallet(entry.wallet)
 		}
 	}
@@ -320,9 +344,118 @@ func (hp *HomePage) HandleUserInteractions(gtx layout.Context) {
 // Layout draws sidebar + subpage.
 func (hp *HomePage) Layout(gtx layout.Context) layout.Dimensions {
 	hp.refreshWalletList()
+	if hp.IsMobileView() {
+		return hp.layoutMobile(gtx)
+	}
 	return layout.Flex{Axis: layout.Horizontal}.Layout(gtx,
 		layout.Rigid(hp.layoutSidebar),
 		layout.Flexed(1, hp.layoutBody),
+	)
+}
+
+// layoutMobile gives the body the whole screen and puts the sidebar behind a
+// menu button, because side-by-side does not fit: the sidebar is a fixed
+// 220dp and a phone is ~360dp wide, so the body was left with a strip too
+// narrow to lay out a single word — every page rendered as a column of
+// one-character lines.
+//
+// Nothing is dropped or reordered. The drawer renders the very same
+// layoutSidebar, so its navigation, the wallet list and their handlers are
+// the desktop ones; the only difference is that it overlays the body instead
+// of sitting beside it, and closes after a tap so the body is never left
+// under a panel.
+func (hp *HomePage) layoutMobile(gtx layout.Context) layout.Dimensions {
+	return layout.Stack{}.Layout(gtx,
+		layout.Expanded(func(gtx layout.Context) layout.Dimensions {
+			return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
+				layout.Rigid(hp.layoutMobileTopBar),
+				layout.Flexed(1, hp.layoutBody),
+			)
+		}),
+		layout.Expanded(func(gtx layout.Context) layout.Dimensions {
+			if !hp.drawerOpen {
+				return layout.Dimensions{}
+			}
+			return hp.layoutDrawer(gtx)
+		}),
+	)
+}
+
+// layoutMobileTopBar is the phone's entry point to the sidebar: a menu button
+// plus the brand and network, mirroring the sidebar header so the user always
+// knows which network they are on — the same two facts the desktop sidebar
+// shows permanently.
+func (hp *HomePage) layoutMobileTopBar(gtx layout.Context) layout.Dimensions {
+	return cryptomaterial.LinearLayout{
+		Width:       cryptomaterial.MatchParent,
+		Height:      cryptomaterial.WrapContent,
+		Background:  hp.Theme.Color.Surface,
+		Padding:     layout.Inset{Top: unit.Dp(10), Bottom: unit.Dp(10), Left: unit.Dp(8), Right: unit.Dp(12)},
+		Orientation: layout.Horizontal,
+		Alignment:   layout.Middle,
+	}.Layout(gtx,
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			return cryptomaterial.LinearLayout{
+				Width:       cryptomaterial.WrapContent,
+				Height:      cryptomaterial.WrapContent,
+				Clickable:   hp.menuClick,
+				Border:      cryptomaterial.Border{Radius: cryptomaterial.Radius(8)},
+				Padding:     layout.Inset{Top: unit.Dp(6), Bottom: unit.Dp(6), Left: unit.Dp(10), Right: unit.Dp(10)},
+				Orientation: layout.Vertical,
+			}.Layout(gtx,
+				layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+					// Three bars drawn from the theme separator: the icon set
+					// has no hamburger, and importing one for three
+					// rectangles would be heavier than drawing them.
+					bar := func(gtx layout.Context) layout.Dimensions {
+						gtx.Constraints.Min.X = gtx.Dp(unit.Dp(18))
+						return hp.Theme.SeparatorVertical(gtx.Dp(unit.Dp(2)), gtx.Dp(unit.Dp(18))).Layout(gtx)
+					}
+					return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
+						layout.Rigid(bar),
+						layout.Rigid(layout.Spacer{Height: unit.Dp(3)}.Layout),
+						layout.Rigid(bar),
+						layout.Rigid(layout.Spacer{Height: unit.Dp(3)}.Layout),
+						layout.Rigid(bar),
+					)
+				}),
+			)
+		}),
+		layout.Rigid(layout.Spacer{Width: unit.Dp(6)}.Layout),
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
+				layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+					t := hp.Theme.Body1("Skarb")
+					t.Font.Weight = font.Bold
+					return t.Layout(gtx)
+				}),
+				layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+					net := hp.Theme.Caption(string(hp.AssetsManager.NetType()))
+					net.Color = hp.Theme.Color.GrayText3
+					return net.Layout(gtx)
+				}),
+			)
+		}),
+	)
+}
+
+// layoutDrawer overlays the sidebar plus a scrim that closes it. The sidebar
+// keeps its fixed width, which is what makes it the same panel as on desktop
+// rather than a stretched phone-only variant.
+func (hp *HomePage) layoutDrawer(gtx layout.Context) layout.Dimensions {
+	return layout.Stack{}.Layout(gtx,
+		layout.Expanded(func(gtx layout.Context) layout.Dimensions {
+			return cryptomaterial.LinearLayout{
+				Width:       cryptomaterial.MatchParent,
+				Height:      cryptomaterial.MatchParent,
+				Background:  hp.Theme.Color.Gray3,
+				Clickable:   hp.scrimClick,
+				Orientation: layout.Vertical,
+			}.Layout(gtx)
+		}),
+		layout.Stacked(func(gtx layout.Context) layout.Dimensions {
+			return hp.layoutSidebar(gtx)
+		}),
 	)
 }
 
