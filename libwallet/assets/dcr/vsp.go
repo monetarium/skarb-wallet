@@ -16,9 +16,24 @@ import (
 	"github.com/monetarium/skarb-wallet/libwallet/utils"
 )
 
-const (
-	defaultVSPsURL = "https://api.decred.org/?c=vsp"
-)
+// builtinVSPs returns the VSP hosts shipped with the wallet for a network.
+//
+// Decred discovers VSPs through a directory service (api.decred.org/?c=vsp);
+// Monetarium runs no such service, and the Decred one only lists VSPs for
+// Decred's own chains, so querying it produced hosts that can never serve a
+// Monetarium ticket. The list is compiled in instead. Users can still add any
+// other host from the VSP selector — those are stored per-wallet in the
+// wallet database (vspDbData.SavedHosts) and are merged with this list.
+func builtinVSPs(net utils.NetworkType) []string {
+	switch net {
+	case utils.Testnet:
+		return []string{"https://vsp.testnet.monetarium.online"}
+	default:
+		// No mainnet VSP is running yet. Until one is, the selector shows
+		// only hosts the user added.
+		return nil
+	}
+}
 
 // VSPClient loads or creates a VSP client instance for the specified host.
 func (asset *Asset) VSPClient(account int32, host string, pubKey []byte) (*dcrW.VSPClient, error) {
@@ -100,7 +115,6 @@ func (asset *Asset) SaveVSP(host string) (err error) {
 		return err
 	}
 
-	// TODO: defaultVSPs() uses strings.Contains(network, vspInfo.Network).
 	if info.Network != string(asset.NetType()) {
 		return fmt.Errorf("invalid net %s", info.Network)
 	}
@@ -166,22 +180,27 @@ func (asset *Asset) ReloadVSPList(ctx context.Context) {
 	}
 
 	network := string(asset.NetType())
-	otherVSPHosts, err := defaultVSPs()
-	if err != nil {
-		log.Debugf("get default vsp list error: %v", err)
-	}
-
-	for url, VSPInfo := range otherVSPHosts {
-		if !strings.Contains(network, VSPInfo.Network) {
-			continue
-		}
-
-		host := "https://" + url
+	for _, host := range builtinVSPs(asset.NetType()) {
 		if _, wasAdded := vspList[host]; wasAdded {
+			continue // the user saved this one too
+		}
+
+		vspInfo, err := vspInfo(host)
+		if err != nil {
+			// A shipped host being unreachable is not the user's problem to
+			// see: it is either down or not deployed yet. Leave it out of the
+			// list and log for diagnostics.
+			log.Debugf("get vsp info error for builtin host %s: %v", host, err)
 			continue
 		}
 
-		vspList[host] = VSPInfo
+		if !strings.Contains(network, vspInfo.Network) {
+			log.Warnf("builtin vsp %s serves network %q, wallet is on %q; skipping",
+				host, vspInfo.Network, network)
+			continue
+		}
+
+		vspList[host] = vspInfo
 		if ctx.Err() != nil {
 			return // context canceled, abort
 		}
@@ -216,20 +235,4 @@ func vspInfo(vspHost string) (*vspd.VspInfoResponse, error) {
 	// Validate server response.
 	err = vspdClient.ValidateServerSignature(resp, respBytes, vspInfoResponse.PubKey)
 	return vspInfoResponse, err
-}
-
-// defaultVSPs returns a list of known VSPs.
-func defaultVSPs() (map[string]*vspd.VspInfoResponse, error) {
-	var vspInfoResponse map[string]*vspd.VspInfoResponse
-	req := &utils.ReqConfig{
-		Method:  http.MethodGet,
-		HTTPURL: defaultVSPsURL,
-	}
-
-	if _, err := utils.HTTPRequest(req, &vspInfoResponse); err != nil {
-		return nil, err
-	}
-
-	// The above API does not return the pubKeys for the VSPs.
-	return vspInfoResponse, nil
 }

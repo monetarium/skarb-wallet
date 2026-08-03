@@ -285,11 +285,14 @@ func (c *VSPClient) SetVoteChoice(ctx context.Context, ticket *VSPTicket,
 	// Retrieve current voting preferences from VSP.
 	status, err := c.status(ctx, ticket)
 	if err != nil {
-		if errors.Is(err, errors.Locked) {
-			return err
-		}
+		// Upstream logged this and returned nil, treating an unreachable or
+		// erroring VSP as a completed update. The caller then reports success
+		// while the VSP keeps voting the previous choice — exactly the silent
+		// failure this call exists to prevent. Skarb surfaces the error
+		// instead; the sole caller (libwallet SetVoteChoice) reports which
+		// tickets did not get the new choice.
 		c.log.Errorf("Could not check status of VSP ticket %s: %v", ticket, err)
-		return nil
+		return err
 	}
 
 	// Check for any mismatch between the provided voting preferences and the
