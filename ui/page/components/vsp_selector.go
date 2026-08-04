@@ -197,6 +197,24 @@ func newVSPSelectorModal(l *load.Load, dcrWallet *dcr.Asset) *vspSelectorModal {
 	return v
 }
 
+// normalizeVSPHost turns what a user types into the canonical host string the
+// wallet stores and calls: an absolute https URL with no trailing slash.
+//
+// A bare domain gets https:// — every VSP worth talking to serves TLS, and an
+// http:// address would expose which tickets belong to whom. An explicit
+// scheme the user typed is kept as-is, so a plain-HTTP host on a local test
+// network stays reachable. Returns "" when there is nothing usable.
+func normalizeVSPHost(input string) string {
+	host := strings.TrimSpace(input)
+	if host == "" {
+		return ""
+	}
+	if !strings.Contains(host, "://") {
+		host = "https://" + host
+	}
+	return strings.TrimSuffix(host, "/")
+}
+
 func (v *vspSelectorModal) OnResume() {
 	if len(v.dcrImpl.KnownVSPs()) == 0 {
 		go func() {
@@ -213,12 +231,20 @@ func (v *vspSelectorModal) OnResume() {
 func (v *vspSelectorModal) Handle(gtx C) {
 	v.addVSP.SetEnabled(v.editorsNotEmpty(v.inputVSP.Editor))
 	if v.addVSP.Clicked(gtx) {
-		if !utils.ValidateHost(v.inputVSP.Editor.Text()) {
+		// A VSP is published as a domain, so that is what people type. Bare
+		// domains fail ValidateHost (url.ParseRequestURI wants an absolute
+		// URI) and used to be rejected with "is not a valid IP or URL
+		// address" — an error about the user's typing when the address was
+		// perfectly correct. Fill in the scheme instead, and store the host
+		// in one canonical shape so the same VSP entered three ways is one
+		// entry rather than three.
+		host := normalizeVSPHost(v.inputVSP.Editor.Text())
+		if host == "" || !utils.ValidateHost(host) {
 			v.inputVSP.SetError(values.StringF(values.StrValidateHostErr, v.inputVSP.Editor.Text()))
 			return
 		}
 		go func() {
-			err := v.dcrImpl.SaveVSP(v.inputVSP.Editor.Text())
+			err := v.dcrImpl.SaveVSP(host)
 			if err != nil {
 				errModal := modal.NewErrorModal(v.Load, err.Error(), modal.DefaultClickFunc())
 				v.ParentWindow().ShowModal(errModal)
