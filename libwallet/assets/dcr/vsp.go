@@ -28,9 +28,9 @@ func builtinVSPs(net utils.NetworkType) []string {
 	switch net {
 	case utils.Testnet:
 		return []string{"https://vsp.testnet.monetarium.online"}
+	case utils.Mainnet:
+		return []string{"https://vsp.monetarium.online"}
 	default:
-		// No mainnet VSP is running yet. Until one is, the selector shows
-		// only hosts the user added.
 		return nil
 	}
 }

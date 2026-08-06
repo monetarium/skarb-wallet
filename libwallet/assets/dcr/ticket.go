@@ -207,6 +207,56 @@ func (asset *Asset) PurchaseTickets(account, numTickets int32, vspHost, passphra
 	return ticketsResponse.TicketHashes, err
 }
 
+// ErrNoVSPRecord reports that this wallet holds no VSP record for a ticket.
+// It means only that: the wallet did not register the ticket with a VSP
+// itself. A ticket bought solo looks exactly like one bought through a VSP on
+// another device and merely observed here, so callers must not present this
+// as "bought solo".
+var ErrNoVSPRecord = errors.New("no local vsp record for ticket")
+
+// VSPTicketRecord returns what the wallet database itself knows about a
+// ticket's VSP: the host, the fee transaction and whether the VSP confirmed
+// it. It reads the database only — no private key, no network — so it works
+// on a locked wallet, which is the normal state while browsing.
+//
+// VSPTicketInfo below answers a different question (what does the VSP say
+// right now) and needs both the voting key and the network for it. Using that
+// one to fill a details card meant the card asked for a signature it did not
+// need, got ErrWalletLocked, and displayed "not available" for a ticket the
+// wallet had a perfectly good record of.
+func (asset *Asset) VSPTicketRecord(hash string) (*VSPTicketInfo, error) {
+	if !asset.WalletOpened() {
+		return nil, utils.ErrDCRNotInitialized
+	}
+
+	ticketHash, err := chainhash.NewHashFromStr(hash)
+	if err != nil {
+		return nil, err
+	}
+
+	ctx, _ := asset.ShutdownContextWithCancel()
+	host, err := asset.Internal().DCR.VSPHostForTicket(ctx, ticketHash)
+	if err != nil || host == "" {
+		// The udb lookup reports a missing record as NotExist; anything else
+		// is a real read failure and worth surfacing separately.
+		if err != nil && !errors.Is(err, errors.E(errors.NotExist)) {
+			log.Warnf("VSPTicketRecord: reading host for ticket %s: %v", hash, err)
+		}
+		return nil, ErrNoVSPRecord
+	}
+
+	info := &VSPTicketInfo{VSP: host}
+
+	if feeHash, err := asset.Internal().DCR.VSPFeeHashForTicket(ctx, ticketHash); err == nil {
+		info.FeeTxHash = feeHash.String()
+	}
+	if confirmed, err := asset.Internal().DCR.IsVSPTicketConfirmed(ctx, ticketHash); err == nil {
+		info.ConfirmedByVSP = confirmed
+	}
+
+	return info, nil
+}
+
 // VSPTicketInfo returns vsp-related info for a given ticket. Returns an error
 // if the ticket is not yet assigned to a VSP.
 func (asset *Asset) VSPTicketInfo(hash string) (*VSPTicketInfo, error) {

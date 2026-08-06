@@ -1,6 +1,7 @@
 package transaction
 
 import (
+	"errors"
 	"fmt"
 	"image"
 	"io"
@@ -305,16 +306,28 @@ func (pg *TxDetailsPage) OnNavigatedTo() {
 				host := values.String(values.StrNotAvailable)
 				fees := values.String(values.StrNotAvailable)
 
+				// Read the wallet's own VSP record. This used to call
+				// VSPTicketInfo, which asks the VSP itself and therefore
+				// needs the voting key: on a locked wallet — the state the
+				// card is always opened in — it returned ErrWalletLocked,
+				// the error was swallowed as routine, and a VSP-managed
+				// ticket displayed "not available". The host and fee shown
+				// here live in the wallet database and need no key at all.
 				var feeTxHash string
-				info, err := dcrImp.VSPTicketInfo(pg.transaction.Hash)
+				info, err := dcrImp.VSPTicketRecord(pg.transaction.Hash)
 				if info != nil {
 					host = info.VSP
 					feeTxHash = info.FeeTxHash
 				}
 				if err != nil {
-					if err.Error() != libutils.ErrWalletLocked {
-						// Ignore the wallet is locked error.
-						log.Errorf("VSPTicketInfo error: %v", err)
+					if errors.Is(err, dcr.ErrNoVSPRecord) {
+						// No record is not the same as "bought solo": a
+						// ticket bought through a VSP on another device and
+						// only observed here looks identical. Say what is
+						// actually known.
+						host = values.String(values.StrNoLocalVSPRecord)
+					} else {
+						log.Errorf("VSPTicketRecord error: %v", err)
 					}
 					pg.publishVSPInfo(host, fees)
 					return
