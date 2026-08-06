@@ -270,17 +270,57 @@ func (mgr *AssetsManager) OpenWallets(startupPassphrase string) error {
 		return err
 	}
 
+	// One wallet that refuses to open must not take the whole network down
+	// with it. Returning on the first error left every other wallet closed,
+	// and the caller (start_page) then had nothing to show — the app sat on
+	// its loading screen forever with no wallet, no sync and no message. A
+	// legacy mainnet wallet whose stored account xpub still carries the
+	// retired dpub HD prefix does exactly that.
+	//
+	// Failures are parked in BadWallets, the same place prepareExistingWallets
+	// puts load failures, so the UI can list them and offer a remedy.
+	var (
+		opened int
+		failed []error
+	)
 	for _, wallet := range mgr.AllWallets() {
 		select {
 		case <-mgr.shuttingDown:
 			return nil
 		default:
-			if err := wallet.OpenWallet(); err != nil {
-				return err
-			}
 		}
+
+		if err := wallet.OpenWallet(); err != nil {
+			log.Errorf("Failed to open wallet %d (%s): %v",
+				wallet.GetWalletID(), wallet.GetWalletName(), err)
+			failed = append(failed, fmt.Errorf("%s: %w", wallet.GetWalletName(), err))
+			mgr.markWalletBad(wallet)
+			continue
+		}
+		opened++
+	}
+
+	// Only a total failure is worth failing the caller for: with at least one
+	// wallet open the app is usable, and the bad ones are listed as such.
+	if opened == 0 && len(failed) > 0 {
+		return errors.Join(failed...)
 	}
 	return nil
+}
+
+// markWalletBad moves a wallet that could not be opened out of the live set
+// and into BadWallets. Both maps are guarded by walletsMu because the UI
+// iterates them from the render goroutine.
+func (mgr *AssetsManager) markWalletBad(wallet sharedW.Asset) {
+	dcrWallet, ok := wallet.(*dcr.Asset)
+	if !ok {
+		return
+	}
+
+	mgr.walletsMu.Lock()
+	defer mgr.walletsMu.Unlock()
+	mgr.Assets.DCR.BadWallets[wallet.GetWalletID()] = dcrWallet.Wallet
+	delete(mgr.Assets.DCR.Wallets, wallet.GetWalletID())
 }
 
 // DCRBadWallets returns a map of all bad DCR wallets.

@@ -226,6 +226,15 @@ func bootstrapPeerForNet(params *chaincfg.Params) string {
 }
 
 func (asset *Asset) SpvSync() error {
+	// A wallet that failed to open has a nil internal *wallet.Wallet, and
+	// spv.NewSyncer below dereferences it — the app died with a SIGSEGV
+	// instead of reporting the open failure. Since one bad wallet no longer
+	// aborts OpenWallets, callers can now reach this with an unopened wallet,
+	// so say so rather than crash.
+	if !asset.WalletOpened() {
+		return utils.ErrDCRNotInitialized
+	}
+
 	// prevent an attempt to sync when the previous syncing has not been canceled
 	if asset.IsSyncing() || asset.IsSynced() {
 		return errors.New(utils.ErrSyncAlreadyInProgress)

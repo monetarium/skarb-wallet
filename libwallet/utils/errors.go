@@ -5,8 +5,8 @@ import (
 	"net"
 	"strings"
 
-	"github.com/monetarium/monetarium-wallet/errors"
 	"github.com/asdine/storm"
+	"github.com/monetarium/monetarium-wallet/errors"
 )
 
 const (
@@ -65,7 +65,25 @@ var (
 )
 
 // todo, should update this method to translate more error kinds.
+// ErrLegacyHDKeyWallet is reported for a wallet database whose stored account
+// extended key still uses the network's retired HD version bytes. Monetarium
+// changed the mainnet HD key IDs (dprv/dpub -> mprv/mpub) and the SLIP-0044
+// coin type; a wallet created before that change cannot be opened by the
+// current build, and the underlying hdkeychain error ("the provided
+// serialized extended key is for the wrong network") surfaces as a bare I/O
+// error that tells the user nothing about what to do.
+const ErrLegacyHDKeyWallet = "legacy_hd_key_wallet"
+
+// legacyHDKeyMarker is the hdkeychain wrong-network message. Matching on text
+// is unpleasant, but the error crosses two module boundaries (hdkeychain ->
+// udb -> wallet.Open) wrapped as errors.IO, so the kind alone cannot tell
+// this apart from a genuinely unreadable file.
+const legacyHDKeyMarker = "extended key is for the wrong network"
+
 func TranslateError(err error) error {
+	if err != nil && strings.Contains(err.Error(), legacyHDKeyMarker) {
+		return errors.New(ErrLegacyHDKeyWallet)
+	}
 	if err, ok := err.(*errors.Error); ok {
 		switch err.Kind {
 		case errors.InsufficientBalance:
