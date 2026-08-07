@@ -731,17 +731,27 @@ func (pg *TransactionsPage) loadAllTransactions(v txView) ([]*multiWalletTx, err
 	}
 	dcr.ApplySplitAmounts(all)
 
-	// Under search, price EVERY split up front — batched, one ticket fetch per
-	// wallet — BEFORE keepForTab's search gate reads amounts. Two traps this
-	// shape avoids:
-	//   * the default no-split view fetches TxFilterAll, which omits the
-	//     ticket rows dcr.ApplySplitAmounts needs — a split still holds its
-	//     fee here, so an amount search for the DISPLAYED value would drop it
-	//     at the gate (chicken-and-egg: the gate reads the unpriced amount);
-	//   * gating the pricing on the per-row search match instead re-paged
-	//     tickets per split per keystroke — "t"/"s" is a substring of nearly
-	//     every address, so short queries matched almost all rows.
-	if v.searchKey != "" {
+	// Price EVERY split up front — batched, one ticket fetch per wallet —
+	// for the views whose coarse superset carries no ticket rows, because the
+	// ApplySplitAmounts pass above cannot price a split without the ticket
+	// that spends it and silently leaves the stored fee in place:
+	//   * TxFilterRegularList ("All types") — Type in {Regular,Mixed}
+	//   * TxFilterSplit ("Split", on both the Regular and Staking tabs)
+	//   * anything under search, where keepForTab reads the DISPLAYED amount
+	//     before it has been priced (chicken-and-egg), and where
+	//     TxFilterRegularNoSplit stops hiding splits.
+	// Both supersets were ticket-bearing until 049ae26 narrowed them
+	// (walletdb/filter.go), which is what broke the Regular tab's split rows.
+	//
+	// Deliberately NOT unconditional. The unsearched default
+	// TxFilterRegularNoSplit and TxFilterStakeFee both fetch TxFilterAll,
+	// whose superset holds splits but no tickets: pricing there would run a
+	// full ticket scan per wallet — repeated on every block, since the tx
+	// notification marks txCache dirty — to produce rows keepForTab then
+	// discards. TxFilterStakingList needs nothing either: its superset still
+	// carries the tickets, so the pass above already priced it.
+	if v.searchKey != "" || v.txFilter == utils.TxFilterSplit ||
+		v.txFilter == utils.TxFilterRegularList {
 		pg.priceAllSplits(raw)
 	}
 
@@ -887,14 +897,18 @@ func coarseFetchFilter(logical int32) int32 {
 	case utils.TxFilterSplit, utils.TxFilterRegularList, utils.TxFilterStakingList,
 		utils.TxFilterRewardList, utils.TxFilterRewardPoW,
 		utils.TxFilterRewardPoS, utils.TxFilterMissed:
-		// TxFilterSplit and TxFilterRegularList (which now includes split
-		// rows) are deliberately NOT collapsed onto TxFilterAll even
-		// though splits are Regular-typed: dcr.ApplySplitAmounts needs the
-		// ticket rows alongside the splits to price them, and TxFilterAll
-		// excludes tickets.
-		// The reward filters need vote rows that TxFilterAll omits. Pass
-		// the logical value through so prepareTxQuery's default returns
-		// q.True().
+		// Pass the logical value through: prepareTxQuery
+		// (walletdata/filter.go) serves each of these its own type-narrowed
+		// superset. It no longer falls through to q.True() — 049ae26 gave
+		// them explicit cases — so these are NOT ticket-bearing supersets
+		// the way this comment used to claim:
+		//   TxFilterRegularList -> Type in {Regular,Mixed}, IsStakeFee false
+		//   TxFilterSplit       -> Type == Regular
+		// Both therefore arrive WITHOUT the ticket rows that
+		// dcr.ApplySplitAmounts needs to price a split, which is why
+		// loadAllTransactions calls priceAllSplits (it fetches the tickets
+		// itself) for exactly these two filters. TxFilterStakingList is the
+		// exception that still carries tickets and needs no such help.
 		return logical
 	default:
 		return logical // 0-14 are DB-supported and already exact

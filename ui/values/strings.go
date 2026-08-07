@@ -897,6 +897,7 @@ const (
 	StrVotingWallet                          = "votingWallet"
 	StrVsp                                   = "vsp"
 	StrVSPAPI                                = "vspAPI"
+	StrNoLocalVSPRecord                      = "noLocalVSPRecord"
 	StrVspFee                                = "vspFee"
 	StrWaitingAuthor                         = "waitingForAuthor"
 	StrWaitingForAdmin                       = "waitingForAdmin"

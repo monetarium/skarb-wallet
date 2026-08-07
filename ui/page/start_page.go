@@ -5,6 +5,7 @@ import (
 	"os"
 	"path"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"gioui.org/font"
@@ -87,6 +88,14 @@ type startPage struct {
 	loading          bool
 	isQuitting       bool
 	displayStartPage bool
+
+	// openErr carries a wallet-open failure from the background goroutine to
+	// the UI thread. Without it the error was discarded and the app sat on
+	// the loading screen for good: no wallet, no sync, nothing said. Modals
+	// and `loading` are touched only from HandleUserInteractions (CLAUDE.md
+	// §3 — never mutate Layout-read state off the UI thread).
+	openErr        atomic.Value
+	pendingOpenErr atomic.Bool
 
 	currentPageIndex            int
 	selectedSettingsOptionIndex int
@@ -295,6 +304,17 @@ func (sp *startPage) openWalletsAndDisplayHomePage(password string) error {
 // displayed.
 // Part of the load.Page interface.
 func (sp *startPage) HandleUserInteractions(gtx C) {
+	// Drain a failed wallet open first: stop pretending to load and say what
+	// went wrong, on desktop and mobile alike.
+	if sp.pendingOpenErr.CompareAndSwap(true, false) {
+		sp.loading = false
+		msg, _ := sp.openErr.Load().(string)
+		if msg == "" {
+			msg = values.String(values.StrDataFileErrorTitle)
+		}
+		sp.ParentWindow().ShowModal(modal.NewErrorModal(sp.Load, msg, modal.DefaultClickFunc()))
+	}
+
 	if sp.networkSwitchButton.Clicked(gtx) {
 		newNetType := libutils.Testnet
 		if sp.AssetsManager.NetType() == libutils.Testnet {
@@ -891,7 +911,13 @@ func (sp *startPage) checkStartupSecurityAndStartApp() {
 		sp.unlock()
 	} else {
 		sp.loading = true
-		go func() { _ = sp.openWalletsAndDisplayHomePage("") }()
+		go func() {
+			if err := sp.openWalletsAndDisplayHomePage(""); err != nil {
+				sp.openErr.Store(err.Error())
+				sp.pendingOpenErr.Store(true)
+				sp.ParentWindow().Reload()
+			}
+		}()
 	}
 }
 

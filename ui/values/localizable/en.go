@@ -425,6 +425,7 @@ const EN = `
 "notAllowed" = "%s API not allowed by current network settings."
 "notApplicable" = "N/A"
 "notAvailable" = "Not available"
+"noLocalVSPRecord" = "No record on this device"
 "notBackedUp" = "Backup needed"
 "notConnected" = "Not connected to decred network"
 "note" = "Note"
