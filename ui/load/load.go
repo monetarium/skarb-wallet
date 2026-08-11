@@ -19,6 +19,12 @@ import (
 
 type NeedUnlockRestore func(bool)
 
+// ClearWalletTabMemory drops per-wallet remembered detail tabs (Info/Send/…).
+// Set by the wallet UI package at init so network switches can clear tab
+// memory without a load → wallet import cycle. Wallet IDs restart per net;
+// without this a testnet "Transactions" tab reopens on mainnet wallet #1.
+var ClearWalletTabMemory func()
+
 type DCRUSDTBittrex struct {
 	LastTradeRate string
 }
