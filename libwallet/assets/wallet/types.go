@@ -54,6 +54,11 @@ type AuthInfo struct {
 	PrivatePass     string
 	PrivatePassType int32
 	WordSeedType    WordSeedType
+	// UseLegacyHDCoinType (mainnet only): when true, keeps BIP44 coin type
+	// 42 (Legacy). Default false promotes to official SLIP-0044 9508
+	// (m/44'/9508'/…). Ignored on testnet (single HD path). Use legacy
+	// only when recovering a mainnet wallet that already spent on 42.
+	UseLegacyHDCoinType bool
 }
 
 type BlockInfo struct {

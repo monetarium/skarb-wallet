@@ -77,19 +77,26 @@ type SeedRestore struct {
 
 	walletType      libutils.AssetType
 	getWordSeedType func() sharedW.WordSeedType
+	// useLegacyHDCoinType keeps coin type 42 when true; default false → 9508.
+	useLegacyHDCoinType bool
 }
 
-func NewSeedRestorePage(l *load.Load, walletName string, walletType libutils.AssetType, onRestoreComplete func(newWallet sharedW.Asset), getWordSeedType func() sharedW.WordSeedType) *SeedRestore {
+func NewSeedRestorePage(l *load.Load, walletName string, walletType libutils.AssetType, onRestoreComplete func(newWallet sharedW.Asset), getWordSeedType func() sharedW.WordSeedType, useLegacyHDCoinType ...bool) *SeedRestore {
+	legacy := false
+	if len(useLegacyHDCoinType) > 0 {
+		legacy = useLegacyHDCoinType[0]
+	}
 	pg := &SeedRestore{
-		Load:            l,
-		restoreComplete: onRestoreComplete,
-		seedList:        &layout.List{Axis: layout.Vertical},
-		scrollContainer: &widget.List{List: layout.List{Axis: layout.Vertical, Alignment: layout.Middle}},
-		suggestionLimit: 3,
-		openPopupIndex:  -1,
-		walletName:      walletName,
-		walletType:      walletType,
-		getWordSeedType: getWordSeedType,
+		Load:                l,
+		restoreComplete:     onRestoreComplete,
+		seedList:            &layout.List{Axis: layout.Vertical},
+		scrollContainer:     &widget.List{List: layout.List{Axis: layout.Vertical, Alignment: layout.Middle}},
+		suggestionLimit:     3,
+		openPopupIndex:      -1,
+		walletName:          walletName,
+		walletType:          walletType,
+		getWordSeedType:     getWordSeedType,
+		useLegacyHDCoinType: legacy,
 	}
 
 	pg.optionsMenuCard = cryptomaterial.Card{Color: pg.Theme.Color.Surface}
@@ -521,7 +528,7 @@ func (pg *SeedRestore) HandleUserInteractions(gtx C) {
 			ShowWalletInfoTip(true).
 			SetParent(pg).
 			SetPositiveButtonCallback(func(_, password string, m *modal.CreatePasswordModal) bool {
-				importedWallet, err := pg.AssetsManager.RestoreWallet(pg.walletType, pg.walletName, pg.seedPhrase, password, sharedW.PassphraseTypePass, pg.getWordSeedType())
+				importedWallet, err := pg.AssetsManager.RestoreWallet(pg.walletType, pg.walletName, pg.seedPhrase, password, sharedW.PassphraseTypePass, pg.getWordSeedType(), pg.useLegacyHDCoinType)
 				if err != nil {
 					errString := err.Error()
 					if err.Error() == libutils.ErrExist {

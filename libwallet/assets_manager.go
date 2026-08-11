@@ -506,9 +506,10 @@ func (mgr *AssetsManager) WalletWithSeed(walletType utils.AssetType, seedMnemoni
 }
 
 // RestoreWallet restores a wallet from the given seed.
-func (mgr *AssetsManager) RestoreWallet(walletType utils.AssetType, walletName, seedMnemonic, privatePassphrase string, privatePassphraseType int32, wordSeedType sharedW.WordSeedType) (sharedW.Asset, error) {
+// useLegacyHDCoinType selects BIP44 coin type 42; default false promotes to 9508.
+func (mgr *AssetsManager) RestoreWallet(walletType utils.AssetType, walletName, seedMnemonic, privatePassphrase string, privatePassphraseType int32, wordSeedType sharedW.WordSeedType, useLegacyHDCoinType ...bool) (sharedW.Asset, error) {
 	if walletType == utils.DCRWalletAsset {
-		return mgr.RestoreDCRWallet(walletName, seedMnemonic, privatePassphrase, wordSeedType, privatePassphraseType)
+		return mgr.RestoreDCRWallet(walletName, seedMnemonic, privatePassphrase, wordSeedType, privatePassphraseType, useLegacyHDCoinType...)
 	}
 	return nil, utils.ErrAssetUnknown
 }

@@ -23,13 +23,18 @@ func initializeDCRWalletParameters(netType utils.NetworkType) (*chaincfg.Params,
 	return chainParams, nil
 }
 
-// CreateNewDCRWallet creates a new DCR wallet and returns it.
-func (mgr *AssetsManager) CreateNewDCRWallet(walletName, privatePassphrase string, privatePassphraseType int32, wordSeedType sharedW.WordSeedType) (sharedW.Asset, error) {
+// CreateNewDCRWallet creates a new Monetarium wallet and returns it.
+// useLegacyHDCoinType selects BIP44 coin type 42 (Legacy). The default false
+// promotes the wallet to official SLIP-0044 coin type 9508 after create.
+func (mgr *AssetsManager) CreateNewDCRWallet(walletName, privatePassphrase string, privatePassphraseType int32, wordSeedType sharedW.WordSeedType, useLegacyHDCoinType ...bool) (sharedW.Asset, error) {
 	pass := &sharedW.AuthInfo{
 		Name:            walletName,
 		PrivatePass:     privatePassphrase,
 		PrivatePassType: privatePassphraseType,
 		WordSeedType:    wordSeedType,
+	}
+	if len(useLegacyHDCoinType) > 0 {
+		pass.UseLegacyHDCoinType = useLegacyHDCoinType[0]
 	}
 	wallet, err := dcr.CreateNewWallet(pass, mgr.params)
 	if err != nil {
@@ -59,13 +64,20 @@ func (mgr *AssetsManager) CreateNewDCRWatchOnlyWallet(walletName, extendedPublic
 	return wallet, nil
 }
 
-// RestoreDCRWallet restores a DCR wallet from a seed and returns it.
-func (mgr *AssetsManager) RestoreDCRWallet(walletName, seedMnemonic, privatePassphrase string, wordSeedType sharedW.WordSeedType, privatePassphraseType int32) (sharedW.Asset, error) {
+// RestoreDCRWallet restores a Monetarium wallet from a seed and returns it.
+// useLegacyHDCoinType selects BIP44 coin type 42. Default false promotes to
+// SLIP-0044 9508. Enable legacy when recovering a seed that already spent on
+// the old path (otherwise address discovery will not see those UTXOs until
+// the user recreates with legacy).
+func (mgr *AssetsManager) RestoreDCRWallet(walletName, seedMnemonic, privatePassphrase string, wordSeedType sharedW.WordSeedType, privatePassphraseType int32, useLegacyHDCoinType ...bool) (sharedW.Asset, error) {
 	pass := &sharedW.AuthInfo{
 		Name:            walletName,
 		PrivatePass:     privatePassphrase,
 		PrivatePassType: privatePassphraseType,
 		WordSeedType:    wordSeedType,
+	}
+	if len(useLegacyHDCoinType) > 0 {
+		pass.UseLegacyHDCoinType = useLegacyHDCoinType[0]
 	}
 	wallet, err := dcr.RestoreWallet(seedMnemonic, pass, mgr.params)
 	if err != nil {

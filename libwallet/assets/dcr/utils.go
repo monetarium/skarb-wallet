@@ -25,8 +25,11 @@ const (
 
 	TestnetHDPath       = "m / 44' / 1' / "
 	LegacyTestnetHDPath = "m / 44’ / 11’ / "
-	MainnetHDPath       = "m / 44' / 42' / "
-	LegacyMainnetHDPath = "m / 44’ / 20’ / "
+	// MainnetHDPath is the official Monetarium SLIP-0044 path (coin type 9508).
+	// LegacyMainnetHDPath (42) is the previous path; still available at wallet
+	// create time via the "legacy HD" switch for restores of pre-9508 wallets.
+	MainnetHDPath       = "m / 44' / 9508' / "
+	LegacyMainnetHDPath = "m / 44' / 42' / "
 
 	// GenesisTimestampMainnet represents the genesis timestamp for the DCR mainnet.
 	GenesisTimestampMainnet = 1454954400

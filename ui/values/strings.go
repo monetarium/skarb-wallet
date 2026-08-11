@@ -1130,6 +1130,8 @@ const (
 	StrNewUpdateText                         = "newUpdateText"
 	StrUpdateAvailable                       = "updateAvailable"
 	Str12WordSeed                            = "12WordSeed"
+	StrLegacyHDCoinType                      = "legacyHDCoinType"
+	StrLegacyHDCoinTypeInfo                  = "legacyHDCoinTypeInfo"
 	Str24WordSeed                            = "24WordSeed"
 	Str33WordSeed                            = "33WordSeed"
 	StrWordSeedType                          = "wordSeedType"

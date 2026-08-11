@@ -41,6 +41,10 @@ type CreateWalletParams struct {
 	PubPassphrase  []byte
 	PrivPassphrase []byte
 	Seed           []byte
+	// UseLegacyHDCoinType keeps the active BIP44 coin type at chaincfg
+	// LegacyCoinType (mainnet 42). Default false promotes to
+	// SLIP0044CoinType (mainnet 9508) immediately after create.
+	UseLegacyHDCoinType bool
 }
 
 // AssetLoader defines the interface exported by the loader implementation

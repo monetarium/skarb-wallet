@@ -51,24 +51,28 @@ func (l logWriter) Write(p []byte) (n int, err error) {
 }
 
 var (
-	dcrLogger, mainLogger = "dcr.log", libwallet.LogFilename
+	// monLogger is the on-disk name for the chain/SPV log file (was dcr.log
+	// under the Decred fork). mainLogger stays skarb.log via libwallet.
+	monLogger, mainLogger = "mon.log", libwallet.LogFilename
 
-	dcrBackendLog = slog.NewBackend(logWriter{dcrLogger})
+	monBackendLog = slog.NewBackend(logWriter{monLogger})
 	backendLog    = slog.NewBackend(logWriter{mainLogger})
 
 	logRotators map[string]*rotator.Rotator
 
-	log          = backendLog.Logger("CRPW")
+	log          = backendLog.Logger("SKRB")
 	sharedWLog   = backendLog.Logger("SHWL")
 	winLog       = backendLog.Logger("UI")
 	dlwlLog      = backendLog.Logger("DLWL")
 	amgrLog      = backendLog.Logger("AMGR")
 	cmgrLog      = backendLog.Logger("CMGR")
-	dcrLog       = dcrBackendLog.Logger("DCR")
-	syncLog      = dcrBackendLog.Logger("SYNC")
-	tkbyLog      = dcrBackendLog.Logger("TKBY")
-	dcrWalletLog = dcrBackendLog.Logger("WLLT")
-	dcrSpv       = dcrBackendLog.Logger("DCR-S")
+	// MON / MON-S replace the Decred-era DCR / DCR-S subsystem tags so
+	// Wallet log viewers read as Monetarium, not Decred.
+	monLog       = monBackendLog.Logger("MON")
+	syncLog      = monBackendLog.Logger("SYNC")
+	tkbyLog      = monBackendLog.Logger("TKBY")
+	monWalletLog = monBackendLog.Logger("WLLT")
+	monSpv       = monBackendLog.Logger("MON-S")
 )
 
 func init() {
@@ -78,19 +82,19 @@ func init() {
 	send.UseLogger(winLog)
 	root.UseLogger(winLog)
 	libwallet.UseLogger(dlwlLog)
-	dcr.UseLogger(dcrLog)
+	dcr.UseLogger(monLog)
 	load.UseLogger(log)
 	components.UseLogger(winLog)
 	transaction.UseLogger(winLog)
 	info.UseLogger(winLog)
 	modal.UseLogger(winLog)
-	addrmgr.UseLogger(dcrLog)
-	connmgr.UseLogger(dcrLog)
+	addrmgr.UseLogger(monLog)
+	connmgr.UseLogger(monLog)
 	p2p.UseLogger(syncLog)
 	ticketbuyer.UseLogger(tkbyLog)
-	udb.UseLogger(dcrWalletLog)
-	dcrw.UseLogger(dcrLog)
-	spv.UseLogger(dcrSpv)
+	udb.UseLogger(monWalletLog)
+	dcrw.UseLogger(monLog)
+	spv.UseLogger(monSpv)
 	account.UseLogger(winLog)
 	wallet.UseLogger(winLog)
 	receive.UseLogger(winLog)
@@ -102,21 +106,22 @@ func init() {
 	// through block ...", "Transactions synced ...", peer connect/disconnect
 	// reasons and the actual cause of syncer.Run returning early. We need
 	// those at INF while the chain layer is still maturing.
-	dcrSpv.SetLevel(slog.LevelInfo)
+	monSpv.SetLevel(slog.LevelInfo)
 	syncLog.SetLevel(slog.LevelInfo)
 }
 
 var subsystemSLoggers = map[string]slog.Logger{
-	"DLWL": dlwlLog,
-	"DCR":  dcrLog,
-	"UI":   winLog,
-	"CRPW": log,
-	"AMGR": amgrLog,
-	"CMGR": cmgrLog,
-	"SYNC": syncLog,
-	"TKBY": tkbyLog,
-	"WLLT": dcrWalletLog,
-	"SHWL": sharedWLog,
+	"DLWL":  dlwlLog,
+	"MON":   monLog,
+	"UI":    winLog,
+	"SKRB":  log,
+	"AMGR":  amgrLog,
+	"CMGR":  cmgrLog,
+	"SYNC":  syncLog,
+	"TKBY":  tkbyLog,
+	"WLLT":  monWalletLog,
+	"SHWL":  sharedWLog,
+	"MON-S": monSpv,
 }
 
 func initLogRotator(logDir string, maxRolls int) {
@@ -127,7 +132,7 @@ func initLogRotator(logDir string, maxRolls int) {
 	}
 
 	logRotators = map[string]*rotator.Rotator{
-		dcrLogger:  nil,
+		monLogger:  nil,
 		mainLogger: nil,
 	}
 
