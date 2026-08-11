@@ -216,6 +216,10 @@ func (l *dcrLoader) CreateNewWallet(ctx context.Context, params *loader.CreateWa
 	}
 
 	// Open the newly-created wallet.
+	// When the caller asked for legacy coin type, also pin
+	// DisableCoinTypeUpgrades: otherwise the first address-discovery pass
+	// sees an empty account and auto-promotes 42 → 9508, undoing the
+	// explicit legacy choice (and any intentional new-on-42 create).
 	so := l.stakeOptions
 	cfg := &wallet.Config{
 		DB:                      db,
@@ -223,7 +227,7 @@ func (l *dcrLoader) CreateNewWallet(ctx context.Context, params *loader.CreateWa
 		VotingEnabled:           so.VotingEnabled,
 		GapLimit:                l.gapLimit,
 		AccountGapLimit:         l.accountGapLimit,
-		DisableCoinTypeUpgrades: l.disableCoinTypeUpgrades,
+		DisableCoinTypeUpgrades: l.disableCoinTypeUpgrades || params.UseLegacyHDCoinType,
 		ManualTickets:           l.manualTickets,
 		AllowHighFees:           l.allowHighFees,
 		RelayFee:                l.relayFee,
@@ -232,6 +236,18 @@ func (l *dcrLoader) CreateNewWallet(ctx context.Context, params *loader.CreateWa
 	w, err := wallet.Open(ctx, cfg)
 	if err != nil {
 		return nil, errors.E(op, err)
+	}
+
+	// Mainnet only: wallet.Create seeds the active account on LegacyCoinType
+	// (42) and parks SLIP0044 keys (9508) for a later upgrade. Monetarium's
+	// official mainnet path is 9508, so promote immediately unless the
+	// caller asked for legacy (restore of a pre-9508 wallet).
+	// Testnet keeps a single practical HD path (SLIP0044=1) — no promote /
+	// no dual-path switch; discovery handles any leftover legacy keys.
+	if !params.UseLegacyHDCoinType && l.chainParams.SLIP0044CoinType == 9508 {
+		if err := w.UpgradeToSLIP0044CoinType(ctx); err != nil {
+			return nil, errors.E(op, errors.Errorf("promote to SLIP0044 coin type: %v", err))
+		}
 	}
 
 	l.onLoaded(w, db)

@@ -39,8 +39,9 @@ const (
 	// btcLogFilename defines the btc log file name
 	btcLogFilename = "btc.log"
 
-	// dcrLogFilename defines the dcr log file name
-	dcrLogFilename = "dcr.log"
+	// monLogFilename is the chain/SPV log file (was dcr.log under the Decred
+	// fork). Kept as mon.log so Wallet log viewers match Monetarium branding.
+	monLogFilename = "mon.log"
 
 	// ltcLogFilename defines the ltc log file name
 	ltcLogFilename = "ltc.log"

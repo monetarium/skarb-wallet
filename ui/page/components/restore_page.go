@@ -47,18 +47,27 @@ type Restore struct {
 	confirmSeedButton cryptomaterial.Button
 	restoreInProgress bool
 	seedTypeDropdown  *cryptomaterial.DropDown
+	// useLegacyHDCoinType promotes (false → 9508) or keeps (true → 42) the
+	// BIP44 coin type after restore. Set at construction from the create
+	// form's checkbox.
+	useLegacyHDCoinType bool
 }
 
-func NewRestorePage(l *load.Load, walletName string, walletType libutils.AssetType, onRestoreComplete func(newWallet sharedW.Asset)) *Restore {
+func NewRestorePage(l *load.Load, walletName string, walletType libutils.AssetType, onRestoreComplete func(newWallet sharedW.Asset), useLegacyHDCoinType ...bool) *Restore {
+	legacy := false
+	if len(useLegacyHDCoinType) > 0 {
+		legacy = useLegacyHDCoinType[0]
+	}
 	pg := &Restore{
-		Load:             l,
-		GenericPageModal: app.NewGenericPageModal(CreateRestorePageID),
-		tabIndex:         0,
-		restoreComplete:  onRestoreComplete,
-		walletName:       walletName,
-		walletType:       walletType,
-		toggleSeedInput:  l.Theme.Switch(),
-		tabs:             l.Theme.SegmentedControl(tabTitles, cryptomaterial.SegmentTypeGroup),
+		Load:                l,
+		GenericPageModal:    app.NewGenericPageModal(CreateRestorePageID),
+		tabIndex:            0,
+		restoreComplete:     onRestoreComplete,
+		walletName:          walletName,
+		walletType:          walletType,
+		toggleSeedInput:     l.Theme.Switch(),
+		tabs:                l.Theme.SegmentedControl(tabTitles, cryptomaterial.SegmentTypeGroup),
+		useLegacyHDCoinType: legacy,
 	}
 
 	pg.backButton = GetBackButton(l)
@@ -86,7 +95,7 @@ func NewRestorePage(l *load.Load, walletName string, walletType libutils.AssetTy
 	// "Сід із 33 сл…".
 	pg.seedTypeDropdown = pg.Theme.NewCommonDropDown(GetWordSeedTypeDropdownItems(), defaultWordSeedType, values.MarginPadding180, values.TxDropdownGroup, false)
 
-	pg.seedRestorePage = NewSeedRestorePage(l, walletName, walletType, onRestoreComplete, pg.getWordSeedType)
+	pg.seedRestorePage = NewSeedRestorePage(l, walletName, walletType, onRestoreComplete, pg.getWordSeedType, legacy)
 
 	return pg
 }
@@ -385,7 +394,7 @@ func (pg *Restore) restoreFromSeedEditor() {
 		ShowWalletInfoTip(true).
 		SetParent(pg).
 		SetPositiveButtonCallback(func(_, password string, m *modal.CreatePasswordModal) bool {
-			importedWallet, err := pg.AssetsManager.RestoreWallet(pg.walletType, pg.walletName, seedOrHex, password, sharedW.PassphraseTypePass, wordSeedType)
+			importedWallet, err := pg.AssetsManager.RestoreWallet(pg.walletType, pg.walletName, seedOrHex, password, sharedW.PassphraseTypePass, wordSeedType, pg.useLegacyHDCoinType)
 			if err != nil {
 				errString := err.Error()
 				if err.Error() == libutils.ErrExist {

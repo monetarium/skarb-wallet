@@ -402,7 +402,7 @@ func CreateNewWallet(pass *AuthInfo, loader loader.AssetLoader,
 		if err != nil {
 			return err
 		}
-		return wallet.createWallet(pass.PrivatePass, mnemonic, pass.WordSeedType)
+		return wallet.createWallet(pass.PrivatePass, mnemonic, pass.WordSeedType, pass.UseLegacyHDCoinType)
 	}); err != nil {
 		return nil, err
 	}
@@ -416,7 +416,7 @@ func CreateNewWallet(pass *AuthInfo, loader loader.AssetLoader,
 	return wallet, nil
 }
 
-func (wallet *Wallet) createWallet(privatePassphrase, seedMnemonic string, wordSeedType WordSeedType) error {
+func (wallet *Wallet) createWallet(privatePassphrase, seedMnemonic string, wordSeedType WordSeedType, useLegacyHDCoinType bool) error {
 	log.Info("Creating Wallet")
 	if len(seedMnemonic) == 0 {
 		return errors.New(utils.ErrEmptySeed)
@@ -429,10 +429,11 @@ func (wallet *Wallet) createWallet(privatePassphrase, seedMnemonic string, wordS
 	}
 
 	params := &loader.CreateWalletParams{
-		WalletID:       strconv.Itoa(wallet.ID),
-		PubPassphrase:  []byte(w.InsecurePubPassphrase),
-		PrivPassphrase: []byte(privatePassphrase),
-		Seed:           seed,
+		WalletID:            strconv.Itoa(wallet.ID),
+		PubPassphrase:       []byte(w.InsecurePubPassphrase),
+		PrivPassphrase:      []byte(privatePassphrase),
+		Seed:                seed,
+		UseLegacyHDCoinType: useLegacyHDCoinType,
 	}
 
 	ctx, _ := wallet.ShutdownContextWithCancel()
@@ -534,7 +535,7 @@ func RestoreWallet(seedMnemonic string, pass *AuthInfo, loader loader.AssetLoade
 		if err != nil {
 			return err
 		}
-		return wallet.createWallet(pass.PrivatePass, seedMnemonic, pass.WordSeedType)
+		return wallet.createWallet(pass.PrivatePass, seedMnemonic, pass.WordSeedType, pass.UseLegacyHDCoinType)
 	}); err != nil {
 		return nil, err
 	}
@@ -808,7 +809,7 @@ func (wallet *Wallet) LogFile() string {
 	wallet.mu.RLock()
 	defer wallet.mu.RUnlock()
 	if wallet.Type == utils.DCRWalletAsset {
-		return filepath.Join(wallet.logDir, dcrLogFilename)
+		return filepath.Join(wallet.logDir, monLogFilename)
 	}
 	return ""
 }

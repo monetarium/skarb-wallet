@@ -54,6 +54,7 @@ type CreateWallet struct {
 	passwordEditor        cryptomaterial.Editor
 	confirmPasswordEditor cryptomaterial.Editor
 	watchOnlyCheckBox     cryptomaterial.CheckBoxStyle
+	legacyHDCoinTypeCheck cryptomaterial.CheckBoxStyle
 	materialLoader        material.LoaderStyle
 	seedTypeDropdown      *cryptomaterial.DropDown
 
@@ -103,9 +104,10 @@ func NewCreateWallet(l *load.Load, walletCreationSuccessCallback func(newWallet 
 		continueBtn:          l.Theme.Button(values.String(values.StrContinue)),
 		restoreBtn:           l.Theme.Button(values.String(values.StrRestore)),
 		importBtn:            l.Theme.Button(values.String(values.StrImport)),
-		watchOnlyCheckBox:    l.Theme.CheckBox(new(widget.Bool), values.String(values.StrImportWatchingOnlyWallet)),
-		selectedWalletAction: -1,
-		assetTypeError:       l.Theme.Body1(""),
+		watchOnlyCheckBox:     l.Theme.CheckBox(new(widget.Bool), values.String(values.StrImportWatchingOnlyWallet)),
+		legacyHDCoinTypeCheck: l.Theme.CheckBox(new(widget.Bool), values.String(values.StrLegacyHDCoinType)),
+		selectedWalletAction:  -1,
+		assetTypeError:        l.Theme.Body1(""),
 
 		Load:                          l,
 		walletCreationSuccessCallback: walletCreationSuccessCallback,
@@ -172,6 +174,12 @@ func NewAssetTypeDropDown(l *load.Load) *cryptomaterial.DropDown {
 
 	assetTypeDropdown := l.Theme.NewCommonDropDown(items, nil, values.MarginPadding340, values.AssetTypeDropdownGroup, false)
 	return assetTypeDropdown
+}
+
+// showLegacyHDSwitch is true only on mainnet, where Monetarium exposes two
+// BIP44 coin types (9508 actual / 42 legacy). Testnet has a single path.
+func (pg *CreateWallet) showLegacyHDSwitch() bool {
+	return pg.AssetsManager.NetType() == libutils.Mainnet
 }
 
 // OnNavigatedTo is called when the page is about to be displayed and
@@ -374,7 +382,26 @@ func (pg *CreateWallet) createNewWallet(gtx C) D {
 				layout.Rigid(pg.passwordEditor.Layout),
 				layout.Rigid(layout.Spacer{Height: values.MarginPadding24}.Layout),
 				layout.Rigid(pg.confirmPasswordEditor.Layout),
-				layout.Rigid(layout.Spacer{Height: values.MarginPadding24}.Layout),
+				// Dual HD path (9508 vs 42) exists only on mainnet. Testnet
+				// has a single path — hide the switch there.
+				layout.Rigid(func(gtx C) D {
+					if !pg.showLegacyHDSwitch() {
+						return D{}
+					}
+					return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
+						layout.Rigid(layout.Spacer{Height: values.MarginPadding16}.Layout),
+						layout.Rigid(pg.legacyHDCoinTypeCheck.Layout),
+						layout.Rigid(func(gtx C) D {
+							if !pg.legacyHDCoinTypeCheck.CheckBox.Value {
+								return D{}
+							}
+							lbl := pg.Theme.Body2(values.String(values.StrLegacyHDCoinTypeInfo))
+							lbl.Color = pg.Theme.Color.GrayText2
+							return layout.Inset{Top: values.MarginPadding4, Bottom: values.MarginPadding8}.Layout(gtx, lbl.Layout)
+						}),
+					)
+				}),
+				layout.Rigid(layout.Spacer{Height: values.MarginPadding16}.Layout),
 				layout.Rigid(func(gtx C) D {
 					return layout.Flex{}.Layout(gtx,
 						layout.Flexed(1, func(gtx C) D {
@@ -428,6 +455,25 @@ func (pg *CreateWallet) restoreWallet(gtx C) D {
 								}.Layout(gtx, pg.Theme.Label(textSize16, values.String(values.StrExtendedPubKey)).Layout)
 							}),
 							layout.Rigid(pg.watchOnlyWalletHex.Layout),
+						)
+					}),
+					layout.Rigid(func(gtx C) D {
+						// Watch-only: coin type is in the xpub. Testnet: single
+						// HD path. Mainnet seed restore only: show 42 vs 9508.
+						if pg.watchOnlyCheckBox.CheckBox.Value || !pg.showLegacyHDSwitch() {
+							return D{}
+						}
+						return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
+							layout.Rigid(layout.Spacer{Height: values.MarginPadding12}.Layout),
+							layout.Rigid(pg.legacyHDCoinTypeCheck.Layout),
+							layout.Rigid(func(gtx C) D {
+								if !pg.legacyHDCoinTypeCheck.CheckBox.Value {
+									return D{}
+								}
+								lbl := pg.Theme.Body2(values.String(values.StrLegacyHDCoinTypeInfo))
+								lbl.Color = pg.Theme.Color.GrayText2
+								return layout.Inset{Top: values.MarginPadding4}.Layout(gtx, lbl.Layout)
+							}),
 						)
 					}),
 				)
@@ -561,7 +607,10 @@ func (pg *CreateWallet) createWallet() {
 	// anything and WITHOUT an error. That was the "Continue throws to home" bug.
 	switch libutils.ParseAssetTypeDisplayName(pg.assetTypeDropdown.Selected()) {
 	case libutils.DCRWalletAsset:
-		newWallet, err = pg.AssetsManager.CreateNewDCRWallet(walletName, pass, sharedW.PassphraseTypePass, seedType)
+		// Mainnet only: optional legacy coin type 42. Testnet ignores the
+		// switch (single HD path). Default mainnet = 9508.
+		useLegacy := pg.showLegacyHDSwitch() && pg.legacyHDCoinTypeCheck.CheckBox.Value
+		newWallet, err = pg.AssetsManager.CreateNewDCRWallet(walletName, pass, sharedW.PassphraseTypePass, seedType, useLegacy)
 		if err != nil {
 			if err.Error() == libutils.ErrExist {
 				// Stage for the UI thread (this runs on the create goroutine).
@@ -664,7 +713,8 @@ func (pg *CreateWallet) HandleUserInteractions(gtx C) {
 		// non-matching string and silently break downstream equality
 		// against DCRWalletAsset.
 		ast := libutils.ParseAssetTypeDisplayName(pg.assetTypeDropdown.Selected())
-		pg.ParentWindow().Display(NewRestorePage(pg.Load, pg.walletName.Editor.Text(), ast, afterRestore))
+		useLegacy := pg.showLegacyHDSwitch() && pg.legacyHDCoinTypeCheck.CheckBox.Value
+		pg.ParentWindow().Display(NewRestorePage(pg.Load, pg.walletName.Editor.Text(), ast, afterRestore, useLegacy))
 	}
 }
 
