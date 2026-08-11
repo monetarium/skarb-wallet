@@ -41,7 +41,27 @@ const (
 	MainPageID = "Main"
 )
 
+// selectedTab remembers the last wallet-detail tab per wallet ID for the
+// process lifetime (Send, Transactions, …). Wallet IDs restart at 1 on each
+// network, so a testnet "Transactions" selection must not leak onto a new
+// mainnet wallet with the same ID.
 var selectedTab = map[int]string{}
+
+// ClearSelectedTab drops any remembered tab for walletID so the next open
+// lands on Info (the default). Used after create/restore.
+func ClearSelectedTab(walletID int) {
+	delete(selectedTab, walletID)
+}
+
+// ClearAllSelectedTabs drops every remembered tab. Call on network switch so
+// mainnet/testnet never share tab state by recycled wallet ID.
+func ClearAllSelectedTabs() {
+	selectedTab = map[int]string{}
+}
+
+func init() {
+	load.ClearWalletTabMemory = ClearAllSelectedTabs
+}
 
 type (
 	C = layout.Context

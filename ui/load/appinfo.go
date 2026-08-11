@@ -209,6 +209,13 @@ func (app *AppInfo) ChangeAssetsManager(newAssetsManager *libwallet.AssetsManage
 	app.AssetsManager.Shutdown()
 	app.AssetsManager = newAssetsManager
 
+	// Wallet IDs restart per network; drop remembered detail-tabs so a
+	// testnet "Transactions" selection cannot open on mainnet wallet #1.
+	// Hook is set by the wallet UI package (avoids load → wallet import cycle).
+	if ClearWalletTabMemory != nil {
+		ClearWalletTabMemory()
+	}
+
 	// If the network type / assets manager switch was swift, wait a bit so the
 	// user clearly sees the temporary "restarting app" page before displaying
 	// the app's start page.

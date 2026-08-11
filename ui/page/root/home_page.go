@@ -163,18 +163,22 @@ func (hp *HomePage) showOverview() {
 	hp.Display(NewOverviewPage(hp.Load, func() {}, hp.openWallet))
 }
 
-// OpenWallet opens w's detail page (landing on its default Info tab) inside
-// this HomePage. Exported for the start page: right after a wallet is
-// created or restored the user must land on that wallet's Info page, not on
-// the dashboard. Safe to call immediately after constructing the HomePage —
-// OnNavigatedTo only pushes Overview when no subpage is set yet.
+// OpenWallet opens w's detail page on its Info tab inside this HomePage.
+// Exported for the start page and the in-app create/restore flows: a freshly
+// created or restored wallet must land on Info, not on a tab remembered for a
+// recycled wallet ID (e.g. testnet Transactions → mainnet wallet #1). Clears
+// the remembered tab for this ID before opening. Safe right after constructing
+// the HomePage — OnNavigatedTo only pushes Overview when no subpage is set yet.
 func (hp *HomePage) OpenWallet(w sharedW.Asset) {
+	if w != nil {
+		walletpage.ClearSelectedTab(w.GetWalletID())
+	}
 	hp.openWallet(w)
 }
 
 // openWallet swaps the body subpage to a per-wallet detail page. Shared
-// between sidebar entries and Overview cards so both paths land on the same
-// place.
+// between sidebar entries and Overview cards. Restores the last tab for this
+// wallet ID when one was remembered (unlike OpenWallet, which forces Info).
 func (hp *HomePage) openWallet(w sharedW.Asset) {
 	hp.selectedWalletID = w.GetWalletID()
 	// PushAndNavigate silently drops a Display() whose new page shares the
@@ -315,17 +319,17 @@ func (hp *HomePage) HandleUserInteractions(gtx layout.Context) {
 			// set IsBackedUp, so SingleWalletMasterPage won't stack its own
 			// "Backup now or later?" prompt on top of the forced flow.
 			if newWallet.IsWatchingOnlyWallet() {
-				hp.openWallet(newWallet)
+				hp.OpenWallet(newWallet) // Info, not a remembered tab
 				return
 			}
 			if dcrW, ok := newWallet.(*dcr.Asset); ok && dcrW.IsRestored {
-				hp.openWallet(newWallet)
+				hp.OpenWallet(newWallet)
 				return
 			}
 			currentID := hp.ParentWindow().CurrentPageID()
 			hp.ParentWindow().Display(seedbackup.NewBackupInstructionsPage(hp.Load, newWallet,
 				func(_ *load.Load, navigator app.WindowNavigator) {
-					hp.openWallet(newWallet)
+					hp.OpenWallet(newWallet)
 					navigator.ClosePagesAfter(currentID)
 				}))
 		}))
