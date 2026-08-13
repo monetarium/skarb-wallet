@@ -241,9 +241,13 @@ func (l *dcrLoader) CreateNewWallet(ctx context.Context, params *loader.CreateWa
 	// Mainnet only: promote to official SLIP-0044 9508 unless caller asked
 	// for legacy 42. Testnet: no promote.
 	if !params.UseLegacyHDCoinType && mainnetDualHD {
+		log.Infof("CreateNewWallet: promoting to SLIP0044 coin type 9508")
 		if err := w.UpgradeToSLIP0044CoinType(ctx); err != nil {
 			return nil, errors.E(op, errors.Errorf("promote to SLIP0044 coin type: %v", err))
 		}
+	} else {
+		log.Infof("CreateNewWallet: keeping created coin type (useLegacy=%v mainnet=%v)",
+			params.UseLegacyHDCoinType, mainnetDualHD)
 	}
 
 	l.onLoaded(w, db)

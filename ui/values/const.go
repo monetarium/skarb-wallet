@@ -14,4 +14,5 @@ const (
 	AssetTypeDropdownGroup
 	AccountsDropdownGroup
 	CoinTypeDropdownGroup
+	HDPathDropdownGroup
 )
