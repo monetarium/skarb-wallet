@@ -53,10 +53,11 @@ type CreateWallet struct {
 	watchOnlyWalletHex    cryptomaterial.Editor
 	passwordEditor        cryptomaterial.Editor
 	confirmPasswordEditor cryptomaterial.Editor
-	watchOnlyCheckBox     cryptomaterial.CheckBoxStyle
-	legacyHDCoinTypeCheck cryptomaterial.CheckBoxStyle
-	// legacyHDBool is the source of truth for the Legacy HD checkbox.
-	legacyHDBool     *widget.Bool
+	watchOnlyCheckBox cryptomaterial.CheckBoxStyle
+	// hdPathDropdown is the source of truth for mainnet HD coin type
+	// (Actual 9508 vs Legacy 42). A checkbox under a Stack overlay never
+	// received clicks, so we use the same DropDown widget as seed type.
+	hdPathDropdown   *cryptomaterial.DropDown
 	materialLoader   material.LoaderStyle
 	seedTypeDropdown *cryptomaterial.DropDown
 
@@ -95,7 +96,6 @@ type CreateWallet struct {
 }
 
 func NewCreateWallet(l *load.Load, walletCreationSuccessCallback func(newWallet sharedW.Asset), assetType ...libutils.AssetType) *CreateWallet {
-	legacyHD := new(widget.Bool)
 	pg := &CreateWallet{
 		GenericPageModal: app.NewGenericPageModal(CreateWalletID),
 		scrollContainer: &widget.List{
@@ -107,14 +107,12 @@ func NewCreateWallet(l *load.Load, walletCreationSuccessCallback func(newWallet 
 		assetTypeDropdown: NewAssetTypeDropDown(l),
 		list:              layout.List{Axis: layout.Vertical},
 
-		continueBtn:           l.Theme.Button(values.String(values.StrContinue)),
-		restoreBtn:            l.Theme.Button(values.String(values.StrRestore)),
-		importBtn:             l.Theme.Button(values.String(values.StrImport)),
-		watchOnlyCheckBox:     l.Theme.CheckBox(new(widget.Bool), values.String(values.StrImportWatchingOnlyWallet)),
-		legacyHDBool:          legacyHD,
-		legacyHDCoinTypeCheck: l.Theme.CheckBox(legacyHD, values.String(values.StrLegacyHDCoinType)),
-		selectedWalletAction:  -1,
-		assetTypeError:        l.Theme.Body1(""),
+		continueBtn:       l.Theme.Button(values.String(values.StrContinue)),
+		restoreBtn:        l.Theme.Button(values.String(values.StrRestore)),
+		importBtn:         l.Theme.Button(values.String(values.StrImport)),
+		watchOnlyCheckBox: l.Theme.CheckBox(new(widget.Bool), values.String(values.StrImportWatchingOnlyWallet)),
+		selectedWalletAction: -1,
+		assetTypeError:       l.Theme.Body1(""),
 
 		Load:                          l,
 		walletCreationSuccessCallback: walletCreationSuccessCallback,
@@ -151,6 +149,18 @@ func NewCreateWallet(l *load.Load, walletCreationSuccessCallback func(newWallet 
 	// MarginPadding180 (was 130) so the full Ukrainian seed-type label
 	// ("Сід із 33 слів") fits instead of being clipped mid-word.
 	pg.seedTypeDropdown = pg.Theme.NewCommonDropDown(GetWordSeedTypeDropdownItems(), defaultWordSeedType, values.MarginPadding180, values.TxDropdownGroup, false)
+
+	actualHD := cryptomaterial.DropDownItem{Text: values.String(values.StrActualHDCoinType)}
+	pg.hdPathDropdown = pg.Theme.NewCommonDropDown(
+		[]cryptomaterial.DropDownItem{
+			actualHD,
+			{Text: values.String(values.StrLegacyHDCoinType)},
+		},
+		&actualHD,
+		values.MarginPadding180,
+		values.HDPathDropdownGroup,
+		false,
+	)
 
 	pg.backButton = GetBackButton(l)
 
@@ -190,12 +200,48 @@ func (pg *CreateWallet) showLegacyHDSwitch() bool {
 }
 
 // latchLegacyHD stores the Legacy-HD choice on the UI thread for create/restore
-// goroutines. Always false on testnet.
+// goroutines. Always false on testnet. Reads the HD-path dropdown (not a
+// checkbox) so the selection cannot be lost to a Stack overlay.
 func (pg *CreateWallet) latchLegacyHD() bool {
-	use := pg.showLegacyHDSwitch() && pg.legacyHDBool != nil && pg.legacyHDBool.Value
+	use := false
+	if pg.showLegacyHDSwitch() && pg.hdPathDropdown != nil {
+		use = pg.hdPathDropdown.Selected() == values.String(values.StrLegacyHDCoinType)
+	}
 	pg.useLegacyHD.Store(use)
-	log.Infof("CreateWallet: latch legacyHD=%v net=%s", use, pg.AssetsManager.NetType())
+	log.Infof("CreateWallet: latch legacyHD=%v selected=%q net=%s",
+		use, pg.hdPathSelectedLabel(), pg.AssetsManager.NetType())
 	return use
+}
+
+func (pg *CreateWallet) hdPathSelectedLabel() string {
+	if pg.hdPathDropdown == nil {
+		return ""
+	}
+	return pg.hdPathDropdown.Selected()
+}
+
+func (pg *CreateWallet) hdPathSelector(gtx C) D {
+	if !pg.showLegacyHDSwitch() {
+		return D{}
+	}
+	textSize16 := values.TextSizeTransform(pg.IsMobileView(), values.TextSize16)
+	return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
+		layout.Rigid(layout.Spacer{Height: values.MarginPadding16}.Layout),
+		layout.Rigid(func(gtx C) D {
+			return layout.Flex{Alignment: layout.Middle, Spacing: layout.SpaceBetween}.Layout(gtx,
+				layout.Rigid(pg.Theme.Label(textSize16, values.String(values.StrHDPathType)).Layout),
+				layout.Rigid(pg.hdPathDropdown.Layout),
+			)
+		}),
+		layout.Rigid(func(gtx C) D {
+			if pg.hdPathDropdown.Selected() != values.String(values.StrLegacyHDCoinType) {
+				return D{}
+			}
+			lbl := pg.Theme.Body2(values.String(values.StrLegacyHDCoinTypeInfo))
+			lbl.Color = pg.Theme.Color.GrayText2
+			return layout.Inset{Top: values.MarginPadding4}.Layout(gtx, lbl.Layout)
+		}),
+	)
 }
 
 // OnNavigatedTo is called when the page is about to be displayed and
@@ -289,9 +335,13 @@ func (pg *CreateWallet) Layout(gtx C) D {
 								Top:   values.MarginPadding26,
 								Right: values.MarginPadding20,
 							}.Layout(gtx, func(gtx C) D {
-								return layout.Stack{}.Layout(gtx,
-									layout.Expanded(pg.walletOptions),
-									layout.Expanded(pg.walletTypeSection),
+								// Vertical flex — never Stack the asset-type
+								// row over the form. An Expanded overlay ate
+								// clicks on the HD-path control so every
+								// wallet was created as 9508.
+								return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
+									layout.Rigid(pg.walletTypeSection),
+									layout.Rigid(pg.walletOptions),
 								)
 							})
 						})
@@ -323,7 +373,7 @@ func (pg *CreateWallet) walletTypeSection(gtx C) D {
 }
 
 func (pg *CreateWallet) walletOptions(gtx C) D {
-	return layout.Inset{Top: values.MarginPadding90}.Layout(gtx, func(gtx C) D {
+	return layout.Inset{Top: values.MarginPadding24}.Layout(gtx, func(gtx C) D {
 		return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
 			layout.Rigid(func(gtx C) D {
 				list := layout.List{}
@@ -405,23 +455,7 @@ func (pg *CreateWallet) createNewWallet(gtx C) D {
 		layout.Rigid(pg.passwordEditor.Layout),
 		layout.Rigid(layout.Spacer{Height: values.MarginPadding24}.Layout),
 		layout.Rigid(pg.confirmPasswordEditor.Layout),
-		layout.Rigid(func(gtx C) D {
-			if !pg.showLegacyHDSwitch() {
-				return D{}
-			}
-			return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
-				layout.Rigid(layout.Spacer{Height: values.MarginPadding16}.Layout),
-				layout.Rigid(pg.legacyHDCoinTypeCheck.Layout),
-				layout.Rigid(func(gtx C) D {
-					if pg.legacyHDBool == nil || !pg.legacyHDBool.Value {
-						return D{}
-					}
-					lbl := pg.Theme.Body2(values.String(values.StrLegacyHDCoinTypeInfo))
-					lbl.Color = pg.Theme.Color.GrayText2
-					return layout.Inset{Top: values.MarginPadding4, Bottom: values.MarginPadding8}.Layout(gtx, lbl.Layout)
-				}),
-			)
-		}),
+		layout.Rigid(pg.hdPathSelector),
 		layout.Rigid(layout.Spacer{Height: values.MarginPadding16}.Layout),
 		layout.Rigid(func(gtx C) D {
 			return layout.Flex{}.Layout(gtx,
@@ -467,23 +501,11 @@ func (pg *CreateWallet) restoreWallet(gtx C) D {
 						)
 					}),
 					layout.Rigid(func(gtx C) D {
-						// Watch-only: coin type is in the xpub. Testnet: single
-						// HD path. Mainnet seed restore only: show 42 vs 9508.
-						if pg.watchOnlyCheckBox.CheckBox.Value || !pg.showLegacyHDSwitch() {
+						// Watch-only: coin type is in the xpub.
+						if pg.watchOnlyCheckBox.CheckBox.Value {
 							return D{}
 						}
-						return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
-							layout.Rigid(layout.Spacer{Height: values.MarginPadding12}.Layout),
-							layout.Rigid(pg.legacyHDCoinTypeCheck.Layout),
-							layout.Rigid(func(gtx C) D {
-								if pg.legacyHDBool == nil || !pg.legacyHDBool.Value {
-									return D{}
-								}
-								lbl := pg.Theme.Body2(values.String(values.StrLegacyHDCoinTypeInfo))
-								lbl.Color = pg.Theme.Color.GrayText2
-								return layout.Inset{Top: values.MarginPadding4}.Layout(gtx, lbl.Layout)
-							}),
-						)
+						return pg.hdPathSelector(gtx)
 					}),
 				)
 			})
