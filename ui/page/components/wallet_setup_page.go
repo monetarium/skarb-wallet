@@ -55,8 +55,10 @@ type CreateWallet struct {
 	confirmPasswordEditor cryptomaterial.Editor
 	watchOnlyCheckBox     cryptomaterial.CheckBoxStyle
 	legacyHDCoinTypeCheck cryptomaterial.CheckBoxStyle
-	materialLoader        material.LoaderStyle
-	seedTypeDropdown      *cryptomaterial.DropDown
+	// legacyHDBool is the source of truth for the Legacy HD checkbox.
+	legacyHDBool     *widget.Bool
+	materialLoader   material.LoaderStyle
+	seedTypeDropdown *cryptomaterial.DropDown
 
 	continueBtn cryptomaterial.Button
 	restoreBtn  cryptomaterial.Button
@@ -75,6 +77,9 @@ type CreateWallet struct {
 	showLoader atomic.Bool
 	isLoading  atomic.Bool
 
+	// useLegacyHD is latched on the UI thread when Continue/Restore is clicked.
+	useLegacyHD atomic.Bool
+
 	stagedNameErr   string
 	stagedXpubErr   string
 	pendingErrApply atomic.Bool
@@ -90,6 +95,7 @@ type CreateWallet struct {
 }
 
 func NewCreateWallet(l *load.Load, walletCreationSuccessCallback func(newWallet sharedW.Asset), assetType ...libutils.AssetType) *CreateWallet {
+	legacyHD := new(widget.Bool)
 	pg := &CreateWallet{
 		GenericPageModal: app.NewGenericPageModal(CreateWalletID),
 		scrollContainer: &widget.List{
@@ -101,11 +107,12 @@ func NewCreateWallet(l *load.Load, walletCreationSuccessCallback func(newWallet 
 		assetTypeDropdown: NewAssetTypeDropDown(l),
 		list:              layout.List{Axis: layout.Vertical},
 
-		continueBtn:          l.Theme.Button(values.String(values.StrContinue)),
-		restoreBtn:           l.Theme.Button(values.String(values.StrRestore)),
-		importBtn:            l.Theme.Button(values.String(values.StrImport)),
+		continueBtn:           l.Theme.Button(values.String(values.StrContinue)),
+		restoreBtn:            l.Theme.Button(values.String(values.StrRestore)),
+		importBtn:             l.Theme.Button(values.String(values.StrImport)),
 		watchOnlyCheckBox:     l.Theme.CheckBox(new(widget.Bool), values.String(values.StrImportWatchingOnlyWallet)),
-		legacyHDCoinTypeCheck: l.Theme.CheckBox(new(widget.Bool), values.String(values.StrLegacyHDCoinType)),
+		legacyHDBool:          legacyHD,
+		legacyHDCoinTypeCheck: l.Theme.CheckBox(legacyHD, values.String(values.StrLegacyHDCoinType)),
 		selectedWalletAction:  -1,
 		assetTypeError:        l.Theme.Body1(""),
 
@@ -180,6 +187,15 @@ func NewAssetTypeDropDown(l *load.Load) *cryptomaterial.DropDown {
 // BIP44 coin types (9508 actual / 42 legacy). Testnet has a single path.
 func (pg *CreateWallet) showLegacyHDSwitch() bool {
 	return pg.AssetsManager.NetType() == libutils.Mainnet
+}
+
+// latchLegacyHD stores the Legacy-HD choice on the UI thread for create/restore
+// goroutines. Always false on testnet.
+func (pg *CreateWallet) latchLegacyHD() bool {
+	use := pg.showLegacyHDSwitch() && pg.legacyHDBool != nil && pg.legacyHDBool.Value
+	pg.useLegacyHD.Store(use)
+	log.Infof("CreateWallet: latch legacyHD=%v net=%s", use, pg.AssetsManager.NetType())
+	return use
 }
 
 // OnNavigatedTo is called when the page is about to be displayed and
@@ -372,60 +388,53 @@ func (pg *CreateWallet) walletOptions(gtx C) D {
 }
 
 func (pg *CreateWallet) createNewWallet(gtx C) D {
-	return layout.Stack{}.Layout(gtx,
-		layout.Expanded(func(gtx layout.Context) layout.Dimensions {
+	// Single vertical flex — do NOT Stack the seed-type row over the form.
+	// A full-size Stack overlay was stealing pointer hits from the Legacy
+	// checkbox, so Value stayed false and every create promoted to 9508.
+	textSize16 := values.TextSizeTransform(pg.IsMobileView(), values.TextSize16)
+	return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
+		layout.Rigid(func(gtx C) D {
+			return layout.Flex{Alignment: layout.Middle, Spacing: layout.SpaceBetween}.Layout(gtx,
+				layout.Rigid(pg.Theme.Label(textSize16, values.String(values.StrWordSeedType)).Layout),
+				layout.Rigid(pg.seedTypeDropdown.Layout),
+			)
+		}),
+		layout.Rigid(layout.Spacer{Height: values.MarginPadding14}.Layout),
+		layout.Rigid(pg.walletName.Layout),
+		layout.Rigid(layout.Spacer{Height: values.MarginPadding24}.Layout),
+		layout.Rigid(pg.passwordEditor.Layout),
+		layout.Rigid(layout.Spacer{Height: values.MarginPadding24}.Layout),
+		layout.Rigid(pg.confirmPasswordEditor.Layout),
+		layout.Rigid(func(gtx C) D {
+			if !pg.showLegacyHDSwitch() {
+				return D{}
+			}
 			return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
-				layout.Rigid(layout.Spacer{Height: values.MarginPadding50}.Layout),
-				layout.Rigid(layout.Spacer{Height: values.MarginPadding14}.Layout),
-				layout.Rigid(pg.walletName.Layout),
-				layout.Rigid(layout.Spacer{Height: values.MarginPadding24}.Layout),
-				layout.Rigid(pg.passwordEditor.Layout),
-				layout.Rigid(layout.Spacer{Height: values.MarginPadding24}.Layout),
-				layout.Rigid(pg.confirmPasswordEditor.Layout),
-				// Dual HD path (9508 vs 42) exists only on mainnet. Testnet
-				// has a single path — hide the switch there.
+				layout.Rigid(layout.Spacer{Height: values.MarginPadding16}.Layout),
+				layout.Rigid(pg.legacyHDCoinTypeCheck.Layout),
 				layout.Rigid(func(gtx C) D {
-					if !pg.showLegacyHDSwitch() {
+					if pg.legacyHDBool == nil || !pg.legacyHDBool.Value {
 						return D{}
 					}
-					return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
-						layout.Rigid(layout.Spacer{Height: values.MarginPadding16}.Layout),
-						layout.Rigid(pg.legacyHDCoinTypeCheck.Layout),
-						layout.Rigid(func(gtx C) D {
-							if !pg.legacyHDCoinTypeCheck.CheckBox.Value {
-								return D{}
-							}
-							lbl := pg.Theme.Body2(values.String(values.StrLegacyHDCoinTypeInfo))
-							lbl.Color = pg.Theme.Color.GrayText2
-							return layout.Inset{Top: values.MarginPadding4, Bottom: values.MarginPadding8}.Layout(gtx, lbl.Layout)
-						}),
-					)
-				}),
-				layout.Rigid(layout.Spacer{Height: values.MarginPadding16}.Layout),
-				layout.Rigid(func(gtx C) D {
-					return layout.Flex{}.Layout(gtx,
-						layout.Flexed(1, func(gtx C) D {
-							return layout.E.Layout(gtx, func(gtx C) D {
-								if pg.isLoading.Load() {
-									gtx.Constraints.Max.X = gtx.Dp(values.MarginPadding20)
-									gtx.Constraints.Min.X = gtx.Constraints.Max.X
-									return pg.materialLoader.Layout(gtx)
-								}
-								return pg.continueBtn.Layout(gtx)
-							})
-						}),
-					)
+					lbl := pg.Theme.Body2(values.String(values.StrLegacyHDCoinTypeInfo))
+					lbl.Color = pg.Theme.Color.GrayText2
+					return layout.Inset{Top: values.MarginPadding4, Bottom: values.MarginPadding8}.Layout(gtx, lbl.Layout)
 				}),
 			)
 		}),
-		layout.Expanded(func(gtx layout.Context) layout.Dimensions {
-			textSize16 := values.TextSizeTransform(pg.IsMobileView(), values.TextSize16)
-			return layout.Flex{Alignment: layout.Middle,
-				Spacing: layout.SpaceBetween}.Layout(gtx,
-				layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-					return layout.Inset{Top: values.MarginPadding15}.Layout(gtx, pg.Theme.Label(textSize16, values.String(values.StrWordSeedType)).Layout)
+		layout.Rigid(layout.Spacer{Height: values.MarginPadding16}.Layout),
+		layout.Rigid(func(gtx C) D {
+			return layout.Flex{}.Layout(gtx,
+				layout.Flexed(1, func(gtx C) D {
+					return layout.E.Layout(gtx, func(gtx C) D {
+						if pg.isLoading.Load() {
+							gtx.Constraints.Max.X = gtx.Dp(values.MarginPadding20)
+							gtx.Constraints.Min.X = gtx.Constraints.Max.X
+							return pg.materialLoader.Layout(gtx)
+						}
+						return pg.continueBtn.Layout(gtx)
+					})
 				}),
-				layout.Rigid(pg.seedTypeDropdown.Layout),
 			)
 		}),
 	)
@@ -467,7 +476,7 @@ func (pg *CreateWallet) restoreWallet(gtx C) D {
 							layout.Rigid(layout.Spacer{Height: values.MarginPadding12}.Layout),
 							layout.Rigid(pg.legacyHDCoinTypeCheck.Layout),
 							layout.Rigid(func(gtx C) D {
-								if !pg.legacyHDCoinTypeCheck.CheckBox.Value {
+								if pg.legacyHDBool == nil || !pg.legacyHDBool.Value {
 									return D{}
 								}
 								lbl := pg.Theme.Body2(values.String(values.StrLegacyHDCoinTypeInfo))
@@ -533,8 +542,9 @@ func (pg *CreateWallet) handleEditorEvents(gtx C) {
 	// create wallet action
 	if pg.continueBtn.Clicked(gtx) {
 		valid := pg.validCreateWalletInputs()
-		log.Infof("CreateWallet: continue clicked action=%d valid=%v name=%q",
-			pg.selectedWalletAction, valid, pg.walletName.Editor.Text())
+		useLegacy := pg.latchLegacyHD()
+		log.Infof("CreateWallet: continue clicked action=%d valid=%v name=%q legacyHD=%v",
+			pg.selectedWalletAction, valid, pg.walletName.Editor.Text(), useLegacy)
 		if valid {
 			if pg.checkWalletNameExists() {
 				return
@@ -607,9 +617,9 @@ func (pg *CreateWallet) createWallet() {
 	// anything and WITHOUT an error. That was the "Continue throws to home" bug.
 	switch libutils.ParseAssetTypeDisplayName(pg.assetTypeDropdown.Selected()) {
 	case libutils.DCRWalletAsset:
-		// Mainnet only: optional legacy coin type 42. Testnet ignores the
-		// switch (single HD path). Default mainnet = 9508.
-		useLegacy := pg.showLegacyHDSwitch() && pg.legacyHDCoinTypeCheck.CheckBox.Value
+		// Latched on the UI thread when Continue was clicked.
+		useLegacy := pg.useLegacyHD.Load()
+		log.Infof("CreateWallet: calling CreateNewDCRWallet legacyHD=%v", useLegacy)
 		newWallet, err = pg.AssetsManager.CreateNewDCRWallet(walletName, pass, sharedW.PassphraseTypePass, seedType, useLegacy)
 		if err != nil {
 			if err.Error() == libutils.ErrExist {
@@ -713,7 +723,7 @@ func (pg *CreateWallet) HandleUserInteractions(gtx C) {
 		// non-matching string and silently break downstream equality
 		// against DCRWalletAsset.
 		ast := libutils.ParseAssetTypeDisplayName(pg.assetTypeDropdown.Selected())
-		useLegacy := pg.showLegacyHDSwitch() && pg.legacyHDCoinTypeCheck.CheckBox.Value
+		useLegacy := pg.latchLegacyHD()
 		pg.ParentWindow().Display(NewRestorePage(pg.Load, pg.walletName.Editor.Text(), ast, afterRestore, useLegacy))
 	}
 }

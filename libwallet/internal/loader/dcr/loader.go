@@ -216,10 +216,10 @@ func (l *dcrLoader) CreateNewWallet(ctx context.Context, params *loader.CreateWa
 	}
 
 	// Open the newly-created wallet.
-	// When the caller asked for legacy coin type, also pin
-	// DisableCoinTypeUpgrades: otherwise the first address-discovery pass
-	// sees an empty account and auto-promotes 42 → 9508, undoing the
-	// explicit legacy choice (and any intentional new-on-42 create).
+	// On mainnet, always pin DisableCoinTypeUpgrades: promote to 9508 is
+	// explicit below when wanted. Auto-upgrade on discovery would silently
+	// flip empty Legacy-42 wallets (and again on every reopen).
+	mainnetDualHD := l.chainParams.SLIP0044CoinType == 9508
 	so := l.stakeOptions
 	cfg := &wallet.Config{
 		DB:                      db,
@@ -227,7 +227,7 @@ func (l *dcrLoader) CreateNewWallet(ctx context.Context, params *loader.CreateWa
 		VotingEnabled:           so.VotingEnabled,
 		GapLimit:                l.gapLimit,
 		AccountGapLimit:         l.accountGapLimit,
-		DisableCoinTypeUpgrades: l.disableCoinTypeUpgrades || params.UseLegacyHDCoinType,
+		DisableCoinTypeUpgrades: l.disableCoinTypeUpgrades || mainnetDualHD || params.UseLegacyHDCoinType,
 		ManualTickets:           l.manualTickets,
 		AllowHighFees:           l.allowHighFees,
 		RelayFee:                l.relayFee,
@@ -238,13 +238,9 @@ func (l *dcrLoader) CreateNewWallet(ctx context.Context, params *loader.CreateWa
 		return nil, errors.E(op, err)
 	}
 
-	// Mainnet only: wallet.Create seeds the active account on LegacyCoinType
-	// (42) and parks SLIP0044 keys (9508) for a later upgrade. Monetarium's
-	// official mainnet path is 9508, so promote immediately unless the
-	// caller asked for legacy (restore of a pre-9508 wallet).
-	// Testnet keeps a single practical HD path (SLIP0044=1) — no promote /
-	// no dual-path switch; discovery handles any leftover legacy keys.
-	if !params.UseLegacyHDCoinType && l.chainParams.SLIP0044CoinType == 9508 {
+	// Mainnet only: promote to official SLIP-0044 9508 unless caller asked
+	// for legacy 42. Testnet: no promote.
+	if !params.UseLegacyHDCoinType && mainnetDualHD {
 		if err := w.UpgradeToSLIP0044CoinType(ctx); err != nil {
 			return nil, errors.E(op, errors.Errorf("promote to SLIP0044 coin type: %v", err))
 		}
@@ -292,6 +288,8 @@ func (l *dcrLoader) OpenExistingWallet(ctx context.Context, walletID string, pub
 		}
 	}()
 
+	// Mainnet: never auto-promote 42→9508 on reopen.
+	mainnetDualHD := l.chainParams.SLIP0044CoinType == 9508
 	so := l.stakeOptions
 	cfg := &wallet.Config{
 		DB:                      db,
@@ -299,7 +297,7 @@ func (l *dcrLoader) OpenExistingWallet(ctx context.Context, walletID string, pub
 		VotingEnabled:           so.VotingEnabled,
 		GapLimit:                l.gapLimit,
 		AccountGapLimit:         l.accountGapLimit,
-		DisableCoinTypeUpgrades: l.disableCoinTypeUpgrades,
+		DisableCoinTypeUpgrades: l.disableCoinTypeUpgrades || mainnetDualHD,
 		ManualTickets:           l.manualTickets,
 		AllowHighFees:           l.allowHighFees,
 		RelayFee:                l.relayFee,
