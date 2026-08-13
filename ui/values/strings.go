@@ -1132,6 +1132,8 @@ const (
 	Str12WordSeed                            = "12WordSeed"
 	StrLegacyHDCoinType                      = "legacyHDCoinType"
 	StrLegacyHDCoinTypeInfo                  = "legacyHDCoinTypeInfo"
+	StrActualHDCoinType                      = "actualHDCoinType"
+	StrHDPathType                            = "hdPathType"
 	Str24WordSeed                            = "24WordSeed"
 	Str33WordSeed                            = "33WordSeed"
 	StrWordSeedType                          = "wordSeedType"
