@@ -5,10 +5,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"strconv"
 	"time"
 
-	"github.com/monetarium/monetarium-node/chaincfg"
 	"github.com/monetarium/monetarium-node/dcrutil"
 	"github.com/monetarium/monetarium-wallet/errors"
 	w "github.com/monetarium/monetarium-wallet/wallet"
@@ -381,28 +379,15 @@ func (asset *Asset) HDPathForAccount(accountNumber int32) (string, error) {
 	}
 
 	ctx, _ := asset.ShutdownContextWithCancel()
+	// CoinType() is the BIP44 coin type the address manager is actually
+	// deriving from (legacy vs SLIP0044 keys in the wallet DB) — not the
+	// create-form switch and not the network-wide default prefix.
 	cointype, err := asset.Internal().DCR.CoinType(ctx)
 	if err != nil {
 		return "", utils.TranslateError(err)
 	}
 
-	var hdPath string
-	isLegacyCoinType := cointype == asset.chainParams.LegacyCoinType
-	if asset.chainParams.Name == chaincfg.MainNetParams().Name {
-		if isLegacyCoinType {
-			hdPath = LegacyMainnetHDPath
-		} else {
-			hdPath = MainnetHDPath
-		}
-	} else {
-		if isLegacyCoinType {
-			hdPath = LegacyTestnetHDPath
-		} else {
-			hdPath = TestnetHDPath
-		}
-	}
-
-	return hdPath + strconv.Itoa(int(accountNumber)), nil
+	return fmt.Sprintf("m / 44' / %d' / %d'", cointype, accountNumber), nil
 }
 
 func (asset *Asset) GetExtendedPubKey(account int32) (string, error) {
