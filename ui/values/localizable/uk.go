@@ -748,6 +748,8 @@ const UK = `
 "proposalAddedNotif" = "Додано нову пропозицію. Назва: %s"
 "vsp" = "VSP"
 "vspFee" = "Комісія VSP"
+"vspFeeUnpaid" = "Не сплачено"
+"vspFeeErrored" = "Помилка оплати комісії"
 "vSPAPI" = "API VSP"
 
 // Misc (still in active flows)

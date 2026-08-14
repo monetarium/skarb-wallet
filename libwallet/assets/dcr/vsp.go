@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
+	"strings"
 
 	vspdClient "github.com/decred/vspd/client/v3"
 	vspd "github.com/decred/vspd/types/v2"
@@ -54,12 +56,29 @@ func (asset *Asset) VSPClient(account int32, host string, pubKey []byte) (*dcrW.
 		return nil, utils.ErrDCRNotInitialized
 	}
 
+	// Resolve -1 before the cache key, otherwise VSPTicketInfo(-1) and
+	// PurchaseTickets(account) created two clients for the same host/account
+	// and fee retries could pay from the ticket-buyer account, not the one
+	// that bought the ticket. Manual-only users have no auto-buyer account
+	// — fall back to default account 0 instead of failing the whole client.
+	if account == -1 {
+		if asset.IsTicketBuyerAccountSet() {
+			account = asset.AutoTicketsBuyerConfig().PurchaseAccount
+		} else {
+			account = 0
+		}
+	}
+	host = normalizeVSPHost(host)
+
 	asset.vspMu.Lock()
 	defer asset.vspMu.Unlock()
 	if asset.vspClients == nil {
 		asset.vspClients = make(map[string]*dcrW.VSPClient)
 	}
-	if client, ok := asset.vspClients[host]; ok {
+	// Key by host+account: FeeAcct/ChangeAcct are baked into the client.
+	cacheKey := fmt.Sprintf("%s#%d", host, account)
+	if client, ok := asset.vspClients[cacheKey]; ok {
+		client.UpdateMaxFee(asset.vspMaxFee())
 		return client, nil
 	}
 
@@ -67,8 +86,11 @@ func (asset *Asset) VSPClient(account int32, host string, pubKey []byte) (*dcrW.
 	if err != nil {
 		return nil, err
 	}
+	if life, _ := asset.ShutdownContextWithCancel(); life != nil {
+		client.SetLifetime(life)
+	}
 
-	asset.vspClients[host] = client
+	asset.vspClients[cacheKey] = client
 	return client, nil
 }
 
@@ -88,19 +110,40 @@ func (asset *Asset) createVspClient(account int32, host string, pubKey []byte) (
 	// previous `if account != -1` inverted this and clobbered the caller's
 	// account with the config account, sending VSP fee/change to the wrong one.
 	if account == -1 {
-		if !asset.IsTicketBuyerAccountSet() {
-			return nil, utils.ErrTicketPurchaseAccMissing
+		if asset.IsTicketBuyerAccountSet() {
+			account = asset.AutoTicketsBuyerConfig().PurchaseAccount
+		} else {
+			account = 0
 		}
-		account = asset.AutoTicketsBuyerConfig().PurchaseAccount
 	}
 
 	cfg.Policy = &dcrW.VSPPolicy{
-		MaxFee:     dcrutil.Amount(0.2e8),
+		// Decred's 0.2 coin cap is too low for Monetarium mainnet: VSP
+		// fee is 5% of a ~48 VAR ticket ≈ 2.4 VAR, so receiveFeeAddress
+		// rejected the quote and no fee tx was created.
+		MaxFee:     asset.vspMaxFee(),
 		FeeAcct:    uint32(account),
 		ChangeAcct: uint32(account),
 	}
 
 	return asset.Internal().DCR.NewVSPClient(cfg, log, nil)
+}
+
+// vspMaxFee is the highest VSP fee the wallet will pay. Mainnet VSP quotes
+// a percentage of ticket price (currently 5%); 20% of the current sdiff with
+// a 10 VAR floor covers that and leaves headroom if sdiff rises.
+func (asset *Asset) vspMaxFee() dcrutil.Amount {
+	const minMaxFee = dcrutil.Amount(10e8) // 10 VAR
+	const maxFeePct = 20
+	tp, err := asset.TicketPrice()
+	if err != nil || tp == nil || tp.TicketPrice <= 0 {
+		return minMaxFee
+	}
+	cap := dcrutil.Amount(tp.TicketPrice) * maxFeePct / 100
+	if cap < minMaxFee {
+		return minMaxFee
+	}
+	return cap
 }
 
 // KnownVSPs returns a list of known VSPs. This list may be updated by calling
@@ -226,10 +269,23 @@ func (asset *Asset) ReloadVSPList(ctx context.Context) {
 	asset.vspMu.Unlock()
 }
 
+func normalizeVSPHost(host string) string {
+	host = strings.TrimSpace(host)
+	u, err := url.Parse(host)
+	if err != nil || u.Host == "" {
+		return strings.TrimRight(strings.ToLower(host), "/")
+	}
+	u.Host = strings.ToLower(u.Host)
+	u.Path = strings.TrimRight(u.Path, "/")
+	u.RawQuery = ""
+	u.Fragment = ""
+	return u.String()
+}
+
 func vspInfo(vspHost string) (*vspd.VspInfoResponse, error) {
 	req := &utils.ReqConfig{
 		Method:    http.MethodGet,
-		HTTPURL:   vspHost + "/api/v3/vspinfo",
+		HTTPURL:   strings.TrimRight(vspHost, "/") + "/api/v3/vspinfo",
 		IsRetByte: true,
 	}
 

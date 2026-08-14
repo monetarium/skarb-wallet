@@ -899,6 +899,8 @@ const (
 	StrVSPAPI                                = "vspAPI"
 	StrNoLocalVSPRecord                      = "noLocalVSPRecord"
 	StrVspFee                                = "vspFee"
+	StrVspFeeUnpaid                          = "vspFeeUnpaid"
+	StrVspFeeErrored                         = "vspFeeErrored"
 	StrWaitingAuthor                         = "waitingForAuthor"
 	StrWaitingForAdmin                       = "waitingForAdmin"
 	StrWaitingState                          = "waitingState"

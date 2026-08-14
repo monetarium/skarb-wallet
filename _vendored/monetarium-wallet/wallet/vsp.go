@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strings"
 	"sync"
 
 	"github.com/monetarium/monetarium-wallet/errors"
@@ -54,7 +55,55 @@ type VSPClient struct {
 	mu   sync.Mutex
 	jobs map[chainhash.Hash]*vspFeePayment
 
+	// lifetime is canceled when the owning wallet shuts down. Fee-payment
+	// background work must not use a purchase request ctx (it dies too soon)
+	// or a raw Background ctx (it outlives the wallet).
+	lifetime context.Context
+
 	log slog.Logger
+}
+
+// SetLifetime binds background VSP work to the wallet lifetime.
+func (c *VSPClient) SetLifetime(ctx context.Context) {
+	if ctx != nil {
+		c.lifetime = ctx
+	}
+}
+
+// UpdateMaxFee raises the fee cap if the new value is higher (sdiff can rise
+// while a cached client is still in use).
+func (c *VSPClient) UpdateMaxFee(fee dcrutil.Amount) {
+	if c.policy == nil {
+		return
+	}
+	if fee > c.policy.MaxFee {
+		c.policy.MaxFee = fee
+	}
+}
+
+func (c *VSPClient) lifetimeCtx() context.Context {
+	if c.lifetime != nil {
+		return c.lifetime
+	}
+	return context.Background()
+}
+
+// sameVSPHost compares VSP URLs ignoring trailing slashes and host case.
+func sameVSPHost(a, b string) bool {
+	return normalizeVSPURL(a) == normalizeVSPURL(b)
+}
+
+func normalizeVSPURL(raw string) string {
+	raw = strings.TrimSpace(raw)
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" {
+		return strings.TrimRight(strings.ToLower(raw), "/")
+	}
+	u.Host = strings.ToLower(u.Host)
+	u.Path = strings.TrimRight(u.Path, "/")
+	u.RawQuery = ""
+	u.Fragment = ""
+	return u.String()
 }
 
 type VSPClientConfig struct {
@@ -98,11 +147,12 @@ func (w *Wallet) NewVSPClient(cfg VSPClientConfig, log slog.Logger, dialer DialF
 	}
 
 	v := &VSPClient{
-		wallet: w,
-		policy: cfg.Policy,
-		Client: client,
-		jobs:   make(map[chainhash.Hash]*vspFeePayment),
-		log:    log,
+		wallet:   w,
+		policy:   cfg.Policy,
+		Client:   client,
+		jobs:     make(map[chainhash.Hash]*vspFeePayment),
+		lifetime: context.Background(),
+		log:      log,
 	}
 	return v, nil
 }
@@ -178,7 +228,8 @@ func (c *VSPClient) ProcessManagedTickets(ctx context.Context, tickets []*VSPTic
 			if err != nil {
 				return err
 			}
-			return nil
+			// Must continue: returning here skipped every remaining ticket.
+			continue
 		} else if status.FeeTxHash != "" {
 			feeHash, err := chainhash.NewHashFromStr(status.FeeTxHash)
 			if err != nil {
@@ -188,10 +239,13 @@ func (c *VSPClient) ProcessManagedTickets(ctx context.Context, tickets []*VSPTic
 			if err != nil {
 				return err
 			}
-			_ = c.feePayment(ctx, ticket, true)
+			if err := c.Process(ctx, ticket, nil); err != nil {
+				c.log.Errorf("ProcessManagedTickets: confirm fee for %v: %v", hash, err)
+			}
 		} else {
-			// Fee hasn't been paid at the provided VSP, so this should do that if needed.
-			_ = c.feePayment(ctx, ticket, false)
+			if err := c.Process(ctx, ticket, nil); err != nil {
+				c.log.Errorf("ProcessManagedTickets: pay fee for %v: %v", hash, err)
+			}
 		}
 
 	}
@@ -230,33 +284,39 @@ func (c *VSPClient) Process(ctx context.Context, ticket *VSPTicket, feeTx *wire.
 			return fmt.Errorf("fee payment cannot be processed")
 		}
 		fp.mu.Lock()
+		// A previous failed attempt can leave reserved inputs that are too
+		// small for the real VSP quote. Drop that skeleton so CreateVspPayment
+		// can pick new UTXOs (caller-supplied inputs are still honoured).
+		if feeTx == nil && fp.feeTx != nil && len(fp.feeTx.TxOut) == 0 {
+			fp.feeTx = nil
+		}
 		if fp.feeTx == nil {
 			fp.feeTx = feeTx
 		}
 		fp.mu.Unlock()
-		err := fp.receiveFeeAddress()
-		if err != nil {
-			err := ticket.UpdateFeeErrored(ctx, c.Client.URL, c.Client.PubKey)
-			if err != nil {
-				return err
+		if feeErr := fp.receiveFeeAddress(); feeErr != nil {
+			if markErr := ticket.UpdateFeeErrored(ctx, c.Client.URL, c.Client.PubKey); markErr != nil {
+				return markErr
 			}
-			// XXX, retry? (old Process retried)
-			// but this may not be necessary any longer as the parent of
-			// the ticket is always relayed to the vsp as well.
-			return err
+			// Do not shadow feeErr: a successful UpdateFeeErrored used to
+			// make Process return nil, so the wallet treated a failed
+			// feeaddress (e.g. fee above MaxFee) as a completed VSP register.
+			return feeErr
 		}
-		err = fp.makeFeeTx(feeTx)
-		if err != nil {
-			err := ticket.UpdateFeeErrored(ctx, c.Client.URL, c.Client.PubKey)
-			if err != nil {
-				return err
+		if feeErr := fp.makeFeeTx(feeTx); feeErr != nil {
+			fp.mu.Lock()
+			fp.feeTx = nil
+			fp.feeHash = chainhash.Hash{}
+			fp.mu.Unlock()
+			if markErr := ticket.UpdateFeeErrored(ctx, c.Client.URL, c.Client.PubKey); markErr != nil {
+				return markErr
 			}
-			return err
+			return feeErr
 		}
 		return fp.submitPayment()
 	case udb.VSPFeeProcessPaid:
 		// If a VSP ticket has been paid, but confirm payment.
-		if len(vspTicket.Host) > 0 && vspTicket.Host != c.Client.URL {
+		if len(vspTicket.Host) > 0 && !sameVSPHost(vspTicket.Host, c.Client.URL) {
 			// Cannot confirm a paid ticket that is already with another VSP.
 			return fmt.Errorf("ticket already paid or confirmed with another vsp")
 		}
@@ -327,7 +387,7 @@ func (c *VSPClient) SetVoteChoice(ctx context.Context, ticket *VSPTicket,
 
 	// Check treasury policies.
 	for newKey, newChoice := range treasuryPolicy {
-		vspChoice, ok := status.TSpendPolicy[newKey]
+		vspChoice, ok := status.TreasuryPolicy[newKey]
 		if !ok {
 			update = true
 			break

@@ -337,7 +337,7 @@ func (asset *Asset) pushVoteChoicesToVSPs(ctx context.Context, ticketHash *chain
 			continue
 		}
 
-		vspClient, err := asset.VSPClient(-1, vspTicketInfo.Host, vspTicketInfo.PubKey)
+		vspClient, err := asset.VSPClient(asset.vspFeeAccount(ctx, ticket), vspTicketInfo.Host, vspTicketInfo.PubKey)
 		if err != nil {
 			log.Errorf("vote choice push: cannot reach VSP %s for ticket %s: %v",
 				vspTicketInfo.Host, h, err)

@@ -14,6 +14,8 @@ import (
 	"gioui.org/op"
 	"gioui.org/widget"
 
+	"github.com/monetarium/monetarium-node/chaincfg/chainhash"
+
 	"github.com/monetarium/skarb-wallet/app"
 	"github.com/monetarium/skarb-wallet/libwallet/assets/dcr"
 	sharedW "github.com/monetarium/skarb-wallet/libwallet/assets/wallet"
@@ -333,14 +335,19 @@ func (pg *TxDetailsPage) OnNavigatedTo() {
 					return
 				}
 
-				if feeTxHash != "" {
+				if feeTxHash != "" && feeTxHash != (chainhash.Hash{}).String() {
 					feeTx, ferr := pg.wallet.GetTransactionRaw(feeTxHash)
 					if feeTx != nil {
 						fees = pg.wallet.ToAmount(feeTx.Amount).String()
+					} else {
+						fees = values.String(values.StrVspFeeUnpaid)
 					}
 					if ferr != nil {
 						log.Errorf("GetTransactionRaw error: %v", ferr)
 					}
+				} else if host != values.String(values.StrNotAvailable) &&
+					host != values.String(values.StrNoLocalVSPRecord) {
+					fees = values.String(values.StrVspFeeUnpaid)
 				}
 				pg.publishVSPInfo(host, fees)
 			}()

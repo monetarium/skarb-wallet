@@ -1844,6 +1844,15 @@ func (w *Wallet) purchaseTickets(ctx context.Context, op errors.Op,
 		fee := txrules.StakePoolTicketFee(ticketPrice, ticketFee,
 			tipHeight, feePrice, w.chainParams,
 			dcp0010Active, dcp0012Active)
+		// StakePoolTicketFee is the VSP quote only. CreateVspPayment also
+		// pays a miner fee from the same inputs — reserve that too or a
+		// UTXO that exactly matches the quote produces a 0-relay-fee tx.
+		relayFee := w.RelayFee()
+		feeEst := txsizes.EstimateSerializeSize(
+			[]int{txsizes.RedeemP2PKHSigScriptSize},
+			[]*wire.TxOut{{PkScript: make([]byte, txsizes.P2PKHPkScriptSize)}},
+			txsizes.P2PKHPkScriptSize)
+		fee += txrules.FeeForSerializeSize(relayFee, feeEst)
 
 		// Reserve outputs for number of buys.
 		vspFeeCredits = make([][]Input, 0, req.Count)
@@ -2158,6 +2167,7 @@ func (w *Wallet) purchaseTickets(ctx context.Context, op errors.Op,
 		return purchaseTicketsResponse, nil
 	}
 
+	var feeErrs []error
 	for i, ticket := range tickets {
 		// Check for request context cancellation while waiting for
 		// trickle time if this was a mixed buy.
@@ -2198,14 +2208,19 @@ func (w *Wallet) purchaseTickets(ctx context.Context, op errors.Op,
 		}
 		unlockCredits = false
 		feeTx := wire.NewMsgTx()
-		for j := range vspFeeCredits[i] {
-			in := &vspFeeCredits[i][j]
-			feeTx.AddTxIn(wire.NewTxIn(&in.OutPoint, in.PrevOut.Value, nil))
+		if i < len(vspFeeCredits) {
+			for j := range vspFeeCredits[i] {
+				in := &vspFeeCredits[i][j]
+				feeTx.AddTxIn(wire.NewTxIn(&in.OutPoint, in.PrevOut.Value, nil))
+			}
 		}
 		ticketHash := purchaseTicketsResponse.TicketHashes[i]
 
 		// Unlock outpoints in case of error.
 		unlock := func() {
+			if i >= len(vspFeeCredits) {
+				return
+			}
 			for _, outpoint := range vspFeeCredits[i] {
 				w.UnlockOutpoint(&outpoint.OutPoint.Hash,
 					outpoint.OutPoint.Index)
@@ -2215,22 +2230,31 @@ func (w *Wallet) purchaseTickets(ctx context.Context, op errors.Op,
 		ticket, err := w.NewVSPTicket(ctx, ticketHash)
 		if err != nil {
 			unlock()
+			log.Errorf("VSP ticket record for published %v failed: %v", ticketHash, err)
+			feeErrs = append(feeErrs, err)
 			continue
 		}
 
 		err = req.VSPClient.Process(ctx, ticket, feeTx)
 		if err != nil {
 			unlock()
+			// Ticket is already on-chain. Keep publishing the rest;
+			// fees can be retried via ProcessUnpaidVSPTickets.
+			log.Errorf("VSP fee for published ticket %v failed: %v", ticketHash, err)
+			feeErrs = append(feeErrs, err)
 			continue
 		}
-		// watch for outpoints change.
-		_, err = udb.NewTxRecordFromMsgTx(feeTx, time.Now())
-		if err != nil {
-			return nil, err
+		// Record is only used as a sanity check; the fee tx is already
+		// in the wallet via CreateVspPayment. Never drop published hashes.
+		if _, recErr := udb.NewTxRecordFromMsgTx(feeTx, time.Now()); recErr != nil {
+			log.Errorf("fee tx record for %v: %v", ticketHash, recErr)
 		}
 	}
 
-	return purchaseTicketsResponse, err
+	if len(feeErrs) > 0 {
+		return purchaseTicketsResponse, errors.E(op, errors.Join(feeErrs...))
+	}
+	return purchaseTicketsResponse, nil
 }
 
 // ReserveOutputsForAmount returns locked spendable outpoints from the given
