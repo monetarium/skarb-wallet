@@ -60,7 +60,9 @@ const (
 	defaultDisableCoinTypeUpgrades = false
 	defaultCircuitLimit            = 32
 	defaultMixSplitLimit           = 10
-	defaultVSPMaxFee               = dcrutil.Amount(0.2e8)
+	// 10 VAR: mainnet VSP fee is a % of ticket price (~5% of ~48 VAR).
+	// The previous 0.2-coin Decred default rejected mainnet quotes.
+	defaultVSPMaxFee               = dcrutil.Amount(10e8)
 
 	// ticket buyer options
 	defaultBalanceToMaintainAbsolute = 0

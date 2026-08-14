@@ -125,7 +125,7 @@ func (c *VSPClient) feePayment(ctx context.Context, ticket *VSPTicket, paidConfi
 
 	fp = &vspFeePayment{
 		client: c,
-		ctx:    context.Background(),
+		ctx:    c.lifetimeCtx(),
 		ticket: ticket,
 		policy: c.policy,
 		params: c.wallet.chainParams,
@@ -576,8 +576,9 @@ func (fp *vspFeePayment) confirmPayment() (err error) {
 	status, err := fp.client.status(ctx, fp.ticket)
 	if err != nil {
 		fp.client.log.Warnf("Rescheduling status check for %v: %v", fp.ticket, err)
-		fp.schedule("confirm payment", fp.confirmPayment)
-		return nil
+		// Return the error so callers do not treat a failed VSP status
+		// probe as success. defer reschedules reconcilePayment.
+		return err
 	}
 
 	switch status.FeeTxStatus {
@@ -606,15 +607,12 @@ func (fp *vspFeePayment) confirmPayment() (err error) {
 		fp.client.log.Warnf("VSP failed to broadcast feetx for %v -- restarting payment",
 			fp.ticket)
 		fp.schedule("reconcile payment", fp.reconcilePayment)
-		return nil
+		return fmt.Errorf("VSP failed to broadcast fee tx for %v", fp.ticket)
 	default:
-		// TODO: transition fp into a dedicated unknown/error state instead
-		// of just logging.
 		fp.client.log.Warnf("VSP responded with unknown FeeTxStatus %q for %v",
 			status.FeeTxStatus, fp.ticket)
+		return fmt.Errorf("unknown VSP FeeTxStatus %q", status.FeeTxStatus)
 	}
-
-	return nil
 }
 
 func marshalTx(tx *wire.MsgTx) (string, error) {

@@ -256,6 +256,11 @@ func (pg *Page) startPageData() {
 		// Through the coalescing guard too: a notification arriving during
 		// this very first load must not start a second concurrent fetch.
 		pg.refreshTicketList()
+		if !pg.dcrWallet.IsLocked() {
+			if err := pg.dcrWallet.ProcessUnpaidVSPTickets(); err != nil {
+				log.Errorf("ProcessUnpaidVSPTickets: %v", err)
+			}
+		}
 		pg.showMaterialLoader.Store(false)
 		pg.ParentWindow().Reload()
 	}()
@@ -486,17 +491,17 @@ func (pg *Page) HandleUserInteractions(gtx C) {
 	// startManualPurchasePasswordModal (CLAUDE.md §3 — the goroutine never shows
 	// a modal or touches Layout-read state directly).
 	if pg.pendingPurchaseResult.CompareAndSwap(true, false) {
+		if pg.stagedPurchaseCount > 0 {
+			successModal := modal.NewSuccessModal(pg.Load,
+				values.StringF(values.StrTicketsPurchased, pg.stagedPurchaseCount), modal.DefaultClickFunc())
+			pg.ParentWindow().ShowModal(successModal)
+			pg.loadPageData()
+			go pg.refreshTicketList()
+		}
 		if pg.stagedPurchaseErr != nil {
 			errModal := modal.NewErrorModal(pg.Load, values.StringF(values.StrTicketError, pg.stagedPurchaseErr), modal.DefaultClickFunc())
 			pg.ParentWindow().ShowModal(errModal)
 			pg.stagedPurchaseErr = nil
-		} else {
-			successModal := modal.NewSuccessModal(pg.Load,
-				values.StringF(values.StrTicketsPurchased, pg.stagedPurchaseCount), modal.DefaultClickFunc())
-			pg.ParentWindow().ShowModal(successModal)
-			// Refresh overview/rewards and the ticket list to show the new tickets.
-			pg.loadPageData()
-			go pg.refreshTicketList()
 		}
 	}
 
@@ -597,16 +602,11 @@ func (pg *Page) HandleUserInteractions(gtx C) {
 			pg.lastViewedTicketHash = ticketTx.Hash
 			pg.ParentNavigator().Display(tpage.NewTransactionDetailsPage(pg.Load, pg.dcrWallet, ticketTx))
 
-			// Check if this ticket is fully registered with a VSP and process any
-			// unpaid fee. VSPTicketInfo + Client.Process each do a blocking HTTPS
-			// round-trip to the VSP, so run them OFF the UI thread (the CAS is a
-			// real single-flight guard). Capture the tx fields by value so the
-			// goroutine never reads mutating page state, and do not touch any
-			// UI-read state from it (CLAUDE.md §3). The wallet must be unlocked
-			// for the VSP to return info; a locked wallet is ignored (log only).
+			// Retry unpaid VSP fees. VSPTicketInfo + Process do HTTPS and
+			// need the voting key — run off the UI thread. inputCount==1
+			// used to skip split-funded tickets and left their fees unpaid.
 			if atomic.CompareAndSwapUint32(&pg.processingTicket, 0, 1) {
 				txHash := ticketTx.Hash
-				inputCount := len(ticketTx.Inputs)
 				go func() {
 					defer atomic.StoreUint32(&pg.processingTicket, 0)
 					ticketInfo, err := pg.dcrWallet.VSPTicketInfo(txHash)
@@ -616,17 +616,15 @@ func (pg *Page) HandleUserInteractions(gtx C) {
 						}
 						return
 					}
-					if ticketInfo.FeeTxStatus != dcr.VSPFeeProcessConfirmed || !ticketInfo.ConfirmedByVSP {
-						log.Warnf("Ticket %s has unconfirmed fee tx with status %q, vsp %s",
-							txHash, ticketInfo.FeeTxStatus.String(), ticketInfo.VSP)
+					if ticketInfo.FeeTxStatus == dcr.VSPFeeProcessConfirmed && ticketInfo.ConfirmedByVSP {
+						return
 					}
-					// Process the unconfirmed fee only if not already paid, the
-					// ticket has a single input, and a VSP client is available.
-					if ticketInfo.FeeTxStatus != dcr.VSPFeeProcessPaid && inputCount == 1 && ticketInfo.Client != nil {
-						log.Infof("Attempting to process the unconfirmed VSP fee for tx: %v", txHash)
-						if err := ticketInfo.Client.Process(pg.ticketContext, ticketInfo.VSPTicket, nil); err != nil {
-							log.Errorf("processing the unconfirmed tx fee failed: %v", err)
-						}
+					if ticketInfo.Client == nil || ticketInfo.VSPTicket == nil {
+						return
+					}
+					log.Infof("Attempting to process the unconfirmed VSP fee for tx: %v", txHash)
+					if err := ticketInfo.Client.Process(pg.ticketContext, ticketInfo.VSPTicket, nil); err != nil {
+						log.Errorf("processing the unconfirmed tx fee failed: %v", err)
 					}
 				}()
 			}
@@ -760,16 +758,10 @@ func (pg *Page) startManualPurchasePasswordModal(accountNumber, numTickets int32
 					vspPubKey = vsp.PubKey
 				}
 				hashes, err := pg.dcrWallet.PurchaseTickets(accountNumber, numTickets, vsp.Host, password, vspPubKey)
-				// Clear the counterpart field too: only one branch runs, and a
-				// leftover value from a prior purchase would otherwise be drained
-				// as a stale result (e.g. a stale error after a later success).
-				if err != nil {
-					pg.stagedPurchaseErr = err
-					pg.stagedPurchaseCount = 0
-				} else {
-					pg.stagedPurchaseCount = len(hashes)
-					pg.stagedPurchaseErr = nil
-				}
+				// Hashes and error can both be set: ticket already on-chain,
+				// VSP fee step failed. Show purchased count AND the fee error.
+				pg.stagedPurchaseCount = len(hashes)
+				pg.stagedPurchaseErr = err
 				pg.purchasing.Store(false)
 				pg.pendingPurchaseResult.Store(true)
 				pg.ParentWindow().Reload()

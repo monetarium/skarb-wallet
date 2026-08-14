@@ -164,10 +164,24 @@ func (asset *Asset) PurchaseTickets(account, numTickets int32, vspHost, passphra
 
 	var vspClient *w.VSPClient
 	if vspHost != "" {
+		if len(vspPubKey) == 0 {
+			return nil, fmt.Errorf("cannot buy a VSP ticket without VSP public key")
+		}
 		var err error
 		vspClient, err = asset.VSPClient(account, vspHost, vspPubKey)
 		if err != nil {
 			return nil, fmt.Errorf("VSP Server instance failed to start: %v", err)
+		}
+		// Refuse to buy until we actually have a fee quote from the VSP.
+		// Mainnet previously published the ticket anyway and then failed
+		// feeaddress (fee > MaxFee), leaving a live ticket with no fee tx.
+		ctx, _ := asset.ShutdownContextWithCancel()
+		pct, err := vspClient.FeePercentage(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("cannot fetch VSP fee percentage from %s: %w", vspHost, err)
+		}
+		if err := asset.checkVSPFeeAgainstMax(pct); err != nil {
+			return nil, err
 		}
 	}
 
@@ -176,11 +190,14 @@ func (asset *Asset) PurchaseTickets(account, numTickets int32, vspHost, passphra
 		return nil, err
 	}
 
+	wasLocked := asset.IsLocked()
 	err = asset.UnlockWallet(passphrase)
 	if err != nil {
 		return nil, utils.TranslateError(err)
 	}
-	defer asset.LockWallet()
+	if wasLocked {
+		defer asset.LockWallet()
+	}
 
 	// The VSP fee flow moved from FeePercent/Process callbacks to passing the
 	// VSP client directly on the request; the wallet processes the fee
@@ -200,11 +217,22 @@ func (asset *Asset) PurchaseTickets(account, numTickets int32, vspHost, passphra
 
 	ctx, _ := asset.ShutdownContextWithCancel()
 	ticketsResponse, err := asset.Internal().DCR.PurchaseTickets(ctx, networkBackend, request)
-	if err != nil {
-		return nil, err
+	// Tickets may already be on-chain when the VSP fee step fails. Keep the
+	// hashes so the UI can show "bought N" instead of pretending nothing
+	// happened (the previous `if err != nil { return nil, err }` dropped them).
+	var hashes []*chainhash.Hash
+	if ticketsResponse != nil {
+		hashes = ticketsResponse.TicketHashes
 	}
-
-	return ticketsResponse.TicketHashes, err
+	if err != nil && len(hashes) > 0 {
+		// Still unlocked here: retry unpaid fees with fresh UTXO
+		// selection before the deferred lock (if any) runs.
+		if retryErr := asset.ProcessUnpaidVSPTickets(); retryErr != nil {
+			log.Warnf("retry unpaid VSP fees after purchase: %v", retryErr)
+		}
+		return hashes, fmt.Errorf("tickets published but VSP fee failed: %w", err)
+	}
+	return hashes, err
 }
 
 // ErrNoVSPRecord reports that this wallet holds no VSP record for a ticket.
@@ -294,9 +322,11 @@ func (asset *Asset) VSPTicketInfo(hash string) (*VSPTicketInfo, error) {
 		FeeTxStatus: VSPFeeStatus(walletTicketInfo.FeeTxStatus),
 	}
 
-	// Account being set to -1 means the default ticket purchase account will be
-	// used in the ticket policy configuration.
-	vspClient, err := asset.VSPClient(-1, walletTicketInfo.Host, walletTicketInfo.PubKey)
+	// Pay/retry from the ticket's own commitment account, not the
+	// auto-buyer setting — a manual buy from account 2 must not retry
+	// the fee from account 0.
+	feeAcct := asset.vspFeeAccount(ctx, ticket)
+	vspClient, err := asset.VSPClient(feeAcct, walletTicketInfo.Host, walletTicketInfo.PubKey)
 	if err != nil {
 		log.Warnf("unable to connect to host: %s Error: %v", walletTicketInfo.Host, err)
 		return ticketInfo, nil
@@ -324,6 +354,96 @@ func (asset *Asset) VSPTicketInfo(hash string) (*VSPTicketInfo, error) {
 	ticketInfo.ConfirmedByVSP = vspTicketStatus.TicketConfirmed
 
 	return ticketInfo, nil
+}
+
+// ProcessUnpaidVSPTickets retries VSP fee payment for every live ticket this
+// wallet registered with a VSP whose fee is not confirmed. Requires an
+// unlocked wallet (voting key + signed feeaddress request).
+func (asset *Asset) ProcessUnpaidVSPTickets() error {
+	if !asset.WalletOpened() {
+		return utils.ErrDCRNotInitialized
+	}
+	if asset.IsLocked() {
+		return errors.New(utils.ErrWalletLocked)
+	}
+
+	ctx, _ := asset.ShutdownContextWithCancel()
+	var lastErr error
+	seen := make(map[chainhash.Hash]struct{})
+	for _, st := range []int{
+		int(VSPFeeProcessStarted),
+		int(VSPFeeProcessErrored),
+		int(VSPFeeProcessPaid),
+	} {
+		hashes, err := asset.Internal().DCR.GetVSPTicketsByFeeStatus(ctx, st)
+		if err != nil {
+			return err
+		}
+		for i := range hashes {
+			h := hashes[i]
+			if _, ok := seen[h]; ok {
+				continue
+			}
+			seen[h] = struct{}{}
+			if err := asset.processOneUnpaidVSPTicket(ctx, &h); err != nil {
+				log.Errorf("ProcessUnpaidVSPTickets: fee for %s: %v", h, err)
+				lastErr = err
+			}
+		}
+	}
+	return lastErr
+}
+
+func (asset *Asset) processOneUnpaidVSPTicket(ctx context.Context, hash *chainhash.Hash) error {
+	info, err := asset.VSPTicketInfo(hash.String())
+	if err != nil || info == nil || info.Client == nil || info.VSPTicket == nil {
+		if err != nil && err.Error() != utils.ErrWalletLocked {
+			return err
+		}
+		return nil
+	}
+	if info.FeeTxStatus == VSPFeeProcessConfirmed && info.ConfirmedByVSP {
+		return nil
+	}
+	return info.Client.Process(ctx, info.VSPTicket, nil)
+}
+
+// vspFeeAccount is the account that should pay (or retry) the VSP fee for
+// this ticket: the ticket's own commitment account when known, otherwise
+// the configured ticket-buyer account, otherwise default account 0.
+func (asset *Asset) vspFeeAccount(ctx context.Context, ticket *w.VSPTicket) int32 {
+	if ticket != nil {
+		if addr := ticket.CommitmentAddr(); addr != nil {
+			if known, err := asset.Internal().DCR.KnownAddress(ctx, addr); err == nil {
+				if num, err := asset.Internal().DCR.AccountNumber(ctx, known.AccountName()); err == nil {
+					return int32(num)
+				}
+			}
+		}
+	}
+	if asset.IsTicketBuyerAccountSet() {
+		return asset.AutoTicketsBuyerConfig().PurchaseAccount
+	}
+	return 0
+}
+
+// checkVSPFeeAgainstMax refuses a buy when the VSP's quoted percent of the
+// current ticket price is already above the wallet fee cap. Saves publishing
+// a ticket that receiveFeeAddress will then reject.
+func (asset *Asset) checkVSPFeeAgainstMax(pct float64) error {
+	if pct <= 0 {
+		return fmt.Errorf("VSP reported invalid fee percentage %v", pct)
+	}
+	tp, err := asset.TicketPrice()
+	if err != nil || tp == nil || tp.TicketPrice <= 0 {
+		return nil
+	}
+	est := dcrutil.Amount(float64(tp.TicketPrice) * pct / 100.0)
+	max := asset.vspMaxFee()
+	if est > max {
+		return fmt.Errorf("VSP fee (~%s at %.2f%%) exceeds wallet maximum %s", est, pct, max)
+	}
+	return nil
 }
 
 // StartTicketBuyer starts the automatic ticket buyer. The wallet
@@ -381,6 +501,15 @@ func (asset *Asset) StartTicketBuyer(passphrase string) error {
 			cancel()
 			log.Errorf("[%d] VSP Client instance failed error: %v", asset.ID, err)
 			return errors.New("VSP Client failed to start due to incorrect configuration")
+		}
+		pct, err := cfg.VspClient.FeePercentage(ctx)
+		if err != nil {
+			cancel()
+			return fmt.Errorf("cannot fetch VSP fee percentage from %s: %w", cfg.VspHost, err)
+		}
+		if err := asset.checkVSPFeeAgainstMax(pct); err != nil {
+			cancel()
+			return err
 		}
 	}
 
@@ -547,10 +676,13 @@ func (asset *Asset) runTicketBuyer(ctx context.Context, passphrase string, cfg *
 				}
 			}
 
-			// start separate ticket purchase for as many tickets that can be purchased
-			// each purchase only buy 1 ticket.
+			// Buy sequentially. Parallel goroutines raced UTXO reservation
+			// and produced failed/double-spent purchases.
 			for i := 0; i < buy; i++ {
-				go buyTicket()
+				if ctx.Err() != nil {
+					break
+				}
+				buyTicket()
 			}
 		}
 	}
