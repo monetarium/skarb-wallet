@@ -3,7 +3,6 @@ package accounts
 import (
 	"fmt"
 	"io"
-	"strconv"
 	"strings"
 
 	"gioui.org/io/clipboard"
@@ -11,6 +10,7 @@ import (
 	"gioui.org/widget"
 
 	"github.com/monetarium/skarb-wallet/app"
+	"github.com/monetarium/skarb-wallet/libwallet/assets/dcr"
 	sharedW "github.com/monetarium/skarb-wallet/libwallet/assets/wallet"
 	"github.com/monetarium/skarb-wallet/ui/cryptomaterial"
 	"github.com/monetarium/skarb-wallet/ui/load"
@@ -80,7 +80,16 @@ func NewDCRAcctDetailsPage(l *load.Load, wallet sharedW.Asset, account *sharedW.
 func (pg *AcctDetailsPage) OnNavigatedTo() {
 	// Balances are intentionally NOT loaded here — this page shows only service
 	// info (see Layout). Per-coin balances live on the Accounts list page.
-	pg.hdPath = pg.AssetsManager.DCRHDPrefix() + strconv.Itoa(int(pg.account.Number)) + "'"
+	// HD path must reflect the wallet's live BIP44 coin type (the same
+	// CoinType() the address manager uses to derive keys), not the
+	// network-wide default prefix (always 9508 on mainnet).
+	if dcrW, ok := pg.wallet.(*dcr.Asset); ok {
+		if path, err := dcrW.HDPathForAccount(pg.account.Number); err == nil {
+			pg.hdPath = path
+		} else {
+			log.Errorf("HDPathForAccount(%d): %v", pg.account.Number, err)
+		}
+	}
 
 	ext := pg.account.ExternalKeyCount
 	internal := pg.account.InternalKeyCount
