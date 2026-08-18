@@ -250,6 +250,13 @@ func (pg *Page) startPageData() {
 	pg.stake.SetChecked(pg.dcrWallet.IsAutoTicketsPurchaseActive())
 	pg.setStakingButtonsState()
 	pg.listenForTxNotifications() // tx ntfn listener is stopped in OnNavigatedFrom().
+	if !pg.dcrWallet.IsLocked() {
+		go func() {
+			if err := pg.dcrWallet.RecoverUnregisteredVSPTickets(); err != nil {
+				log.Warnf("RecoverUnregisteredVSPTickets: %v", err)
+			}
+		}()
+	}
 
 	go func() {
 		pg.showMaterialLoader.Store(true)

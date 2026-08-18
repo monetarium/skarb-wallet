@@ -177,6 +177,9 @@ type vspSelectorModal struct {
 	// isLoadingVSP is written from the ReloadVSPList goroutine and read by
 	// Layout — atomic to avoid the §3 data race.
 	isLoadingVSP atomic.Bool
+	// savingVSP is set while SaveVSP's vspinfo HTTP call is in flight so
+	// extra Save clicks do not stack requests that later look like a hang.
+	savingVSP atomic.Bool
 }
 
 func newVSPSelectorModal(l *load.Load, dcrWallet *dcr.Asset) *vspSelectorModal {
@@ -229,8 +232,11 @@ func (v *vspSelectorModal) OnResume() {
 }
 
 func (v *vspSelectorModal) Handle(gtx C) {
-	v.addVSP.SetEnabled(v.editorsNotEmpty(v.inputVSP.Editor))
+	v.addVSP.SetEnabled(v.editorsNotEmpty(v.inputVSP.Editor) && !v.savingVSP.Load())
 	if v.addVSP.Clicked(gtx) {
+		if v.savingVSP.Load() {
+			return
+		}
 		// A VSP is published as a domain, so that is what people type. Bare
 		// domains fail ValidateHost (url.ParseRequestURI wants an absolute
 		// URI) and used to be rejected with "is not a valid IP or URL
@@ -243,14 +249,21 @@ func (v *vspSelectorModal) Handle(gtx C) {
 			v.inputVSP.SetError(values.StringF(values.StrValidateHostErr, v.inputVSP.Editor.Text()))
 			return
 		}
+		if !v.savingVSP.CompareAndSwap(false, true) {
+			return
+		}
+		v.addVSP.SetEnabled(false)
 		go func() {
 			err := v.dcrImpl.SaveVSP(host)
+			v.savingVSP.Store(false)
 			if err != nil {
 				errModal := modal.NewErrorModal(v.Load, err.Error(), modal.DefaultClickFunc())
 				v.ParentWindow().ShowModal(errModal)
 			} else {
 				v.inputVSP.Editor.SetText("")
+				v.inputVSP.SetError("")
 			}
+			v.ParentWindow().Reload()
 		}()
 	}
 
@@ -418,6 +431,11 @@ func (v *vspSelectorModal) Layout(gtx C) D {
 				return D{}
 			}
 
+			if v.savingVSP.Load() {
+				v.addVSP.Text = values.String(values.StrLoadingVSP)
+			} else {
+				v.addVSP.Text = values.String(values.StrSave)
+			}
 			return layout.Flex{Alignment: layout.Middle}.Layout(gtx,
 				layout.Flexed(1, v.inputVSP.Layout),
 				layout.Rigid(v.addVSP.Layout),
