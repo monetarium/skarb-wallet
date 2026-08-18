@@ -157,17 +157,30 @@ func (asset *Asset) KnownVSPs() []*VSP {
 // SaveVSP marks a VSP as known and will be susbequently included as part of
 // known VSPs.
 func (asset *Asset) SaveVSP(host string) (err error) {
-	// check if host already exists
+	host = normalizeVSPHost(host)
+	if host == "" {
+		return fmt.Errorf("empty VSP host")
+	}
+
+	// Duplicate against saved hosts AND the in-memory list (builtin VSPs
+	// are not in SavedHosts, so adding the shipped host used to succeed
+	// and show twice).
 	vspDbData := asset.getVSPDBData()
 	for _, savedHost := range vspDbData.SavedHosts {
-		if savedHost == host {
+		if normalizeVSPHost(savedHost) == host {
+			return fmt.Errorf("duplicate host %s", host)
+		}
+	}
+	for _, known := range asset.KnownVSPs() {
+		if known != nil && normalizeVSPHost(known.Host) == host {
 			return fmt.Errorf("duplicate host %s", host)
 		}
 	}
 
-	// validate host network
+	log.Infof("SaveVSP: fetching vspinfo from %s", host)
 	info, err := vspInfo(host)
 	if err != nil {
+		log.Errorf("SaveVSP: vspinfo %s: %v", host, err)
 		return err
 	}
 
@@ -182,6 +195,7 @@ func (asset *Asset) SaveVSP(host string) (err error) {
 	asset.vsps = append(asset.vsps, &VSP{Host: host, VspInfoResponse: info})
 	asset.vspMu.Unlock()
 
+	log.Infof("SaveVSP: saved %s", host)
 	return
 }
 

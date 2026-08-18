@@ -206,6 +206,7 @@ func (asset *Asset) PurchaseTickets(account, numTickets int32, vspHost, passphra
 	request := &w.PurchaseTicketsRequest{
 		Count:         int(numTickets),
 		SourceAccount: uint32(account),
+		ChangeAccount: uint32(account),
 		MinConf:       asset.RequiredConfirmations(),
 		VSPClient:     vspClient,
 
@@ -394,6 +395,81 @@ func (asset *Asset) ProcessUnpaidVSPTickets() error {
 	return lastErr
 }
 
+// RecoverUnregisteredVSPTickets resumes VSP fee payment for tickets this
+// wallet already tied to a VSP, and for unmanaged tickets the VSP itself
+// already knows (ticketstatus). It does NOT call Process() on unknown
+// tickets: vspd feeaddress accepts any votable ticket, so that would
+// register solo/Direct-buy tickets and pay a fee without the user asking.
+// Requires an unlocked wallet.
+func (asset *Asset) RecoverUnregisteredVSPTickets() error {
+	if !asset.WalletOpened() {
+		return utils.ErrDCRNotInitialized
+	}
+	if asset.IsLocked() {
+		return errors.New(utils.ErrWalletLocked)
+	}
+
+	host, pubKey := asset.recoverVSPTarget()
+	if host == "" || len(pubKey) == 0 {
+		log.Debugf("RecoverUnregisteredVSPTickets: no VSP to recover against")
+		return asset.ProcessUnpaidVSPTickets()
+	}
+
+	ctx, _ := asset.ShutdownContextWithCancel()
+	tickets, err := asset.Internal().DCR.UnprocessedTickets(ctx)
+	if err != nil {
+		return err
+	}
+	if len(tickets) > 0 {
+		acct := asset.vspFeeAccount(ctx, nil)
+		client, err := asset.VSPClient(acct, host, pubKey)
+		if err != nil {
+			return err
+		}
+		log.Infof("Checking %d unmanaged tickets against %s (skip if VSP does not know them)", len(tickets), host)
+		if err := client.ProcessManagedTickets(ctx, tickets); err != nil {
+			log.Warnf("ProcessManagedTickets: %v", err)
+		}
+	}
+	return asset.ProcessUnpaidVSPTickets()
+}
+
+// recoverVSPTarget is the VSP we should attach unmanaged tickets to: last
+// used, then the auto-buyer host, then the only known VSP on this network.
+func (asset *Asset) recoverVSPTarget() (string, []byte) {
+	host := normalizeVSPHost(asset.LastUsedVSP())
+	if host == "" {
+		host = normalizeVSPHost(asset.AutoTicketsBuyerConfig().VspHost)
+	}
+	if v := asset.vspByHost(host); v != nil && v.VspInfoResponse != nil {
+		return v.Host, v.PubKey
+	}
+	if host != "" {
+		if info, err := vspInfo(host); err == nil {
+			return host, info.PubKey
+		}
+		log.Warnf("recoverVSPTarget: vspinfo %s: cannot fetch pubkey", host)
+	}
+	vsps := asset.KnownVSPs()
+	if len(vsps) == 1 && vsps[0] != nil && vsps[0].VspInfoResponse != nil && vsps[0].Host != "" {
+		return vsps[0].Host, vsps[0].PubKey
+	}
+	return "", nil
+}
+
+func (asset *Asset) vspByHost(host string) *VSP {
+	if host == "" {
+		return nil
+	}
+	host = normalizeVSPHost(host)
+	for _, v := range asset.KnownVSPs() {
+		if v != nil && normalizeVSPHost(v.Host) == host {
+			return v
+		}
+	}
+	return nil
+}
+
 func (asset *Asset) processOneUnpaidVSPTicket(ctx context.Context, hash *chainhash.Hash) error {
 	info, err := asset.VSPTicketInfo(hash.String())
 	if err != nil || info == nil || info.Client == nil || info.VSPTicket == nil {
@@ -522,6 +598,9 @@ func (asset *Asset) StartTicketBuyer(passphrase string) error {
 
 	go func() {
 		log.Infof("[%d] Running ticket buyer", asset.ID)
+		if err := asset.RecoverUnregisteredVSPTickets(); err != nil {
+			log.Warnf("[%d] Recover unregistered VSP tickets: %v", asset.ID, err)
+		}
 
 		if err := asset.runTicketBuyer(ctx, passphrase, cfg); err != nil {
 			if ctx.Err() != nil {
@@ -653,45 +732,43 @@ func (asset *Asset) runTicketBuyer(ctx context.Context, passphrase string, cfg *
 				log.Debugf("[%d] Skipping purchase: low available balance", asset.ID)
 				continue
 			}
+			if max := int(w.ChainParams().MaxFreshStakePerBlock); max > 0 && buy > max {
+				buy = max
+			}
 
 			cancelCtx, cancel := context.WithCancel(ctx)
 			cancels = append(cancels, cancel)
-			buyTicket := func() {
-				err := asset.buyTicket(cancelCtx, passphrase, sdiff, expiry, cfg)
-				if err != nil {
-					switch {
-					// silence these errors
-					case errors.Is(err, errors.InsufficientBalance):
-					case errors.Is(err, context.Canceled):
-					case errors.Is(err, context.DeadlineExceeded):
-					default:
-						log.Errorf("[%d] Ticket purchasing failed: %v", asset.ID, err)
-					}
-					if errors.Is(err, errors.Passphrase) {
-						fatalMu.Lock()
-						fatal = err
-						fatalMu.Unlock()
-						outerCancel()
-					}
+			// One PurchaseTickets(Count=N) like a manual multi-buy: one
+			// split, N tickets, N VSP fees, all in the mempool together.
+			// Count=1-per-loop plus RequiredConfirmations (2 on mainnet)
+			// was stretching auto-buy across one ticket per 1–2 blocks.
+			if err := asset.buyTickets(cancelCtx, passphrase, sdiff, expiry, cfg, buy); err != nil {
+				switch {
+				case errors.Is(err, errors.InsufficientBalance):
+				case errors.Is(err, context.Canceled):
+				case errors.Is(err, context.DeadlineExceeded):
+				default:
+					log.Errorf("[%d] Ticket purchasing failed: %v", asset.ID, err)
 				}
-			}
-
-			// Buy sequentially. Parallel goroutines raced UTXO reservation
-			// and produced failed/double-spent purchases.
-			for i := 0; i < buy; i++ {
-				if ctx.Err() != nil {
-					break
+				if errors.Is(err, errors.Passphrase) {
+					fatalMu.Lock()
+					fatal = err
+					fatalMu.Unlock()
+					outerCancel()
 				}
-				buyTicket()
 			}
 		}
 	}
 }
 
-// buyTicket purchases one ticket with the asset.
-func (asset *Asset) buyTicket(ctx context.Context, passphrase string, sdiff dcrutil.Amount, expiry int32, cfg *TicketBuyerConfig) error {
+// buyTickets purchases count tickets in one PurchaseTickets call (one split).
+func (asset *Asset) buyTickets(ctx context.Context, passphrase string, sdiff dcrutil.Amount, expiry int32, cfg *TicketBuyerConfig, count int) error {
 	ctx, task := trace.NewTask(ctx, "ticketbuyer.buy")
 	defer task.End()
+
+	if count < 1 {
+		return nil
+	}
 
 	if len(passphrase) > 0 && asset.IsLocked() {
 		err := asset.UnlockWallet(passphrase)
@@ -709,16 +786,12 @@ func (asset *Asset) buyTicket(ctx context.Context, passphrase string, sdiff dcru
 		return utils.ErrTicketPurchaseAccMissing
 	}
 
-	// Count is 1 to prevent combining multiple split outputs in one tx,
-	// which can be used to link the tickets eventually purchased with the
-	// split outputs.
-	// Count is 1 to prevent combining multiple split outputs in one tx,
-	// which can be used to link the tickets eventually purchased with the
-	// split outputs. VSP fee handled via the client directly; CoinShuffle++
-	// mixing disabled (mixer removed in Skarb).
+	// Same shape as a manual multi-buy: one split funds every ticket (and
+	// each VSP fee) in this window. Mixing is disabled (mixer removed).
 	request := &w.PurchaseTicketsRequest{
-		Count:         1,
+		Count:         count,
 		SourceAccount: uint32(cfg.PurchaseAccount),
+		ChangeAccount: uint32(cfg.PurchaseAccount),
 		Expiry:        expiry,
 		MinConf:       asset.RequiredConfirmations(),
 		VSPClient:     cfg.VspClient,
