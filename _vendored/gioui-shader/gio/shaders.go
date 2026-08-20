@@ -413,7 +413,7 @@ func init() {
 		Shader_blit_frag[0].MetalLib = zblit_frag_0_metallibmacos
 	}
 	if runtime.GOOS == "ios" {
-		if runtime.GOARCH == "amd64" {
+		if isIOSSimulator() {
 			Shader_blit_frag[0].MetalLib = zblit_frag_0_metallibiossimulator
 		} else {
 			Shader_blit_frag[0].MetalLib = zblit_frag_0_metallibios
@@ -435,7 +435,7 @@ func init() {
 		Shader_blit_frag[1].MetalLib = zblit_frag_1_metallibmacos
 	}
 	if runtime.GOOS == "ios" {
-		if runtime.GOARCH == "amd64" {
+		if isIOSSimulator() {
 			Shader_blit_frag[1].MetalLib = zblit_frag_1_metallibiossimulator
 		} else {
 			Shader_blit_frag[1].MetalLib = zblit_frag_1_metallibios
@@ -457,7 +457,7 @@ func init() {
 		Shader_blit_frag[2].MetalLib = zblit_frag_2_metallibmacos
 	}
 	if runtime.GOOS == "ios" {
-		if runtime.GOARCH == "amd64" {
+		if isIOSSimulator() {
 			Shader_blit_frag[2].MetalLib = zblit_frag_2_metallibiossimulator
 		} else {
 			Shader_blit_frag[2].MetalLib = zblit_frag_2_metallibios
@@ -479,7 +479,7 @@ func init() {
 		Shader_blit_vert.MetalLib = zblit_vert_0_metallibmacos
 	}
 	if runtime.GOOS == "ios" {
-		if runtime.GOARCH == "amd64" {
+		if isIOSSimulator() {
 			Shader_blit_vert.MetalLib = zblit_vert_0_metallibiossimulator
 		} else {
 			Shader_blit_vert.MetalLib = zblit_vert_0_metallibios
@@ -501,7 +501,7 @@ func init() {
 		Shader_copy_frag.MetalLib = zcopy_frag_0_metallibmacos
 	}
 	if runtime.GOOS == "ios" {
-		if runtime.GOARCH == "amd64" {
+		if isIOSSimulator() {
 			Shader_copy_frag.MetalLib = zcopy_frag_0_metallibiossimulator
 		} else {
 			Shader_copy_frag.MetalLib = zcopy_frag_0_metallibios
@@ -523,7 +523,7 @@ func init() {
 		Shader_copy_vert.MetalLib = zcopy_vert_0_metallibmacos
 	}
 	if runtime.GOOS == "ios" {
-		if runtime.GOARCH == "amd64" {
+		if isIOSSimulator() {
 			Shader_copy_vert.MetalLib = zcopy_vert_0_metallibiossimulator
 		} else {
 			Shader_copy_vert.MetalLib = zcopy_vert_0_metallibios
@@ -545,7 +545,7 @@ func init() {
 		Shader_cover_frag[0].MetalLib = zcover_frag_0_metallibmacos
 	}
 	if runtime.GOOS == "ios" {
-		if runtime.GOARCH == "amd64" {
+		if isIOSSimulator() {
 			Shader_cover_frag[0].MetalLib = zcover_frag_0_metallibiossimulator
 		} else {
 			Shader_cover_frag[0].MetalLib = zcover_frag_0_metallibios
@@ -567,7 +567,7 @@ func init() {
 		Shader_cover_frag[1].MetalLib = zcover_frag_1_metallibmacos
 	}
 	if runtime.GOOS == "ios" {
-		if runtime.GOARCH == "amd64" {
+		if isIOSSimulator() {
 			Shader_cover_frag[1].MetalLib = zcover_frag_1_metallibiossimulator
 		} else {
 			Shader_cover_frag[1].MetalLib = zcover_frag_1_metallibios
@@ -589,7 +589,7 @@ func init() {
 		Shader_cover_frag[2].MetalLib = zcover_frag_2_metallibmacos
 	}
 	if runtime.GOOS == "ios" {
-		if runtime.GOARCH == "amd64" {
+		if isIOSSimulator() {
 			Shader_cover_frag[2].MetalLib = zcover_frag_2_metallibiossimulator
 		} else {
 			Shader_cover_frag[2].MetalLib = zcover_frag_2_metallibios
@@ -611,7 +611,7 @@ func init() {
 		Shader_cover_vert.MetalLib = zcover_vert_0_metallibmacos
 	}
 	if runtime.GOOS == "ios" {
-		if runtime.GOARCH == "amd64" {
+		if isIOSSimulator() {
 			Shader_cover_vert.MetalLib = zcover_vert_0_metallibiossimulator
 		} else {
 			Shader_cover_vert.MetalLib = zcover_vert_0_metallibios
@@ -633,7 +633,7 @@ func init() {
 		Shader_input_vert.MetalLib = zinput_vert_0_metallibmacos
 	}
 	if runtime.GOOS == "ios" {
-		if runtime.GOARCH == "amd64" {
+		if isIOSSimulator() {
 			Shader_input_vert.MetalLib = zinput_vert_0_metallibiossimulator
 		} else {
 			Shader_input_vert.MetalLib = zinput_vert_0_metallibios
@@ -655,7 +655,7 @@ func init() {
 		Shader_intersect_frag.MetalLib = zintersect_frag_0_metallibmacos
 	}
 	if runtime.GOOS == "ios" {
-		if runtime.GOARCH == "amd64" {
+		if isIOSSimulator() {
 			Shader_intersect_frag.MetalLib = zintersect_frag_0_metallibiossimulator
 		} else {
 			Shader_intersect_frag.MetalLib = zintersect_frag_0_metallibios
@@ -677,7 +677,7 @@ func init() {
 		Shader_intersect_vert.MetalLib = zintersect_vert_0_metallibmacos
 	}
 	if runtime.GOOS == "ios" {
-		if runtime.GOARCH == "amd64" {
+		if isIOSSimulator() {
 			Shader_intersect_vert.MetalLib = zintersect_vert_0_metallibiossimulator
 		} else {
 			Shader_intersect_vert.MetalLib = zintersect_vert_0_metallibios
@@ -699,7 +699,7 @@ func init() {
 		Shader_material_frag.MetalLib = zmaterial_frag_0_metallibmacos
 	}
 	if runtime.GOOS == "ios" {
-		if runtime.GOARCH == "amd64" {
+		if isIOSSimulator() {
 			Shader_material_frag.MetalLib = zmaterial_frag_0_metallibiossimulator
 		} else {
 			Shader_material_frag.MetalLib = zmaterial_frag_0_metallibios
@@ -721,7 +721,7 @@ func init() {
 		Shader_material_vert.MetalLib = zmaterial_vert_0_metallibmacos
 	}
 	if runtime.GOOS == "ios" {
-		if runtime.GOARCH == "amd64" {
+		if isIOSSimulator() {
 			Shader_material_vert.MetalLib = zmaterial_vert_0_metallibiossimulator
 		} else {
 			Shader_material_vert.MetalLib = zmaterial_vert_0_metallibios
@@ -743,7 +743,7 @@ func init() {
 		Shader_simple_frag.MetalLib = zsimple_frag_0_metallibmacos
 	}
 	if runtime.GOOS == "ios" {
-		if runtime.GOARCH == "amd64" {
+		if isIOSSimulator() {
 			Shader_simple_frag.MetalLib = zsimple_frag_0_metallibiossimulator
 		} else {
 			Shader_simple_frag.MetalLib = zsimple_frag_0_metallibios
@@ -765,7 +765,7 @@ func init() {
 		Shader_stencil_frag.MetalLib = zstencil_frag_0_metallibmacos
 	}
 	if runtime.GOOS == "ios" {
-		if runtime.GOARCH == "amd64" {
+		if isIOSSimulator() {
 			Shader_stencil_frag.MetalLib = zstencil_frag_0_metallibiossimulator
 		} else {
 			Shader_stencil_frag.MetalLib = zstencil_frag_0_metallibios
@@ -787,7 +787,7 @@ func init() {
 		Shader_stencil_vert.MetalLib = zstencil_vert_0_metallibmacos
 	}
 	if runtime.GOOS == "ios" {
-		if runtime.GOARCH == "amd64" {
+		if isIOSSimulator() {
 			Shader_stencil_vert.MetalLib = zstencil_vert_0_metallibiossimulator
 		} else {
 			Shader_stencil_vert.MetalLib = zstencil_vert_0_metallibios

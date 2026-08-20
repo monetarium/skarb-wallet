@@ -139,7 +139,7 @@ func init() {
 		Shader_backdrop_comp.MetalLib = zbackdrop_comp_0_metallibmacos
 	}
 	if runtime.GOOS == "ios" {
-		if runtime.GOARCH == "amd64" {
+		if isIOSSimulator() {
 			Shader_backdrop_comp.MetalLib = zbackdrop_comp_0_metallibiossimulator
 		} else {
 			Shader_backdrop_comp.MetalLib = zbackdrop_comp_0_metallibios
@@ -159,7 +159,7 @@ func init() {
 		Shader_binning_comp.MetalLib = zbinning_comp_0_metallibmacos
 	}
 	if runtime.GOOS == "ios" {
-		if runtime.GOARCH == "amd64" {
+		if isIOSSimulator() {
 			Shader_binning_comp.MetalLib = zbinning_comp_0_metallibiossimulator
 		} else {
 			Shader_binning_comp.MetalLib = zbinning_comp_0_metallibios
@@ -179,7 +179,7 @@ func init() {
 		Shader_coarse_comp.MetalLib = zcoarse_comp_0_metallibmacos
 	}
 	if runtime.GOOS == "ios" {
-		if runtime.GOARCH == "amd64" {
+		if isIOSSimulator() {
 			Shader_coarse_comp.MetalLib = zcoarse_comp_0_metallibiossimulator
 		} else {
 			Shader_coarse_comp.MetalLib = zcoarse_comp_0_metallibios
@@ -199,7 +199,7 @@ func init() {
 		Shader_elements_comp.MetalLib = zelements_comp_0_metallibmacos
 	}
 	if runtime.GOOS == "ios" {
-		if runtime.GOARCH == "amd64" {
+		if isIOSSimulator() {
 			Shader_elements_comp.MetalLib = zelements_comp_0_metallibiossimulator
 		} else {
 			Shader_elements_comp.MetalLib = zelements_comp_0_metallibios
@@ -219,7 +219,7 @@ func init() {
 		Shader_kernel4_comp.MetalLib = zkernel4_comp_0_metallibmacos
 	}
 	if runtime.GOOS == "ios" {
-		if runtime.GOARCH == "amd64" {
+		if isIOSSimulator() {
 			Shader_kernel4_comp.MetalLib = zkernel4_comp_0_metallibiossimulator
 		} else {
 			Shader_kernel4_comp.MetalLib = zkernel4_comp_0_metallibios
@@ -239,7 +239,7 @@ func init() {
 		Shader_path_coarse_comp.MetalLib = zpath_coarse_comp_0_metallibmacos
 	}
 	if runtime.GOOS == "ios" {
-		if runtime.GOARCH == "amd64" {
+		if isIOSSimulator() {
 			Shader_path_coarse_comp.MetalLib = zpath_coarse_comp_0_metallibiossimulator
 		} else {
 			Shader_path_coarse_comp.MetalLib = zpath_coarse_comp_0_metallibios
@@ -259,7 +259,7 @@ func init() {
 		Shader_tile_alloc_comp.MetalLib = ztile_alloc_comp_0_metallibmacos
 	}
 	if runtime.GOOS == "ios" {
-		if runtime.GOARCH == "amd64" {
+		if isIOSSimulator() {
 			Shader_tile_alloc_comp.MetalLib = ztile_alloc_comp_0_metallibiossimulator
 		} else {
 			Shader_tile_alloc_comp.MetalLib = ztile_alloc_comp_0_metallibios
