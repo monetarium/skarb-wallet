@@ -98,10 +98,14 @@ func (asset *Asset) refreshVSPFeeCache() {
 		return
 	}
 	asset.vspFeeMu.Lock()
+	first := asset.vspFeeHashSet == nil
 	asset.vspFeeHashSet = hashSet
 	asset.vspFeeUnpublished = unpublished
 	asset.vspFeeCacheAt = time.Now()
 	asset.vspFeeMu.Unlock()
+	if first {
+		log.Infof("[%d] refreshVSPFeeCache: %d VSP fee hash(es) in wallet db", asset.ID, len(hashSet))
+	}
 }
 
 func (asset *Asset) invalidateVSPFeeCache() {

@@ -7032,6 +7032,22 @@ func (w *Wallet) VSPFeeHashForTicket(ctx context.Context, ticketHash *chainhash.
 	return feeHash, err
 }
 
+// VSPTicket returns the wallet-db VSP record for a ticket. Host may be
+// empty when the vsphost row is missing; FeeHash can still be set.
+func (w *Wallet) VSPTicket(ctx context.Context, ticketHash *chainhash.Hash) (*udb.VSPTicket, error) {
+	const op errors.Op = "wallet.VSPTicket"
+	var ticket *udb.VSPTicket
+	err := walletdb.View(ctx, w.db, func(dbtx walletdb.ReadTx) error {
+		var err error
+		ticket, err = udb.GetVSPTicket(dbtx, *ticketHash)
+		return err
+	})
+	if err != nil {
+		return nil, errors.E(op, err)
+	}
+	return ticket, nil
+}
+
 // VSPHostForTicket returns the current vsp host associated with VSP Ticket.
 func (w *Wallet) VSPHostForTicket(ctx context.Context, ticketHash *chainhash.Hash) (string, error) {
 	var host string
