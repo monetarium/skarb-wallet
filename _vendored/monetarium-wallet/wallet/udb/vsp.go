@@ -5,9 +5,9 @@
 package udb
 
 import (
+	"github.com/monetarium/monetarium-node/chaincfg/chainhash"
 	"github.com/monetarium/monetarium-wallet/errors"
 	"github.com/monetarium/monetarium-wallet/wallet/walletdb"
-	"github.com/monetarium/monetarium-node/chaincfg/chainhash"
 )
 
 var (
@@ -115,6 +115,21 @@ func GetVSPTicket(dbtx walletdb.ReadTx, tickethash chainhash.Hash) (*VSPTicket, 
 		}
 	}
 	return ticket, nil
+}
+
+// ForEachVSPTicket calls f for every VSP-managed ticket. Host/pubkey are
+// left empty — callers that only need FeeHash / FeeTxStatus skip the extra
+// lookups. Iteration stops on the first error from f.
+func ForEachVSPTicket(dbtx walletdb.ReadTx, f func(ticketHash chainhash.Hash, ticket *VSPTicket) error) error {
+	bucket := dbtx.ReadBucket(vspBucketKey)
+	if bucket == nil {
+		return nil
+	}
+	return bucket.ForEach(func(k, v []byte) error {
+		var hash chainhash.Hash
+		_ = hash.SetBytes(k)
+		return f(hash, deserializeVSPTicket(v))
+	})
 }
 
 // GetVSPTicketsByFeeStatus gets all vsp tickets which have

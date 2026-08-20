@@ -93,6 +93,12 @@ func (v *VSPSelector) handle(gtx C, window app.WindowNavigator) {
 			selected(v.selectedVSP).
 			vspSelected(func(info *dcr.VSP) {
 				v.SelectVSP(info.Host)
+			}).
+			vspRemoved(func(host string) {
+				if v.selectedVSP != nil && v.selectedVSP.Host == host {
+					v.selectedVSP = nil
+					v.changed = true
+				}
 			})
 		window.ShowModal(modal)
 	}
@@ -168,8 +174,10 @@ type vspSelectorModal struct {
 	vspList     *cryptomaterial.ClickableList
 
 	vspSelectedCallback func(*dcr.VSP)
+	vspRemovedCallback  func(host string)
 	// showDirectBuy prepends the synthetic "Direct buy (solo)" row.
 	showDirectBuy bool
+	deleteBtns    map[string]*cryptomaterial.Clickable
 
 	dcrImpl *dcr.Asset
 
@@ -192,6 +200,7 @@ func newVSPSelectorModal(l *load.Load, dcrWallet *dcr.Asset) *vspSelectorModal {
 		vspList:        l.Theme.NewClickableList(layout.Vertical),
 		dcrImpl:        dcrWallet,
 		materialLoader: material.Loader(l.Theme.Base),
+		deleteBtns:     make(map[string]*cryptomaterial.Clickable),
 	}
 	v.inputVSP.Editor.SingleLine = true
 
@@ -233,6 +242,17 @@ func (v *vspSelectorModal) OnResume() {
 
 func (v *vspSelectorModal) Handle(gtx C) {
 	v.addVSP.SetEnabled(v.editorsNotEmpty(v.inputVSP.Editor) && !v.savingVSP.Load())
+	deleteClicked := ""
+	for host, btn := range v.deleteBtns {
+		if btn != nil && btn.Clicked(gtx) {
+			deleteClicked = host
+			break
+		}
+	}
+	if deleteClicked != "" {
+		v.confirmDeleteVSP(deleteClicked)
+		return
+	}
 	if v.addVSP.Clicked(gtx) {
 		if v.savingVSP.Load() {
 			return
@@ -302,6 +322,40 @@ func (v *vspSelectorModal) title(title string) *vspSelectorModal {
 func (v *vspSelectorModal) vspSelected(callback func(*dcr.VSP)) *vspSelectorModal {
 	v.vspSelectedCallback = callback
 	return v
+}
+
+func (v *vspSelectorModal) vspRemoved(callback func(host string)) *vspSelectorModal {
+	v.vspRemovedCallback = callback
+	return v
+}
+
+func (v *vspSelectorModal) confirmDeleteVSP(host string) {
+	info := modal.NewCustomModal(v.Load).
+		Title(values.String(values.StrRemoveVSP)).
+		Body(values.StringF(values.StrRemoveVSPWarn, host)).
+		SetCancelable(true).
+		SetNegativeButtonText(values.String(values.StrCancel)).
+		SetPositiveButtonText(values.String(values.StrDelete)).
+		SetPositiveButtonCallback(func(_ bool, _ *modal.InfoModal) bool {
+			if err := v.dcrImpl.DeleteVSP(host); err != nil {
+				errModal := modal.NewErrorModal(v.Load, err.Error(), modal.DefaultClickFunc())
+				v.ParentWindow().ShowModal(errModal)
+				return true
+			}
+			if v.vspRemovedCallback != nil {
+				v.vspRemovedCallback(host)
+			}
+			v.ParentWindow().Reload()
+			return true
+		})
+	v.ParentWindow().ShowModal(info)
+}
+
+func (v *vspSelectorModal) deleteBtn(host string) *cryptomaterial.Clickable {
+	if v.deleteBtns[host] == nil {
+		v.deleteBtns[host] = v.Theme.NewClickable(true)
+	}
+	return v.deleteBtns[host]
 }
 
 func (v *vspSelectorModal) allowDirectBuy(allow bool) *vspSelectorModal {
@@ -397,6 +451,10 @@ func (v *vspSelectorModal) Layout(gtx C) D {
 							}
 							i-- // real VSPs are shifted one down by the synthetic row
 						}
+						if i < 0 || i >= len(vsps) {
+							return D{}
+						}
+						host := vsps[i].Host
 						return layout.Flex{Alignment: layout.Middle}.Layout(gtx,
 							layout.Flexed(0.8, func(gtx C) D {
 								return layout.Inset{Top: values.MarginPadding12, Bottom: values.MarginPadding12}.Layout(gtx, func(gtx C) D {
@@ -411,6 +469,15 @@ func (v *vspSelectorModal) Layout(gtx C) D {
 								}
 								ic := cryptomaterial.NewIcon(v.Theme.Icons.NavigationCheck)
 								return ic.Layout(gtx, values.MarginPadding20)
+							}),
+							layout.Rigid(func(gtx C) D {
+								return layout.Inset{Left: values.MarginPadding8}.Layout(gtx, func(gtx C) D {
+									return v.deleteBtn(host).Layout(gtx, func(gtx C) D {
+										ic := cryptomaterial.NewIcon(v.Theme.Icons.DeleteIcon)
+										ic.Color = v.Theme.Color.Danger
+										return ic.Layout(gtx, values.MarginPadding20)
+									})
+								})
 							}),
 						)
 					})

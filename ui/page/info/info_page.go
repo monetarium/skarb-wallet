@@ -64,7 +64,11 @@ type WalletInfo struct {
 
 	viewAllTxButton,
 	viewAllStakeButton,
-	viewAllRewardButton cryptomaterial.Button
+	viewAllRewardButton,
+	viewAllGovernanceButton cryptomaterial.Button
+
+	agendaMu    sync.RWMutex
+	infoAgendas []*dcr.Agenda
 
 	walletSyncInfo *components.WalletSyncInfo
 
@@ -126,6 +130,12 @@ func NewInfoPage(l *load.Load, wallet sharedW.Asset, backup func(sharedW.Asset),
 	pg.viewAllRewardButton.Inset = layout.UniformInset(0)
 	pg.viewAllRewardButton.HighlightColor = color.NRGBA{}
 
+	pg.viewAllGovernanceButton = pg.Theme.OutlineButton(values.String(values.StrViewAll))
+	pg.viewAllGovernanceButton.Font.Weight = font.Medium
+	pg.viewAllGovernanceButton.TextSize = values.TextSize16
+	pg.viewAllGovernanceButton.Inset = layout.UniformInset(0)
+	pg.viewAllGovernanceButton.HighlightColor = color.NRGBA{}
+
 	pg.mixerRedirectButton, pg.mixerInfoButton = components.SubpageHeaderButtons(l)
 	pg.mixerRedirectButton.Icon = pg.Theme.Icons.NavigationArrowForward
 	pg.mixerRedirectButton.Size = values.MarginPadding20
@@ -153,6 +163,7 @@ func (pg *WalletInfo) OnNavigatedTo() {
 	if pg.wallet.GetAssetType() == libutils.DCRWalletAsset {
 		go pg.loadStakes()
 		go pg.loadRewards()
+		pg.loadGovernanceAgendas()
 
 		if pg.wallet.(*dcr.Asset).IsAccountMixerActive() {
 			pg.listenForMixerNotifications()
@@ -199,6 +210,12 @@ func (pg *WalletInfo) snapshotRewards() []*sharedW.Transaction {
 	return pg.rewards
 }
 
+func (pg *WalletInfo) snapshotAgendas() []*dcr.Agenda {
+	pg.agendaMu.RLock()
+	defer pg.agendaMu.RUnlock()
+	return pg.infoAgendas
+}
+
 func (pg *WalletInfo) loaderShown() bool {
 	pg.txMu.RLock()
 	defer pg.txMu.RUnlock()
@@ -232,6 +249,10 @@ func (pg *WalletInfo) Layout(gtx C) D {
 
 		if len(pg.snapshotRewards()) > 0 {
 			items = append(items, layout.Rigid(pg.recentRewardLayout))
+		}
+
+		if len(pg.snapshotAgendas()) > 0 {
+			items = append(items, layout.Rigid(pg.governanceLayout))
 		}
 
 		return layout.Flex{Axis: layout.Vertical}.Layout(gtx, items...)
@@ -318,6 +339,66 @@ func (pg *WalletInfo) recentRewardLayout(gtx C) D {
 			return pg.walletTxWrapper(gtx, tx, isHiddenSeparator)
 		})
 	})
+}
+
+func (pg *WalletInfo) governanceLayout(gtx C) D {
+	agendas := pg.snapshotAgendas()
+	return pg.pageContentWrapper(gtx, values.String(values.StrGovernance), pg.viewAllGovernanceButton.Layout, func(gtx C) D {
+		children := make([]layout.FlexChild, 0, len(agendas)*2)
+		for i, agenda := range agendas {
+			agenda := agenda
+			if i > 0 {
+				children = append(children, layout.Rigid(func(gtx C) D {
+					return layout.Inset{Left: values.MarginPadding32}.Layout(gtx, pg.Theme.Separator().Layout)
+				}))
+			}
+			children = append(children, layout.Rigid(func(gtx C) D {
+				return pg.agendaPreviewRow(gtx, agenda)
+			}))
+		}
+		return layout.Flex{Axis: layout.Vertical}.Layout(gtx, children...)
+	})
+}
+
+func (pg *WalletInfo) agendaPreviewRow(gtx C, agenda *dcr.Agenda) D {
+	statusText, statusColor := pg.agendaStatusLabel(agenda.Status)
+	return layout.Inset{Top: values.MarginPadding10, Bottom: values.MarginPadding10}.Layout(gtx, func(gtx C) D {
+		return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
+			layout.Rigid(func(gtx C) D {
+				return components.EndToEndRow(gtx,
+					func(gtx C) D {
+						lbl := pg.Theme.Label(values.TextSize16, agenda.AgendaID)
+						lbl.Font.Weight = font.SemiBold
+						return lbl.Layout(gtx)
+					},
+					func(gtx C) D {
+						lbl := pg.Theme.Label(values.TextSize14, statusText)
+						lbl.Color = statusColor
+						return lbl.Layout(gtx)
+					},
+				)
+			}),
+			layout.Rigid(func(gtx C) D {
+				if agenda.Description == "" {
+					return D{}
+				}
+				lbl := pg.Theme.Label(values.TextSize14, agenda.Description)
+				lbl.Color = pg.Theme.Color.GrayText2
+				return layout.Inset{Top: values.MarginPadding4}.Layout(gtx, lbl.Layout)
+			}),
+		)
+	})
+}
+
+func (pg *WalletInfo) agendaStatusLabel(status dcr.AgendaStatusType) (string, color.NRGBA) {
+	switch status {
+	case dcr.AgendaStatusDefined:
+		return values.String(values.StrAgendaDefined), pg.Theme.Color.GrayText2
+	case dcr.AgendaStatusStarted:
+		return values.String(values.StrAgendaStarted), pg.Theme.Color.Primary
+	default:
+		return string(status), pg.Theme.Color.GrayText3
+	}
 }
 
 func (pg *WalletInfo) pageContentWrapper(gtx C, sectionTitle string, redirectBtn, body layout.Widget) D {
@@ -421,6 +502,11 @@ func (pg *WalletInfo) HandleUserInteractions(gtx C) {
 	if pg.viewAllRewardButton.Button.Clicked(gtx) {
 		pg.ParentNavigator().Display(transaction.NewTransactionsPageWithType(pg.Load, 1, pg.wallet))
 	}
+	if pg.viewAllGovernanceButton.Button.Clicked(gtx) {
+		if pg.changeTab != nil {
+			pg.changeTab(values.StrGovernance)
+		}
+	}
 }
 
 func (pg *WalletInfo) listenForMixerNotifications() {
@@ -477,6 +563,7 @@ func (pg *WalletInfo) ListenForNewTx(walletID int) {
 	if pg.wallet.GetAssetType() == libutils.DCRWalletAsset {
 		pg.loadStakes()
 		pg.loadRewards()
+		pg.loadGovernanceAgendas()
 	}
 }
 
@@ -578,6 +665,30 @@ func (pg *WalletInfo) loadStakes() {
 	pg.stakes = stakes
 	pg.txMu.Unlock()
 	pg.ParentWindow().Reload()
+}
+
+func (pg *WalletInfo) loadGovernanceAgendas() {
+	dcrW, ok := pg.wallet.(*dcr.Asset)
+	if !ok {
+		return
+	}
+	all, err := dcrW.AllVoteAgendas(true)
+	if err != nil {
+		log.Errorf("InfoPage.loadGovernanceAgendas: %v", err)
+		return
+	}
+	open := make([]*dcr.Agenda, 0, len(all))
+	for _, a := range all {
+		if a == nil {
+			continue
+		}
+		if a.Status == dcr.AgendaStatusDefined || a.Status == dcr.AgendaStatusStarted {
+			open = append(open, a)
+		}
+	}
+	pg.agendaMu.Lock()
+	pg.infoAgendas = open
+	pg.agendaMu.Unlock()
 }
 
 func (pg *WalletInfo) loadRewards() {

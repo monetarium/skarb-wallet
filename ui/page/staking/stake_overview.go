@@ -256,6 +256,12 @@ func (pg *Page) startPageData() {
 				log.Warnf("RecoverUnregisteredVSPTickets: %v", err)
 			}
 		}()
+	} else {
+		go func() {
+			if err := pg.dcrWallet.ReconcileVSPFeeTransactions(); err != nil {
+				log.Warnf("ReconcileVSPFeeTransactions: %v", err)
+			}
+		}()
 	}
 
 	go func() {

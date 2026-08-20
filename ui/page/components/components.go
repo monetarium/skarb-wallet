@@ -264,17 +264,31 @@ func TransactionTitleIcon(l *load.Load, wal sharedW.Asset, tx *sharedW.Transacti
 		} else {
 			txStatus.Title = values.String(values.StrPoWReward)
 		}
+	} else if isVSPFeeTx(wal, tx) {
+		txStatus.Title = values.String(values.StrVspFee)
+		txStatus.Icon = l.Theme.Icons.SendIcon
 	}
 
 	return &txStatus
 }
 
+func isVSPFeeTx(wal sharedW.Asset, tx *sharedW.Transaction) bool {
+	if wal == nil || tx == nil {
+		return false
+	}
+	dcrAsset, ok := wal.(*dcr.Asset)
+	if !ok {
+		return false
+	}
+	return dcrAsset.IsVSPFeePayment(tx.Hash)
+}
+
 // isPlainRegularRow reports whether the row is a plain Regular transfer that
-// renders as a bare amount with no title. Splits and stake-fee rewards keep
-// Type "Regular" by consensus but carry a row title (Split / PoW / PoS
-// Reward), so they must take the titled layout path instead.
-func isPlainRegularRow(tx *sharedW.Transaction) bool {
-	return tx.Type == txhelper.TxTypeRegular && !tx.IsStakeFee && !dcr.IsSplitTx(tx)
+// renders as a bare amount with no title. Splits, stake-fee rewards and VSP
+// fee payments keep Type "Regular" by consensus but carry a row title, so
+// they must take the titled layout path instead.
+func isPlainRegularRow(wal sharedW.Asset, tx *sharedW.Transaction) bool {
+	return tx.Type == txhelper.TxTypeRegular && !tx.IsStakeFee && !dcr.IsSplitTx(tx) && !isVSPFeeTx(wal, tx)
 }
 
 // LayoutTransactionRow is a single transaction row on the transactions and overview
@@ -328,7 +342,7 @@ func LayoutTransactionRow(gtx C, l *load.Load, wal sharedW.Asset, tx *sharedW.Tr
 				Direction:   layout.Center,
 			}.Layout(gtx,
 				layout.Rigid(func(gtx C) D {
-					if isPlainRegularRow(tx) {
+					if isPlainRegularRow(wal, tx) {
 						amount := dcr.FormatTxAmountBig(tx.AmountAtoms, tx.Amount, tx.CoinType)
 						if tx.Direction == txhelper.TxDirectionSent && !strings.Contains(amount, "-") {
 							amount = "-" + amount
@@ -338,7 +352,7 @@ func LayoutTransactionRow(gtx C, l *load.Load, wal sharedW.Asset, tx *sharedW.Tr
 					return txTitleAndWalletInfoHorizontal(gtx, l, assetIcon, walName, txStatus, hideTxAssetInfo)
 				}),
 				layout.Rigid(func(gtx C) D {
-					if !hideTxAssetInfo && isPlainRegularRow(tx) {
+					if !hideTxAssetInfo && isPlainRegularRow(wal, tx) {
 						return walletIconAndName(gtx, assetIcon, walName)
 					}
 					return cryptomaterial.LinearLayout{
@@ -349,7 +363,7 @@ func LayoutTransactionRow(gtx C, l *load.Load, wal sharedW.Asset, tx *sharedW.Tr
 						Direction:   layout.W,
 					}.Layout(gtx,
 						layout.Rigid(func(gtx C) D {
-							if isPlainRegularRow(tx) {
+							if isPlainRegularRow(wal, tx) {
 								return D{}
 							}
 
@@ -401,7 +415,17 @@ func LayoutTransactionRow(gtx C, l *load.Load, wal sharedW.Asset, tx *sharedW.Tr
 			var dateTimeLbl cryptomaterial.Label
 			txConfirmations := TxConfirmations(wal, tx)
 			reqConf := wal.RequiredConfirmations()
-			if txConfirmations < 1 {
+			vspPhase := dcr.VSPFeePhaseNone
+			if dcrAsset, ok := wal.(*dcr.Asset); ok {
+				vspPhase = dcrAsset.VSPFeeTxPhase(tx)
+			}
+			if vspPhase == dcr.VSPFeePhasePending {
+				status.Text = values.String(values.StrPending)
+				status.Color = l.Theme.Color.GrayText1
+			} else if vspPhase == dcr.VSPFeePhasePendingByVSP {
+				status.Text = values.String(values.StrPendingByVSP)
+				status.Color = l.Theme.Color.GrayText1
+			} else if vspPhase == dcr.VSPFeePhaseUnconfirmed || txConfirmations < 1 {
 				status.Text = values.String(values.StrUnconfirmedTx)
 				status.Color = l.Theme.Color.GrayText1
 			} else if txConfirmations >= reqConf {

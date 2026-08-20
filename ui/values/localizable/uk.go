@@ -502,6 +502,7 @@ const UK = `
 "nConfirmations" = "%d підтверджень"
 "note" = "Нотатка"
 "pending" = "В очікуванні"
+"pendingByVSP" = "Очікує VSP"
 "recipient" = "Отримувач"
 "republished" = "Непідтверджені транзакції повторно опубліковано в мережі %s"
 "rebroadcastLimitExceeded" = "Ви перевищили максимально допустиму кількість повторних трансляцій. Спробуйте ще раз через %d хв."
@@ -750,6 +751,8 @@ const UK = `
 "vspFee" = "Комісія VSP"
 "vspFeeUnpaid" = "Не сплачено"
 "vspFeeErrored" = "Помилка оплати комісії"
+"removeVSP" = "Видалити VSP"
+"removeVSPWarn" = "Видалити %s зі списку VSP?"
 "vSPAPI" = "API VSP"
 
 // Misc (still in active flows)

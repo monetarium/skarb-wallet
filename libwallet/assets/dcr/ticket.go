@@ -412,7 +412,11 @@ func (asset *Asset) RecoverUnregisteredVSPTickets() error {
 	host, pubKey := asset.recoverVSPTarget()
 	if host == "" || len(pubKey) == 0 {
 		log.Debugf("RecoverUnregisteredVSPTickets: no VSP to recover against")
-		return asset.ProcessUnpaidVSPTickets()
+		err := asset.ProcessUnpaidVSPTickets()
+		if recErr := asset.ReconcileVSPFeeTransactions(); recErr != nil {
+			log.Warnf("ReconcileVSPFeeTransactions: %v", recErr)
+		}
+		return err
 	}
 
 	ctx, _ := asset.ShutdownContextWithCancel()
@@ -431,7 +435,11 @@ func (asset *Asset) RecoverUnregisteredVSPTickets() error {
 			log.Warnf("ProcessManagedTickets: %v", err)
 		}
 	}
-	return asset.ProcessUnpaidVSPTickets()
+	err = asset.ProcessUnpaidVSPTickets()
+	if recErr := asset.ReconcileVSPFeeTransactions(); recErr != nil {
+		log.Warnf("ReconcileVSPFeeTransactions: %v", recErr)
+	}
+	return err
 }
 
 // recoverVSPTarget is the VSP we should attach unmanaged tickets to: last

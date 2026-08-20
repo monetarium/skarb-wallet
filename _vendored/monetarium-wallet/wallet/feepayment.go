@@ -13,13 +13,13 @@ import (
 	"sync"
 	"time"
 
-	"github.com/monetarium/monetarium-node/chaincfg/chainhash"
+	"github.com/decred/vspd/types/v3"
 	"github.com/monetarium/monetarium-node/chaincfg"
+	"github.com/monetarium/monetarium-node/chaincfg/chainhash"
 	"github.com/monetarium/monetarium-node/crypto/rand"
 	"github.com/monetarium/monetarium-node/dcrutil"
 	"github.com/monetarium/monetarium-node/txscript/stdaddr"
 	"github.com/monetarium/monetarium-node/wire"
-	"github.com/decred/vspd/types/v3"
 )
 
 var (
@@ -589,7 +589,22 @@ func (fp *vspFeePayment) confirmPayment() (err error) {
 		return nil
 	case "broadcast":
 		fp.client.log.Infof("VSP has successfully sent the fee tx for %v", fp.ticket)
-		// Broadcasted, but not confirmed.
+		// The fee tx was created unpublished so this wallet would not
+		// put it in the mempool before the VSP did. Now that the VSP
+		// has broadcast it, drop the unpublished flag so the UI can
+		// show Unconfirmed (in mempool) instead of Pending by VSP, and
+		// so a later reconnect rebroadcasts it if peers dropped it.
+		fp.mu.Lock()
+		feeHash := fp.feeHash
+		feeTx := fp.feeTx
+		fp.mu.Unlock()
+		w := fp.client.wallet
+		if err := w.SetPublished(ctx, &feeHash, true); err != nil {
+			fp.client.log.Errorf("SetPublished(%v) after VSP broadcast: %v", feeHash, err)
+		}
+		if n, err := w.NetworkBackend(); err == nil {
+			w.watchTxOutputs(ctx, n, feeTx)
+		}
 		fp.schedule("confirm payment", fp.confirmPayment)
 		return nil
 	case "confirmed":

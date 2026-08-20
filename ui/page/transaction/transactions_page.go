@@ -418,8 +418,12 @@ func (pg *TransactionsPage) DisableUniformTab() {
 // Part of the load.Page interface.
 func (pg *TransactionsPage) OnNavigatedTo() {
 	pg.refreshAvailableTxType()
-
-	go pg.scroll.FetchScrollData(false, pg.ParentWindow(), false)
+	// Returning from a tx card used to keep the previous window (and a
+	// possibly stale cache) because FetchScrollData(reset=false) no-ops
+	// when s.data != nil. Mark dirty and refresh in place so a VSP fee
+	// that confirmed while the card was open shows its new status.
+	pg.txCacheDirty.Store(true)
+	go pg.scroll.FetchScrollDataHandler(false, pg.ParentWindow(), false, true)
 }
 
 // initWalletSelector initializes the wallet selector dropdown to enable
@@ -466,6 +470,10 @@ func (pg *TransactionsPage) getAssetType() utils.AssetType {
 }
 
 func (pg *TransactionsPage) refreshAvailableTxType() {
+	var prevStatusLabel string
+	if pg.statusDropDown != nil {
+		prevStatusLabel = pg.statusDropDown.Selected()
+	}
 	items := []cryptomaterial.DropDownItem{}
 	_, keysInfo := components.TxPageDropDownFields(pg.getAssetType(), tableTab(pg.selectedTxCategoryTab))
 	for _, name := range keysInfo {
@@ -481,12 +489,24 @@ func (pg *TransactionsPage) refreshAvailableTxType() {
 	pg.statusDropDown.SetConvertTextSize(pg.ConvertTextSize)
 	settingCommonDropdown(pg.Theme, pg.statusDropDown)
 
-	// The Regular tab opens on "All without Split": splits are ticket
-	// plumbing, not payments, so the plain-transfers view is the useful
-	// default — "All types" stays one click away. (No-op for non-DCR
-	// assets, whose filter set has no such label.)
+	// Recreating the dropdown resets selectedIndex to 0. Opening a tx card
+	// and closing it remounts this page via OnNavigatedTo, which used to
+	// force "All without Split" even when the user had "All Types" selected
+	// — while FetchScrollData(reset=false) kept the previous list, so the
+	// label and the rows disagreed. Restore the previous label when it is
+	// still a valid choice; only default Regular to "All without Split" on
+	// first open or when the previous label is not in this tab's set.
 	if tableTab(pg.selectedTxCategoryTab) == 0 {
-		pg.statusDropDown.SetSelectedValue(values.String(values.StrAllWithoutSplit))
+		if prevStatusLabel != "" {
+			pg.statusDropDown.SetSelectedValue(prevStatusLabel)
+			if pg.statusDropDown.Selected() != prevStatusLabel {
+				pg.statusDropDown.SetSelectedValue(values.String(values.StrAllWithoutSplit))
+			}
+		} else {
+			pg.statusDropDown.SetSelectedValue(values.String(values.StrAllWithoutSplit))
+		}
+	} else if prevStatusLabel != "" {
+		pg.statusDropDown.SetSelectedValue(prevStatusLabel)
 	}
 
 	// Per-status "(N)" count badges were removed with the 3-tab reclassification:
@@ -1624,7 +1644,12 @@ func exportTxs(assets []sharedW.Asset, fileName string) error {
 			err := writer.Write([]string{
 				time.Unix(tx.Timestamp, 0).String(),
 				tx.Hash,
-				tx.Type,
+				func() string {
+					if dcrAsset, ok := a.(*dcr.Asset); ok && dcrAsset.IsVSPFeePayment(tx.Hash) {
+						return values.String(values.StrVspFee)
+					}
+					return tx.Type
+				}(),
 				txhelper.TxDirectionString(tx.Direction),
 				// CSV row formatted under the tx's actual CoinType so SKA
 				// exports don't silently rebrand to "X.XX VAR" via

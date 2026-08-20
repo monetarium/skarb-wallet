@@ -189,6 +189,7 @@ func (asset *Asset) SaveVSP(host string) (err error) {
 	}
 
 	vspDbData.SavedHosts = append(vspDbData.SavedHosts, host)
+	vspDbData.RemovedHosts = withoutHost(vspDbData.RemovedHosts, host)
 	asset.updateVSPDBData(vspDbData)
 
 	asset.vspMu.Lock()
@@ -197,6 +198,60 @@ func (asset *Asset) SaveVSP(host string) (err error) {
 
 	log.Infof("SaveVSP: saved %s", host)
 	return
+}
+
+// DeleteVSP removes host from the known-VSP list. Builtin hosts are not
+// deleted from the binary — they are recorded in RemovedHosts so ReloadVSPList
+// skips them. Adding the same host again via SaveVSP clears that skip.
+func (asset *Asset) DeleteVSP(host string) error {
+	host = normalizeVSPHost(host)
+	if host == "" {
+		return fmt.Errorf("empty VSP host")
+	}
+
+	data := asset.getVSPDBData()
+	data.SavedHosts = withoutHost(data.SavedHosts, host)
+	if !containsHost(data.RemovedHosts, host) {
+		data.RemovedHosts = append(data.RemovedHosts, host)
+	}
+	if normalizeVSPHost(data.LastUsedVSP) == host {
+		data.LastUsedVSP = ""
+	}
+	asset.updateVSPDBData(data)
+
+	asset.vspMu.Lock()
+	kept := make([]*VSP, 0, len(asset.vsps))
+	for _, v := range asset.vsps {
+		if v != nil && normalizeVSPHost(v.Host) != host {
+			kept = append(kept, v)
+		}
+	}
+	asset.vsps = kept
+	asset.vspMu.Unlock()
+
+	log.Infof("DeleteVSP: removed %s", host)
+	return nil
+}
+
+func withoutHost(list []string, host string) []string {
+	host = normalizeVSPHost(host)
+	out := make([]string, 0, len(list))
+	for _, h := range list {
+		if normalizeVSPHost(h) != host {
+			out = append(out, h)
+		}
+	}
+	return out
+}
+
+func containsHost(list []string, host string) bool {
+	host = normalizeVSPHost(host)
+	for _, h := range list {
+		if normalizeVSPHost(h) == host {
+			return true
+		}
+	}
+	return false
 }
 
 // LastUsedVSP returns the host of the last used VSP, as saved by the
@@ -213,8 +268,9 @@ func (asset *Asset) SaveLastUsedVSP(host string) {
 }
 
 type vspDbData struct {
-	SavedHosts  []string
-	LastUsedVSP string
+	SavedHosts   []string
+	LastUsedVSP  string
+	RemovedHosts []string
 }
 
 func (asset *Asset) getVSPDBData() *vspDbData {
@@ -235,8 +291,15 @@ func (asset *Asset) ReloadVSPList(ctx context.Context) {
 	defer log.Debugf("Reloaded list of known VSPs")
 
 	vspDbData := asset.getVSPDBData()
+	removed := make(map[string]bool, len(vspDbData.RemovedHosts))
+	for _, h := range vspDbData.RemovedHosts {
+		removed[normalizeVSPHost(h)] = true
+	}
 	vspList := make(map[string]*vspd.VspInfoResponse)
 	for _, host := range vspDbData.SavedHosts {
+		if removed[normalizeVSPHost(host)] {
+			continue
+		}
 		vspInfo, err := vspInfo(host)
 		if err != nil {
 			// User saved this VSP. Log an error message.
@@ -250,6 +313,9 @@ func (asset *Asset) ReloadVSPList(ctx context.Context) {
 	}
 
 	for _, host := range builtinVSPs(asset.NetType()) {
+		if removed[normalizeVSPHost(host)] {
+			continue
+		}
 		if _, wasAdded := vspList[host]; wasAdded {
 			continue // the user saved this one too
 		}
