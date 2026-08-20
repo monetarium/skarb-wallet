@@ -11,9 +11,11 @@ Thumbs.db
 Skarb.dmg
 Skarb Wallet.dmg
 
-# Android build artifacts (produced by build-android-apk.sh)
+# Android / iOS build artifacts
 *.apk
 *.apk.idsig
+*.ipa
+Skarb-*.app/
 
 # Local developer notes
 CLAUDE.md

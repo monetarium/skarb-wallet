@@ -1,11 +1,11 @@
-//go:build !android
+//go:build !android && !ios
 
 package device
 
-// In-app camera QR scanning is Android-only: desktop has no camera
-// pipeline and iOS builds are not produced yet. The UI hides the scan
-// affordance when QRScanSupported is false, so these stubs only guard
-// against direct calls.
+// In-app camera QR scanning is mobile-only (Android + iOS). Desktop
+// has no camera pipeline. The UI hides the scan affordance when
+// QRScanSupported is false, so these stubs only guard against direct
+// calls.
 
 func (d *Device) QRScanSupported() bool { return false }
 

@@ -99,9 +99,9 @@ func loadConfig() (*config, error) {
 	if appos.Current().IsMobile() {
 		homeDir, err := app.DataDir()
 		if err != nil {
-			return nil, fmt.Errorf("unable to get android home dir: %v", err)
+			return nil, fmt.Errorf("unable to get mobile home dir: %v", err)
 		}
-		defaultHomeDir = homeDir // something like /data/user/0/com.github.cryptopower/files
+		defaultHomeDir = homeDir
 	}
 
 	cfg := defaultConfig(defaultHomeDir)

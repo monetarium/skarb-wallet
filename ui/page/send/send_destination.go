@@ -215,7 +215,7 @@ func (dst *destination) HandleDropdownInteraction(gtx C) {
 	dst.walletDropdown.Handle(gtx)
 }
 
-// startQRScan opens the Android camera overlay (EditorIconButtonEvent)
+// startQRScan opens the in-app camera overlay (EditorIconButtonEvent)
 // and polls it off-thread until a QR decodes, the user cancels, the page
 // stops the scan, or a 2-minute deadline passes.
 func (dst *destination) startQRScan() {
