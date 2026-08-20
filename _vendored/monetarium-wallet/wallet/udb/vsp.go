@@ -126,6 +126,10 @@ func ForEachVSPTicket(dbtx walletdb.ReadTx, f func(ticketHash chainhash.Hash, ti
 		return nil
 	}
 	return bucket.ForEach(func(k, v []byte) error {
+		// Nested buckets (v == nil) and truncated rows are not tickets.
+		if len(k) != hashSize || len(v) < hashSize+8 {
+			return nil
+		}
 		var hash chainhash.Hash
 		_ = hash.SetBytes(k)
 		return f(hash, deserializeVSPTicket(v))
@@ -137,6 +141,9 @@ func ForEachVSPTicket(dbtx walletdb.ReadTx, f func(ticketHash chainhash.Hash, ti
 func GetVSPTicketsByFeeStatus(dbtx walletdb.ReadTx, feeStatus int) (map[chainhash.Hash]*VSPTicket, error) {
 	bucket := dbtx.ReadBucket(vspBucketKey)
 	tickets := make(map[chainhash.Hash]*VSPTicket)
+	if bucket == nil {
+		return tickets, nil
+	}
 	err := bucket.ForEach(func(k, v []byte) error {
 		ticket := deserializeVSPTicket(v)
 		if int(ticket.FeeTxStatus) == feeStatus {

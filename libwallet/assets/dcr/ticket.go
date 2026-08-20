@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math/big"
 	"runtime/trace"
+	"strings"
 	"sync"
 	"time"
 
@@ -264,25 +265,35 @@ func (asset *Asset) VSPTicketRecord(hash string) (*VSPTicketInfo, error) {
 	}
 
 	ctx, _ := asset.ShutdownContextWithCancel()
-	host, err := asset.Internal().DCR.VSPHostForTicket(ctx, ticketHash)
-	if err != nil || host == "" {
-		// The udb lookup reports a missing record as NotExist; anything else
-		// is a real read failure and worth surfacing separately.
-		if err != nil && !errors.Is(err, errors.E(errors.NotExist)) {
-			log.Warnf("VSPTicketRecord: reading host for ticket %s: %v", hash, err)
+	data, err := asset.Internal().DCR.VSPTicket(ctx, ticketHash)
+	if err != nil {
+		if errors.Is(err, errors.NotExist) {
+			log.Infof("VSPTicketRecord: no udb row for ticket %s", hash)
+			return nil, ErrNoVSPRecord
 		}
-		return nil, ErrNoVSPRecord
+		log.Warnf("VSPTicketRecord: reading ticket %s: %v", hash, err)
+		return nil, err
 	}
 
-	info := &VSPTicketInfo{VSP: host}
-
-	if feeHash, err := asset.Internal().DCR.VSPFeeHashForTicket(ctx, ticketHash); err == nil {
-		info.FeeTxHash = feeHash.String()
+	// Host lives in a sidecar vsphost bucket keyed by VSPHostID. A missing
+	// or reset host row used to make VSPHostForTicket return NotExist, and
+	// the details card then said "no record" even though FeeHash was
+	// sitting in the ticket row. Keep the fee; fill host from the row or
+	// the last-used / builtin VSP.
+	host := strings.TrimSpace(data.Host)
+	if host == "" {
+		host = asset.vspHostHint()
+		log.Infof("VSPTicketRecord: ticket %s has fee %s but empty host; using %q",
+			hash, data.FeeHash, host)
 	}
-	if confirmed, err := asset.Internal().DCR.IsVSPTicketConfirmed(ctx, ticketHash); err == nil {
-		info.ConfirmedByVSP = confirmed
+	info := &VSPTicketInfo{
+		VSP:            host,
+		FeeTxStatus:    VSPFeeStatus(data.FeeTxStatus),
+		ConfirmedByVSP: data.FeeTxStatus == uint32(VSPFeeProcessConfirmed),
 	}
-
+	if data.FeeHash != (chainhash.Hash{}) {
+		info.FeeTxHash = data.FeeHash.String()
+	}
 	return info, nil
 }
 
@@ -395,6 +406,24 @@ func (asset *Asset) ProcessUnpaidVSPTickets() error {
 	return lastErr
 }
 
+// UnlockWallet opens the spending key and then re-attaches VSP records
+// for live tickets the VSP already knows (seed restore / missing host
+// row). Solo tickets are not registered.
+func (asset *Asset) UnlockWallet(privPass string) error {
+	privPass = strings.TrimSpace(privPass)
+	if err := asset.Wallet.UnlockWallet(privPass); err != nil {
+		return err
+	}
+	go func() {
+		if err := asset.RecoverUnregisteredVSPTickets(); err != nil {
+			log.Warnf("[%d] post-unlock RecoverUnregisteredVSPTickets: %v", asset.ID, err)
+			return
+		}
+		log.Infof("[%d] post-unlock VSP recover finished", asset.ID)
+	}()
+	return nil
+}
+
 // RecoverUnregisteredVSPTickets resumes VSP fee payment for tickets this
 // wallet already tied to a VSP, and for unmanaged tickets the VSP itself
 // already knows (ticketstatus). It does NOT call Process() on unknown
@@ -409,60 +438,120 @@ func (asset *Asset) RecoverUnregisteredVSPTickets() error {
 		return errors.New(utils.ErrWalletLocked)
 	}
 
-	host, pubKey := asset.recoverVSPTarget()
-	if host == "" || len(pubKey) == 0 {
-		log.Debugf("RecoverUnregisteredVSPTickets: no VSP to recover against")
-		err := asset.ProcessUnpaidVSPTickets()
-		if recErr := asset.ReconcileVSPFeeTransactions(); recErr != nil {
-			log.Warnf("ReconcileVSPFeeTransactions: %v", recErr)
-		}
-		return err
-	}
-
 	ctx, _ := asset.ShutdownContextWithCancel()
-	tickets, err := asset.Internal().DCR.UnprocessedTickets(ctx)
-	if err != nil {
-		return err
-	}
-	if len(tickets) > 0 {
-		acct := asset.vspFeeAccount(ctx, nil)
-		client, err := asset.VSPClient(acct, host, pubKey)
+	targets := asset.recoverVSPTargets()
+	if len(targets) == 0 {
+		log.Warnf("RecoverUnregisteredVSPTickets: no VSP to recover against")
+	} else {
+		tickets, err := asset.Internal().DCR.UnprocessedTickets(ctx)
 		if err != nil {
 			return err
 		}
-		log.Infof("Checking %d unmanaged tickets against %s (skip if VSP does not know them)", len(tickets), host)
-		if err := client.ProcessManagedTickets(ctx, tickets); err != nil {
-			log.Warnf("ProcessManagedTickets: %v", err)
+		log.Infof("RecoverUnregisteredVSPTickets: %d unmanaged live tickets, %d VSP target(s)",
+			len(tickets), len(targets))
+		if len(tickets) > 0 {
+			acct := asset.vspFeeAccount(ctx, nil)
+			for _, t := range targets {
+				client, err := asset.VSPClient(acct, t.host, t.pubKey)
+				if err != nil {
+					log.Warnf("RecoverUnregisteredVSPTickets: client %s: %v", t.host, err)
+					continue
+				}
+				log.Infof("Checking %d unmanaged tickets against %s (skip if VSP does not know them)",
+					len(tickets), t.host)
+				if err := client.ProcessManagedTickets(ctx, tickets); err != nil {
+					log.Warnf("ProcessManagedTickets %s: %v", t.host, err)
+				}
+			}
 		}
 	}
-	err = asset.ProcessUnpaidVSPTickets()
+	asset.invalidateVSPFeeCache()
+	err := asset.ProcessUnpaidVSPTickets()
 	if recErr := asset.ReconcileVSPFeeTransactions(); recErr != nil {
 		log.Warnf("ReconcileVSPFeeTransactions: %v", recErr)
 	}
 	return err
 }
 
-// recoverVSPTarget is the VSP we should attach unmanaged tickets to: last
-// used, then the auto-buyer host, then the only known VSP on this network.
-func (asset *Asset) recoverVSPTarget() (string, []byte) {
-	host := normalizeVSPHost(asset.LastUsedVSP())
-	if host == "" {
-		host = normalizeVSPHost(asset.AutoTicketsBuyerConfig().VspHost)
-	}
-	if v := asset.vspByHost(host); v != nil && v.VspInfoResponse != nil {
-		return v.Host, v.PubKey
-	}
-	if host != "" {
-		if info, err := vspInfo(host); err == nil {
-			return host, info.PubKey
+type vspTarget struct {
+	host   string
+	pubKey []byte
+}
+
+// recoverVSPTargets is every VSP we can ask about unmanaged tickets:
+// last-used, auto-buyer, builtin, saved, then the in-memory list.
+// ProcessManagedTickets skips tickets the VSP does not already know,
+// so trying more than one host will not hijack solo tickets.
+func (asset *Asset) recoverVSPTargets() []vspTarget {
+	var out []vspTarget
+	seen := make(map[string]bool)
+	add := func(host string) {
+		host = normalizeVSPHost(host)
+		if host == "" || seen[host] {
+			return
 		}
-		log.Warnf("recoverVSPTarget: vspinfo %s: cannot fetch pubkey", host)
+		seen[host] = true
+		if v := asset.vspByHost(host); v != nil && v.VspInfoResponse != nil && len(v.PubKey) > 0 {
+			out = append(out, vspTarget{host: v.Host, pubKey: v.PubKey})
+			return
+		}
+		info, err := vspInfo(host)
+		if err != nil {
+			log.Warnf("recoverVSPTargets: vspinfo %s: %v", host, err)
+			return
+		}
+		out = append(out, vspTarget{host: host, pubKey: info.PubKey})
 	}
-	vsps := asset.KnownVSPs()
-	if len(vsps) == 1 && vsps[0] != nil && vsps[0].VspInfoResponse != nil && vsps[0].Host != "" {
-		return vsps[0].Host, vsps[0].PubKey
+	add(asset.LastUsedVSP())
+	add(asset.AutoTicketsBuyerConfig().VspHost)
+	for _, h := range recoverVSPHostCandidates(asset.NetType(), asset.getVSPDBData().SavedHosts) {
+		add(h)
 	}
-	return "", nil
+	for _, v := range asset.KnownVSPs() {
+		if v != nil {
+			add(v.Host)
+		}
+	}
+	return out
+}
+
+// recoverVSPHostCandidates is last-used/buyer-independent: builtin first,
+// then user-saved hosts. Used when LastUsedVSP is empty (common after a
+// VSP is removed from the picker) so recover still talks to our VSP.
+func recoverVSPHostCandidates(net utils.NetworkType, saved []string) []string {
+	out := append([]string{}, builtinVSPs(net)...)
+	for _, h := range saved {
+		h = normalizeVSPHost(h)
+		if h == "" || containsHost(out, h) {
+			continue
+		}
+		out = append(out, h)
+	}
+	return out
+}
+
+// vspHostHint is a display fallback when the ticket row has no host string.
+func (asset *Asset) vspHostHint() string {
+	if h := normalizeVSPHost(asset.LastUsedVSP()); h != "" {
+		return h
+	}
+	if h := normalizeVSPHost(asset.AutoTicketsBuyerConfig().VspHost); h != "" {
+		return h
+	}
+	if b := builtinVSPs(asset.NetType()); len(b) > 0 {
+		return b[0]
+	}
+	return ""
+}
+
+// recoverVSPTarget is the first recoverVSPTargets entry (tests / callers
+// that still want a single host).
+func (asset *Asset) recoverVSPTarget() (string, []byte) {
+	ts := asset.recoverVSPTargets()
+	if len(ts) == 0 {
+		return "", nil
+	}
+	return ts[0].host, ts[0].pubKey
 }
 
 func (asset *Asset) vspByHost(host string) *VSP {
