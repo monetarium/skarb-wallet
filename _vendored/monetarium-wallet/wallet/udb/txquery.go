@@ -121,6 +121,8 @@ func (s *Store) unminedTxDetails(ns walletdb.ReadBucket, txHash *chainhash.Hash,
 	if err != nil {
 		return nil, err
 	}
+	// Unpublished lives in a side bucket, not in the unmined record itself.
+	details.Unpublished = existsUnpublished(ns, txHash[:])
 
 	it := makeReadUnminedCreditIterator(ns, txHash, DBVersion)
 	defer it.close()

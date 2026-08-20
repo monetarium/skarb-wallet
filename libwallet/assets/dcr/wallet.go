@@ -5,6 +5,8 @@ import (
 	"errors"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
+	"time"
 
 	"github.com/monetarium/monetarium-node/chaincfg"
 	dcrW "github.com/monetarium/monetarium-wallet/wallet"
@@ -36,6 +38,17 @@ type Asset struct {
 	vspClients map[string]*dcrW.VSPClient
 	vspMu      sync.RWMutex
 	vsps       []*VSP
+
+	// vspFeeHashSet / vspFeeUnpublished cache VSP fee-tx hashes so the
+	// transaction list can label and status them without a walletdb hit
+	// every frame. Refreshed at most every vspFeeCacheTTL.
+	vspFeeMu            sync.Mutex
+	vspFeeHashSet       map[string]struct{}
+	vspFeeUnpublished   map[string]bool
+	vspFeeSplitDone     map[string]bool
+	vspFeeCacheAt       time.Time
+	vspFeeReconcileBusy atomic.Bool
+	vspFeeRescanned     atomic.Bool
 
 	notificationListenersMu           sync.RWMutex
 	syncData                          *SyncData

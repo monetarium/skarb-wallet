@@ -36,6 +36,7 @@ func (asset *Asset) listenForTransactions() {
 						return
 					}
 
+					asset.invalidateVSPFeeCache()
 					overwritten, err := asset.GetWalletDataDb().SaveOrUpdate(&sharedW.Transaction{}, tempTransaction)
 					if err != nil {
 						log.Errorf("[%d] New Tx save err: %v", asset.ID, err)
@@ -52,6 +53,7 @@ func (asset *Asset) listenForTransactions() {
 
 				for _, block := range v.AttachedBlocks {
 					blockHash := block.Header.BlockHash()
+					asset.invalidateVSPFeeCache()
 					for _, transaction := range block.Transactions {
 						tempTransaction, err := asset.decodeTransactionWithTxSummary(&transaction, &blockHash)
 						if err != nil {

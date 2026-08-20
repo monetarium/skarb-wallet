@@ -288,6 +288,24 @@ func (pg *TxDetailsPage) OnNavigatedTo() {
 	// having to navigate away and back. Detached in OnNavigatedFrom.
 	pg.wireBlockListener()
 
+	// The list may still hold a stale unmined snapshot of a VSP fee tx
+	// that the wallet core has already mined. Re-read from the core so
+	// the card shows the real height without a network rescan.
+	if pg.transaction != nil && pg.transaction.BlockHeight == sharedW.UnminedTxHeight {
+		if updated, err := pg.wallet.GetTransactionRaw(pg.transaction.Hash); err == nil && updated != nil {
+			if updated.BlockHeight != sharedW.UnminedTxHeight {
+				if dcrW, ok := pg.wallet.(*dcr.Asset); ok {
+					if _, saveErr := dcrW.GetWalletDataDb().SaveOrUpdate(&sharedW.Transaction{}, updated); saveErr != nil {
+						log.Warnf("tx details: save mined snapshot of %s: %v", updated.Hash, saveErr)
+					}
+				}
+			}
+			pg.transaction = updated
+			pg.txnWidgets = pg.initTxnWidgets()
+			pg.refreshSenderClickables()
+		}
+	}
+
 	if dcrImp, ok := pg.wallet.(*dcr.Asset); ok {
 		// this tx is a vote transaction
 		if pg.transaction.TicketSpentHash != "" {
@@ -611,7 +629,7 @@ func (pg *TxDetailsPage) txDetailsHeader(gtx C) D {
 							return D{}
 						}),
 						layout.Rigid(func(gtx C) D {
-							if pg.transaction.BlockHeight == -1 {
+							if pg.transaction.BlockHeight == -1 && !pg.vspFeeUnpublished() {
 								if !pg.rebroadcastClickable.Enabled() {
 									gtx = pg.rebroadcastClickable.SetEnabled(false, &gtx)
 								}
@@ -739,6 +757,32 @@ func (pg *TxDetailsPage) txConfirmations() int32 {
 	return 0
 }
 
+func (pg *TxDetailsPage) vspFeePhase() dcr.VSPFeeTxPhase {
+	dcrAsset, ok := pg.wallet.(*dcr.Asset)
+	if !ok || pg.transaction == nil {
+		return dcr.VSPFeePhaseNone
+	}
+	return dcrAsset.VSPFeeTxPhase(pg.transaction)
+}
+
+func (pg *TxDetailsPage) vspFeeUnpublished() bool {
+	phase := pg.vspFeePhase()
+	return phase == dcr.VSPFeePhasePending || phase == dcr.VSPFeePhasePendingByVSP
+}
+
+func (pg *TxDetailsPage) vspFeeStatusLabel() (string, bool) {
+	switch pg.vspFeePhase() {
+	case dcr.VSPFeePhasePending:
+		return values.String(values.StrPending), true
+	case dcr.VSPFeePhasePendingByVSP:
+		return values.String(values.StrPendingByVSP), true
+	case dcr.VSPFeePhaseUnconfirmed:
+		return values.String(values.StrUnconfirmedTx), true
+	default:
+		return "", false
+	}
+}
+
 func (pg *TxDetailsPage) txnTypeAndID(gtx C) D {
 	reqConf := pg.wallet.RequiredConfirmations()
 	transaction := pg.transaction
@@ -863,6 +907,10 @@ func (pg *TxDetailsPage) txnTypeAndID(gtx C) D {
 				typeText = values.String(values.StrTypeStakerCoinbase)
 			case dcr.IsSplitTx(pg.transaction):
 				typeText = fmt.Sprintf("%s (%s)", typeText, values.String(values.StrSplit))
+			default:
+				if dcrAsset, ok := pg.wallet.(*dcr.Asset); ok && dcrAsset.IsVSPFeePayment(pg.transaction.Hash) {
+					typeText = values.String(values.StrVspFee)
+				}
 			}
 			return pg.keyValue(gtx, values.String(values.StrType), pg.Theme.Label(values.TextSize14, typeText).Layout)
 		}),
@@ -929,7 +977,10 @@ func (pg *TxDetailsPage) txnTypeAndID(gtx C) D {
 						// as-is; localisations choose their own casing
 						// upstream in localizable/{uk,en,…}.go.
 						txt := pg.Theme.Body2("")
-						if pg.txConfirmations() == 0 {
+						if label, ok := pg.vspFeeStatusLabel(); ok {
+							txt.Text = label
+							txt.Color = pg.Theme.Color.GrayText2
+						} else if pg.txConfirmations() == 0 {
 							txt.Text = values.String(values.StrUnconfirmedTx)
 							txt.Color = pg.Theme.Color.GrayText2
 						} else if pg.txConfirmations() >= reqConf {
@@ -1374,7 +1425,11 @@ func (pg *TxDetailsPage) initTxnWidgets() transactionWdg {
 	txn.status = pg.Theme.Body1("")
 	txn.wallet = pg.Theme.Body2(pg.wallet.GetWalletName())
 
-	if components.TxConfirmations(pg.wallet, pg.transaction) >= pg.wallet.RequiredConfirmations() {
+	if label, ok := pg.vspFeeStatusLabel(); ok {
+		txn.status.Text = label
+		txn.status.Color = pg.Theme.Color.GrayText2
+		txn.confirmationIcons = pg.Theme.Icons.PendingIcon
+	} else if components.TxConfirmations(pg.wallet, pg.transaction) >= pg.wallet.RequiredConfirmations() {
 		txn.status.Text = pageutils.FormatDateOrTime(pg.transaction.Timestamp)
 		txn.confirmationIcons = pg.Theme.Icons.ConfirmIcon
 	} else {

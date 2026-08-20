@@ -352,9 +352,12 @@ func (pg *Page) accountItemLayout(gtx C, account *sharedW.Account) D {
 		if expanded {
 			children = append(children,
 				layout.Rigid(layout.Spacer{Height: values.MarginPadding4}.Layout),
-				layout.Rigid(pg.labelledAmountRow(values.String(values.StrLocked), cb.locked)),
-				layout.Rigid(pg.labelledAmountRow(values.String(values.StrImmature), cb.immature)),
 			)
+			// SKA cannot be locked in tickets; the Locked row is VAR-only.
+			if cb.coinType.IsVAR() {
+				children = append(children, layout.Rigid(pg.labelledAmountRow(values.String(values.StrLocked), cb.locked)))
+			}
+			children = append(children, layout.Rigid(pg.labelledAmountRow(values.String(values.StrImmature), cb.immature)))
 		}
 	}
 	return cryptomaterial.LinearLayout{

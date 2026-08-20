@@ -34,8 +34,8 @@ import (
 
 	"github.com/monetarium/monetarium-node/blockchain/stake"
 	blockchain "github.com/monetarium/monetarium-node/blockchain/standalone"
-	"github.com/monetarium/monetarium-node/chaincfg/chainhash"
 	"github.com/monetarium/monetarium-node/chaincfg"
+	"github.com/monetarium/monetarium-node/chaincfg/chainhash"
 	"github.com/monetarium/monetarium-node/cointype"
 	"github.com/monetarium/monetarium-node/dcrec"
 	"github.com/monetarium/monetarium-node/dcrec/secp256k1"
@@ -77,7 +77,6 @@ var (
 	waddrmgrNamespaceKey = []byte("waddrmgr")
 	wtxmgrNamespaceKey   = []byte("wtxmgr")
 )
-
 
 // The assumed output script version is defined to assist with refactoring to
 // use actual script versions.
@@ -1794,6 +1793,36 @@ func (w *Wallet) LoadActiveDataFilters(ctx context.Context, n NetworkBackend, re
 		log.Infof("Registered for transaction notifications for %v imported address(es)", importedAddrCount)
 	}
 
+	// Unpublished txs (VSP fees held until the VSP broadcasts) spend wallet
+	// UTXOs but pay a foreign address. Compact filters skip spent outpoints,
+	// so those foreign outputs must be watched or the mined tx is invisible.
+	var unpublishedAddrs []stdaddr.Address
+	err = walletdb.View(ctx, w.db, func(dbtx walletdb.ReadTx) error {
+		recs, err := w.txStore.UnminedTxs(dbtx)
+		if err != nil {
+			return err
+		}
+		for _, rec := range recs {
+			if !rec.Unpublished {
+				continue
+			}
+			for _, out := range rec.MsgTx.TxOut {
+				_, as := stdscript.ExtractAddrs(out.Version, out.PkScript, w.chainParams)
+				unpublishedAddrs = append(unpublishedAddrs, as...)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		log.Errorf("Listing unpublished txs to watch outputs: %v", err)
+	} else if len(unpublishedAddrs) > 0 {
+		if err := n.LoadTxFilter(ctx, false, unpublishedAddrs, nil); err != nil {
+			log.Errorf("Failed to watch unpublished tx outputs: %v", err)
+		} else {
+			log.Infof("Registered compact-filter watch for %d output(s) of unpublished transactions", len(unpublishedAddrs))
+		}
+	}
+
 	defer w.lockedOutpointMu.Unlock()
 	w.lockedOutpointMu.Lock()
 	err = walletdb.View(ctx, w.db, func(dbtx walletdb.ReadTx) error {
@@ -3286,7 +3315,6 @@ func recvCategory(details *udb.TxDetails, syncHeight int32, chainParams *chaincf
 	}
 	return CreditReceive
 }
-
 
 // listTransactions creates a object that may be marshalled to a response result
 // for a listtransactions RPC.
@@ -5967,7 +5995,41 @@ func (w *Wallet) CreateVspPayment(ctx context.Context, tx *wire.MsgTx, fee dcrut
 		return err
 	}
 
+	// Compact filters do not include spent outpoints, so SPV will miss the
+	// mined fee tx unless we watch its output scripts (the VSP fee address
+	// is not a wallet address). Without this the local copy stays unmined
+	// until a full rescan rebuilds the filter from the address book.
+	if n, err := w.NetworkBackend(); err == nil {
+		if _, err := w.watchHDAddrs(ctx, false, n); err != nil {
+			log.Errorf("watchHDAddrs after VSP fee tx %v: %v", feeHash, err)
+		}
+		w.watchTxOutputs(ctx, n, tx)
+		log.Infof("Created unpublished VSP fee tx %v paying %v to %v", feeHash, fee, feeAddr)
+	} else {
+		log.Infof("Created unpublished VSP fee tx %v (no network backend yet to watch outputs)", feeHash)
+	}
+
 	return nil
+}
+
+// watchTxOutputs adds every output script of tx to the SPV compact filter.
+// Used for unpublished VSP fee payments whose primary output is the VSP's
+// address (not owned by this wallet).
+func (w *Wallet) watchTxOutputs(ctx context.Context, n NetworkBackend, tx *wire.MsgTx) {
+	if n == nil || tx == nil {
+		return
+	}
+	var addrs []stdaddr.Address
+	for _, out := range tx.TxOut {
+		_, as := stdscript.ExtractAddrs(out.Version, out.PkScript, w.chainParams)
+		addrs = append(addrs, as...)
+	}
+	if len(addrs) == 0 {
+		return
+	}
+	if err := n.LoadTxFilter(ctx, false, addrs, nil); err != nil {
+		log.Errorf("Failed to watch %d output address(es) of %v: %v", len(addrs), tx.TxHash(), err)
+	}
 }
 
 // SignTransaction uses secrets of the wallet, as well as additional secrets
@@ -6882,6 +6944,34 @@ func (w *Wallet) GetCoinjoinTxsSumbByAcct(ctx context.Context) (map[uint32]int, 
 	}
 
 	return allTxsByAcct, nil
+}
+
+// TxUnpublished reports whether hash is stored as unpublished (signed locally
+// and not yet broadcast by this wallet). Mined txs are never unpublished.
+func (w *Wallet) TxUnpublished(ctx context.Context, hash *chainhash.Hash) (bool, error) {
+	const op errors.Op = "wallet.TxUnpublished"
+	var unpublished bool
+	err := walletdb.View(ctx, w.db, func(dbtx walletdb.ReadTx) error {
+		ns := dbtx.ReadBucket(wtxmgrNamespaceKey)
+		unpublished = udb.ExistsUnpublished(ns, hash)
+		return nil
+	})
+	if err != nil {
+		return false, errors.E(op, err)
+	}
+	return unpublished, nil
+}
+
+// ForEachVSPTicket calls f for every VSP-managed ticket in the wallet.
+func (w *Wallet) ForEachVSPTicket(ctx context.Context, f func(ticketHash chainhash.Hash, ticket *udb.VSPTicket) error) error {
+	const op errors.Op = "wallet.ForEachVSPTicket"
+	err := walletdb.View(ctx, w.db, func(dbtx walletdb.ReadTx) error {
+		return udb.ForEachVSPTicket(dbtx, f)
+	})
+	if err != nil {
+		return errors.E(op, err)
+	}
+	return nil
 }
 
 // GetVSPTicketsByFeeStatus returns the ticket hashes of tickets with the
