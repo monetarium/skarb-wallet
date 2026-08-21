@@ -114,7 +114,7 @@ func (hp *HomePage) navRow(gtx layout.Context, click *cryptomaterial.Clickable, 
 	)
 }
 
-func (hp *HomePage) navIconButton(gtx layout.Context, click *cryptomaterial.Clickable, icon *cryptomaterial.Image) layout.Dimensions {
+func (hp *HomePage) navIconButton(gtx layout.Context, click *cryptomaterial.Clickable) layout.Dimensions {
 	return cryptomaterial.LinearLayout{
 		Width:       cryptomaterial.WrapContent,
 		Height:      cryptomaterial.WrapContent,
@@ -125,7 +125,9 @@ func (hp *HomePage) navIconButton(gtx layout.Context, click *cryptomaterial.Clic
 		Alignment:   layout.Middle,
 	}.Layout(gtx,
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-			return icon.Layout20dp(gtx)
+			ic := hp.Theme.NewIcon(hp.Theme.Icons.ActionSettings)
+			ic.Color = hp.Theme.Color.GrayText1
+			return ic.Layout20dp(gtx)
 		}),
 	)
 }
@@ -573,7 +575,7 @@ func (hp *HomePage) layoutSidebar(gtx layout.Context) layout.Dimensions {
 					return hp.navRow(gtx, hp.overviewClick, values.String(values.StrOverview), overviewColor)
 				}),
 				layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-					return hp.navIconButton(gtx, hp.settingsClick, hp.Theme.Icons.SettingsIcon)
+					return hp.navIconButton(gtx, hp.settingsClick)
 				}),
 			)
 		}),
