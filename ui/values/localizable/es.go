@@ -175,6 +175,7 @@ const ES = `
 "mixingActivity" = "Mixing Activities"
 "pending" = "Pendiente";
 "pendingByVSP" = "Pendiente del VSP"
+"waitingForSplit" = "Esperando split"
 "vote" = "Votar";
 "revoke" = "Revocar";
 "maturity" = "Madurez";

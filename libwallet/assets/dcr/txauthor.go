@@ -637,8 +637,20 @@ func (asset *Asset) Broadcast(privatePassphrase, transactionLabel string) (strin
 		return "", err
 	}
 
+	log.Infof("Broadcast: hash=%s size=%d ins=%d outs=%d",
+		msgTx.TxHash(), msgTx.SerializeSize(), len(msgTx.TxIn), len(msgTx.TxOut))
+	for i, in := range msgTx.TxIn {
+		if in == nil {
+			continue
+		}
+		log.Infof("Broadcast: in[%d] %v:%d tree=%d valueIn=%d",
+			i, in.PreviousOutPoint.Hash, in.PreviousOutPoint.Index,
+			in.PreviousOutPoint.Tree, in.ValueIn)
+	}
+
 	txHash, err := asset.Internal().DCR.PublishTransaction(ctx, &msgTx, n)
 	if err != nil {
+		log.Errorf("Broadcast: PublishTransaction failed hash=%s: %v", msgTx.TxHash(), err)
 		return "", utils.TranslateError(err)
 	}
 
@@ -982,6 +994,14 @@ func (asset *Asset) makeInputSource(useAllInputs bool, utxos []*sharedW.UnspentO
 		if err != nil {
 			sourceErr = fmt.Errorf("invalid TxIn pkScript data found: %v", err)
 			break
+		}
+
+		// Defense in depth: UnspentOutputs already drops live tickets
+		// and immature stake rewards, but a stale preset UTXO list
+		// (manual coin selection) could still hand us an OP_SSTX.
+		if len(script) > 0 && script[0] == txscript.OP_SSTX {
+			log.Warnf("makeInputSource: skipping ticket output %s:%d", output.TxID, output.Vout)
+			continue
 		}
 
 		totalInputValue += dcrutil.Amount(output.Amount.(Amount))

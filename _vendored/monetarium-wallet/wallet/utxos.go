@@ -8,15 +8,17 @@ import (
 	"context"
 	"time"
 
+	"github.com/monetarium/monetarium-node/chaincfg"
+	"github.com/monetarium/monetarium-node/cointype"
+	"github.com/monetarium/monetarium-node/dcrutil"
+	"github.com/monetarium/monetarium-node/txscript"
+	"github.com/monetarium/monetarium-node/txscript/stdscript"
+	"github.com/monetarium/monetarium-node/wire"
 	"github.com/monetarium/monetarium-wallet/errors"
 	"github.com/monetarium/monetarium-wallet/internal/compat"
 	"github.com/monetarium/monetarium-wallet/wallet/txauthor"
 	"github.com/monetarium/monetarium-wallet/wallet/udb"
 	"github.com/monetarium/monetarium-wallet/wallet/walletdb"
-	"github.com/monetarium/monetarium-node/cointype"
-	"github.com/monetarium/monetarium-node/dcrutil"
-	"github.com/monetarium/monetarium-node/txscript/stdscript"
-	"github.com/monetarium/monetarium-node/wire"
 )
 
 // OutputSelectionPolicy describes the rules for selecting an output from the
@@ -56,6 +58,23 @@ func (w *Wallet) UnspentOutputs(ctx context.Context, policy OutputSelectionPolic
 			// Ignore outputs that haven't reached the required
 			// number of confirmations.
 			if !policy.meetsRequiredConfs(output.Height, tipHeight) {
+				continue
+			}
+
+			// Skarb's regular-send path (makeInputSource) spends
+			// exactly this list. Ticket purchase uses
+			// MakeInputSourceWithCoinType, which already skips
+			// immature coinbase / vote rewards / live tickets.
+			// Without the same filter here, a mainnet send authors
+			// a tx the node rejects (CoinbaseMaturity is 256 on
+			// mainnet vs 16 on testnet) — the wallet then shows
+			// Unconfirmed forever because publish "succeeds"
+			// (bytes reached a peer) even though mempool dropped
+			// it. Match the ticket input source so only actually
+			// spendable UTXOs leave this API.
+			if !creditSpendable(w.chainParams, output, tipHeight) {
+				log.Debugf("UnspentOutputs: skip immature/ticket %v:%d height=%d coinbase=%v expiry=%v",
+					output.Hash, output.Index, output.Height, output.FromCoinBase, output.HasExpiry)
 				continue
 			}
 
@@ -120,6 +139,36 @@ func (w *Wallet) UnspentOutputs(ctx context.Context, policy OutputSelectionPolic
 		return nil, errors.E(op, err)
 	}
 	return outputResults, nil
+}
+
+// creditSpendable reports whether a mined credit may be spent in a regular
+// (non-vote) transaction at tipHeight. Rules match MakeInputSourceWithCoinType
+// plus HasExpiry: mond requires CoinbaseMaturity for any output whose parent
+// transaction set Expiry (vote rewards, ticket splits).
+func creditSpendable(params *chaincfg.Params, output *udb.Credit, tipHeight int32) bool {
+	if params == nil || output == nil {
+		return false
+	}
+	txHeight := output.Height
+	coinbaseMature := txHeight >= 0 && tipHeight-txHeight+1 > int32(params.CoinbaseMaturity)
+
+	var op byte
+	if len(output.PkScript) > 0 {
+		op = output.PkScript[0]
+	}
+	switch op {
+	case txscript.OP_SSTX:
+		// Live tickets are only spendable by SSGen, never by a regular send.
+		return false
+	case txscript.OP_SSGEN, txscript.OP_SSRTX, txscript.OP_TADD, txscript.OP_TGEN:
+		return coinbaseMature
+	case txscript.OP_SSTXCHANGE:
+		return txHeight >= 0 && tipHeight-txHeight+1 > int32(params.SStxChangeMaturity)
+	}
+	if output.FromCoinBase || output.HasExpiry {
+		return coinbaseMature
+	}
+	return true
 }
 
 // SelectInputs selects transaction inputs to redeem unspent outputs stored in

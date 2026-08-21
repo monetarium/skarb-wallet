@@ -112,6 +112,22 @@ func (hp *HomePage) navRow(gtx layout.Context, click *cryptomaterial.Clickable, 
 	)
 }
 
+func (hp *HomePage) navIconRow(gtx layout.Context, click *cryptomaterial.Clickable, icon *cryptomaterial.Image) layout.Dimensions {
+	return cryptomaterial.LinearLayout{
+		Width:       cryptomaterial.MatchParent,
+		Height:      cryptomaterial.WrapContent,
+		Clickable:   click,
+		Border:      cryptomaterial.Border{Radius: cryptomaterial.Radius(8)},
+		Padding:     layout.Inset{Top: unit.Dp(9), Bottom: unit.Dp(9), Left: unit.Dp(10), Right: unit.Dp(10)},
+		Orientation: layout.Horizontal,
+		Alignment:   layout.Middle,
+	}.Layout(gtx,
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			return icon.Layout20dp(gtx)
+		}),
+	)
+}
+
 // ID returns the page ID.
 func (hp *HomePage) ID() string { return HomePageID }
 
@@ -498,7 +514,9 @@ func (hp *HomePage) layoutSidebar(gtx layout.Context) layout.Dimensions {
 		}),
 		layout.Rigid(layout.Spacer{Height: unit.Dp(2)}.Layout),
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-			return hp.navRow(gtx, hp.settingsClick, values.String(values.StrSettings), hp.Theme.Color.GrayText1)
+			// Gear instead of the word "Settings" so this app-wide
+			// page is not confused with the wallet Settings tab.
+			return hp.navIconRow(gtx, hp.settingsClick, hp.Theme.Icons.SettingsIcon)
 		}),
 		layout.Rigid(layout.Spacer{Height: unit.Dp(10)}.Layout),
 		layout.Rigid(hp.Theme.Separator().Layout),
