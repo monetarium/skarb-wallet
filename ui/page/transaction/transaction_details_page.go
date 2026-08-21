@@ -773,11 +773,18 @@ func (pg *TxDetailsPage) vspFeeUnpublished() bool {
 func (pg *TxDetailsPage) vspFeeStatusLabel() (string, bool) {
 	switch pg.vspFeePhase() {
 	case dcr.VSPFeePhasePending:
-		return values.String(values.StrPending), true
+		return values.String(values.StrWaitingForSplit), true
 	case dcr.VSPFeePhasePendingByVSP:
 		return values.String(values.StrPendingByVSP), true
 	case dcr.VSPFeePhaseUnconfirmed:
 		return values.String(values.StrUnconfirmedTx), true
+	case dcr.VSPFeePhaseMined:
+		reqConf := pg.wallet.RequiredConfirmations()
+		confs := pg.txConfirmations()
+		if confs < reqConf {
+			return values.StringF(values.StrTxStatusConfirming, confs, reqConf), true
+		}
+		return "", false
 	default:
 		return "", false
 	}

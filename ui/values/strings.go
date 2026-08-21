@@ -582,6 +582,8 @@ const (
 	StrPeersConnected                        = "peersConnected"
 	StrPending                               = "pending"
 	StrPendingByVSP                          = "pendingByVSP"
+	StrWaitingForSplit                       = "waitingForSplit"
+	StrTxStatusConfirming                    = "txStatusConfirming"
 	StrPercentageMixed                       = "percentageMixed"
 	StrPiKey                                 = "piKey"
 	StrPolicySetSuccessful                   = "policySetSuccessfully"

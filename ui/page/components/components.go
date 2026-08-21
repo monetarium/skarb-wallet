@@ -420,7 +420,7 @@ func LayoutTransactionRow(gtx C, l *load.Load, wal sharedW.Asset, tx *sharedW.Tr
 				vspPhase = dcrAsset.VSPFeeTxPhase(tx)
 			}
 			if vspPhase == dcr.VSPFeePhasePending {
-				status.Text = values.String(values.StrPending)
+				status.Text = values.String(values.StrWaitingForSplit)
 				status.Color = l.Theme.Color.GrayText1
 			} else if vspPhase == dcr.VSPFeePhasePendingByVSP {
 				status.Text = values.String(values.StrPendingByVSP)
@@ -435,6 +435,9 @@ func LayoutTransactionRow(gtx C, l *load.Load, wal sharedW.Asset, tx *sharedW.Tr
 				timeSplit := time.Unix(tx.Timestamp, 0).Format("15:04")
 				dateTimeLbl = l.Theme.Label(l.ConvertTextSize(txSize), values.StringF(values.StrDateAtTime, date, timeSplit))
 				dateTimeLbl.Color = grayText
+			} else if vspPhase == dcr.VSPFeePhaseMined {
+				status = l.Theme.Label(txSize, values.StringF(values.StrTxStatusConfirming, txConfirmations, reqConf))
+				status.Color = l.Theme.Color.GrayText1
 			} else {
 				status = l.Theme.Label(txSize, values.StringF(values.StrTxStatusPending, txConfirmations, reqConf))
 				status.Color = l.Theme.Color.GrayText1

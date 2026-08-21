@@ -153,6 +153,7 @@ const FR = `
 "governance" = "Gouvernance";
 "pending" = "En attendant";
 "pendingByVSP" = "En attente du VSP"
+"waitingForSplit" = "En attente du split"
 "vote" = "Vote";
 "revoke" = "Révoquer";
 "yesterday" = "hier";

@@ -75,7 +75,45 @@ var PageNavigationMap = map[string]string{
 	values.StrTransactions: transaction.TransactionsPageID,
 	values.StrStaking:      staking.OverviewPageID,
 	values.StrGovernance:   governance.GovernancePageID,
+	values.StrAccounts:     accounts.AccountsPageID,
 	values.StrSettings:     WalletSettingsPageID,
+}
+
+// TabsForWallet is the wallet-page order shown in the Home sidebar
+// (Info, Send, Receive, Transactions, Staking, Governance, Accounts,
+// Settings). Watch-only wallets drop Send / Staking / Governance.
+func TabsForWallet(w sharedW.Asset) []string {
+	tabs := []string{
+		values.StrInfo,
+		values.StrReceive,
+		values.StrTransactions,
+		values.StrAccounts,
+		values.StrSettings,
+	}
+	if w == nil || w.IsWatchingOnlyWallet() {
+		return tabs
+	}
+	tabs = append([]string{values.StrInfo, values.StrSend}, tabs[1:]...)
+	if w.GetAssetType() != libutils.DCRWalletAsset {
+		return tabs
+	}
+	out := make([]string, 0, len(tabs)+2)
+	for _, t := range tabs {
+		if t == values.StrAccounts {
+			out = append(out, values.StrStaking, values.StrGovernance)
+		}
+		out = append(out, t)
+	}
+	return out
+}
+
+// SetSelectedTab remembers the wallet-detail tab so the next open of this
+// wallet lands there (used when the sidebar switches tab from Overview).
+func SetSelectedTab(walletID int, tab string) {
+	if tab == "" {
+		return
+	}
+	selectedTab[walletID] = tab
 }
 
 // SingleWalletMasterPage is a master page for interacting with a single wallet.
@@ -93,6 +131,7 @@ type SingleWalletMasterPage struct {
 	walletBalance sharedW.AssetAmount
 
 	PageNavigationTab      *cryptomaterial.SegmentedControl
+	tabKeys                []string
 	hideBalanceButton      *cryptomaterial.Clickable
 	refreshExchangeRateBtn *cryptomaterial.Clickable
 	openWalletSelector     cryptomaterial.IconButton
@@ -276,65 +315,44 @@ func (swmp *SingleWalletMasterPage) ListenNewTxForSubPage(walletID int) {
 	}
 }
 
-// initTabOptions initializes the page navigation tabs
+// initTabOptions initializes the page navigation tabs. The strip itself is
+// no longer drawn here — HomePage lists the same keys in the sidebar —
+// but SegmentedControl still holds the selected key for changeTab.
 func (swmp *SingleWalletMasterPage) initTabOptions() {
-	commonTabs := []string{
-		values.StrInfo,
-		values.StrReceive,
-		values.StrTransactions,
-		values.StrAccounts,
-		values.StrSettings,
-	}
-
-	if !swmp.selectedWallet.IsWatchingOnlyWallet() {
-		// Add 'Send' to the tabs for non-watching-only wallets.
-		sendTab := []string{values.StrSend}
-		// Insert 'Send' after 'StrInfo'.
-		commonTabs = append(commonTabs[:1], append(sendTab, commonTabs[1:]...)...)
-	}
-
-	// Staking + Governance tabs for DCR wallets that can sign (not
-	// watch-only). Inserted just before 'Accounts', mirroring Cryptopower's
-	// tab order. CoinShuffle++ mixing (StakeShuffle) and Politeia stay out —
-	// only PoS staking and consensus-agenda voting are restored.
-	if swmp.selectedWallet.GetAssetType() == libutils.DCRWalletAsset && !swmp.selectedWallet.IsWatchingOnlyWallet() {
-		withStaking := make([]string, 0, len(commonTabs)+2)
-		for _, t := range commonTabs {
-			if t == values.StrAccounts {
-				withStaking = append(withStaking, values.StrStaking, values.StrGovernance)
-			}
-			withStaking = append(withStaking, t)
-		}
-		commonTabs = withStaking
-	}
-
-	// SegmentTypeGroupMax distributes width evenly across all tabs
-	// instead of laying them out in a horizontal scroller. Split mode
-	// (the previous setting) padded each tab with 32px LR + a chevron
-	// nav on either side, so the 6 Ukrainian-localised tabs
-	// (Інформація / Надіслати / Отримати / Транзакції / Акаунти /
-	// Налаштування) didn't fit on a typical desktop width and the
-	// user had to scroll the strip horizontally. GroupMax computes
-	// per-tab Width = (layoutSize − 8) / len(tabs) — every tab gets
-	// an equal slice, no overflow, no scroll buttons.
-	// …but an equal slice of a phone is ~45dp per tab, and "Transactions" or
-	// "Транзакції" in 45dp is a stack of single letters — the strip becomes
-	// unreadable exactly where it matters most. SegmentTypeGroup keeps each
-	// tab at its natural width and scrolls the strip horizontally instead:
-	// every tab is still there, in the same order, just reached by swiping
-	// the strip rather than by squeezing it.
-	tabType := cryptomaterial.SegmentTypeGroupMax
-	if swmp.IsMobileView() {
-		tabType = cryptomaterial.SegmentTypeGroup
-	}
-	swmp.PageNavigationTab = swmp.Theme.SegmentedControl(commonTabs, tabType)
+	swmp.tabKeys = TabsForWallet(swmp.selectedWallet)
+	swmp.PageNavigationTab = swmp.Theme.SegmentedControl(swmp.tabKeys, cryptomaterial.SegmentTypeGroup)
 	swmp.PageNavigationTab.SetEnableSwipe(false)
-	dp5 := values.MarginPadding5
-	swmp.PageNavigationTab.ContentPadding = layout.Inset{
-		Left:  dp5,
-		Right: dp5,
-		Top:   values.MarginPaddingTransform(swmp.IsMobileView(), values.MarginPadding16),
+}
+
+// TabKeys is the sidebar order for this wallet (copy).
+func (swmp *SingleWalletMasterPage) TabKeys() []string {
+	if len(swmp.tabKeys) == 0 {
+		return TabsForWallet(swmp.selectedWallet)
 	}
+	out := make([]string, len(swmp.tabKeys))
+	copy(out, swmp.tabKeys)
+	return out
+}
+
+// SelectedTab is the translation key of the open wallet page.
+func (swmp *SingleWalletMasterPage) SelectedTab() string {
+	if swmp.PageNavigationTab == nil {
+		return values.StrInfo
+	}
+	return swmp.PageNavigationTab.SelectedSegment()
+}
+
+// SelectTab opens the named wallet page (same keys as TabsForWallet).
+func (swmp *SingleWalletMasterPage) SelectTab(tab string) {
+	swmp.changeTab(tab)
+}
+
+// WalletID is the open wallet's ID (for the sidebar accordion).
+func (swmp *SingleWalletMasterPage) WalletID() int {
+	if swmp.selectedWallet == nil {
+		return -1
+	}
+	return swmp.selectedWallet.GetWalletID()
 }
 
 func (swmp *SingleWalletMasterPage) isGovernanceAPIAllowed() bool {
@@ -654,50 +672,42 @@ func (swmp *SingleWalletMasterPage) Layout(gtx C) D {
 	// bottom-most back target. Sub-pages lay out their own arrows later
 	// in the frame, so a deeper arrow always wins.
 	swmp.Theme.MarkBackButtonLaidOut(swmp.openWalletSelector.Button)
-	return layout.Stack{}.Layout(gtx,
-		layout.Expanded(func(gtx C) D {
-			return cryptomaterial.LinearLayout{
-				Width:       cryptomaterial.MatchParent,
-				Height:      cryptomaterial.MatchParent,
-				Orientation: layout.Vertical,
-				Alignment:   layout.Middle,
-			}.Layout(gtx,
-				layout.Rigid(swmp.LayoutTopBar),
-				layout.Rigid(func(gtx C) D {
-					return layout.Inset{
-						Top:    values.MarginPadding0,
-						Bottom: values.MarginPadding0,
-					}.Layout(gtx, func(gtx C) D {
-						return swmp.PageNavigationTab.Layout(gtx, func(gtx C) D {
-							if swmp.CurrentPage() == nil {
-								return D{}
-							}
-							switch swmp.CurrentPage().ID() {
-							case receive.ReceivePageID, send.SendPageID,
-								transaction.TransactionsPageID, accounts.AccountsPageID:
-								// Disable page functionality if a page is not synced or rescanning is in progress.
-								if swmp.selectedWallet.IsSyncing() {
-									syncInfo := components.NewWalletSyncInfo(swmp.Load, swmp.selectedWallet, func() {}, func(_ sharedW.Asset) {})
-									blockHeightFetched := values.StringF(values.StrBlockHeaderFetchedCount, swmp.selectedWallet.GetBestBlock().Height, syncInfo.FetchSyncProgress().HeadersToFetchOrScan())
-									title := values.String(values.StrFunctionUnavailable)
-									subTitle := fmt.Sprintf("%s "+blockHeightFetched, values.String(values.StrBlockHeaderFetched))
-									return components.DisablePageWithOverlay(swmp.Load, swmp.CurrentPage(), gtx,
-										title, subTitle, nil)
-								}
-								if !swmp.selectedWallet.IsSynced() || swmp.selectedWallet.IsRescanning() {
-									return components.DisablePageWithOverlay(swmp.Load, swmp.CurrentPage(), gtx,
-										values.String(values.StrFunctionUnavailable), "", &swmp.navigateToSyncBtn)
-								}
-								fallthrough
-							default:
-								return swmp.CurrentPage().Layout(gtx)
-							}
-						}, swmp.IsMobileView())
-					})
-				}),
-			)
-		}),
+	return cryptomaterial.LinearLayout{
+		Width:       cryptomaterial.MatchParent,
+		Height:      cryptomaterial.MatchParent,
+		Orientation: layout.Vertical,
+		Alignment:   layout.Middle,
+	}.Layout(gtx,
+		layout.Rigid(swmp.LayoutTopBar),
+		layout.Flexed(1, swmp.layoutWalletBody),
 	)
+}
+
+func (swmp *SingleWalletMasterPage) layoutWalletBody(gtx C) D {
+	if swmp.CurrentPage() == nil {
+		return D{}
+	}
+	return layout.Inset{Top: values.MarginPadding8}.Layout(gtx, func(gtx C) D {
+		switch swmp.CurrentPage().ID() {
+		case receive.ReceivePageID, send.SendPageID,
+			transaction.TransactionsPageID, accounts.AccountsPageID:
+			if swmp.selectedWallet.IsSyncing() {
+				syncInfo := components.NewWalletSyncInfo(swmp.Load, swmp.selectedWallet, func() {}, func(_ sharedW.Asset) {})
+				blockHeightFetched := values.StringF(values.StrBlockHeaderFetchedCount, swmp.selectedWallet.GetBestBlock().Height, syncInfo.FetchSyncProgress().HeadersToFetchOrScan())
+				title := values.String(values.StrFunctionUnavailable)
+				subTitle := fmt.Sprintf("%s "+blockHeightFetched, values.String(values.StrBlockHeaderFetched))
+				return components.DisablePageWithOverlay(swmp.Load, swmp.CurrentPage(), gtx,
+					title, subTitle, nil)
+			}
+			if !swmp.selectedWallet.IsSynced() || swmp.selectedWallet.IsRescanning() {
+				return components.DisablePageWithOverlay(swmp.Load, swmp.CurrentPage(), gtx,
+					values.String(values.StrFunctionUnavailable), "", &swmp.navigateToSyncBtn)
+			}
+			fallthrough
+		default:
+			return swmp.CurrentPage().Layout(gtx)
+		}
+	})
 }
 
 func (swmp *SingleWalletMasterPage) LayoutTopBar(gtx C) D {
