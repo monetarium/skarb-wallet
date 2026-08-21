@@ -347,6 +347,14 @@ func (swmp *SingleWalletMasterPage) SelectTab(tab string) {
 	swmp.changeTab(tab)
 }
 
+// WalletID is the open wallet's ID (for the sidebar accordion).
+func (swmp *SingleWalletMasterPage) WalletID() int {
+	if swmp.selectedWallet == nil {
+		return -1
+	}
+	return swmp.selectedWallet.GetWalletID()
+}
+
 func (swmp *SingleWalletMasterPage) isGovernanceAPIAllowed() bool {
 	return swmp.AssetsManager.IsHTTPAPIPrivacyModeOff(libutils.GovernanceHTTPAPI)
 }
