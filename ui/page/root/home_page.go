@@ -55,6 +55,7 @@ type HomePage struct {
 	overviewClick     *cryptomaterial.Clickable
 	settingsClick     *cryptomaterial.Clickable
 	createWalletClick *cryptomaterial.Clickable
+	tabClicks         map[string]*cryptomaterial.Clickable
 
 	// selectedWalletID is the wallet whose detail page is currently shown in
 	// the body, so its sidebar entry can be highlighted. -1 = none (Overview).
@@ -84,6 +85,7 @@ func NewHomePage(l *load.Load) *HomePage {
 		overviewClick:     l.Theme.NewClickable(true),
 		settingsClick:     l.Theme.NewClickable(true),
 		createWalletClick: l.Theme.NewClickable(true),
+		tabClicks:         make(map[string]*cryptomaterial.Clickable),
 		menuClick:         l.Theme.NewClickable(true),
 		scrimClick:        l.Theme.NewClickable(false),
 		selectedWalletID:  -1,
@@ -112,13 +114,13 @@ func (hp *HomePage) navRow(gtx layout.Context, click *cryptomaterial.Clickable, 
 	)
 }
 
-func (hp *HomePage) navIconRow(gtx layout.Context, click *cryptomaterial.Clickable, icon *cryptomaterial.Image) layout.Dimensions {
+func (hp *HomePage) navIconButton(gtx layout.Context, click *cryptomaterial.Clickable, icon *cryptomaterial.Image) layout.Dimensions {
 	return cryptomaterial.LinearLayout{
-		Width:       cryptomaterial.MatchParent,
+		Width:       cryptomaterial.WrapContent,
 		Height:      cryptomaterial.WrapContent,
 		Clickable:   click,
 		Border:      cryptomaterial.Border{Radius: cryptomaterial.Radius(8)},
-		Padding:     layout.Inset{Top: unit.Dp(9), Bottom: unit.Dp(9), Left: unit.Dp(10), Right: unit.Dp(10)},
+		Padding:     layout.Inset{Top: unit.Dp(6), Bottom: unit.Dp(6), Left: unit.Dp(8), Right: unit.Dp(8)},
 		Orientation: layout.Horizontal,
 		Alignment:   layout.Middle,
 	}.Layout(gtx,
@@ -126,6 +128,60 @@ func (hp *HomePage) navIconRow(gtx layout.Context, click *cryptomaterial.Clickab
 			return icon.Layout20dp(gtx)
 		}),
 	)
+}
+
+func (hp *HomePage) tabClick(key string) *cryptomaterial.Clickable {
+	if hp.tabClicks == nil {
+		hp.tabClicks = make(map[string]*cryptomaterial.Clickable)
+	}
+	c, ok := hp.tabClicks[key]
+	if !ok || c == nil {
+		c = hp.Theme.NewClickable(true)
+		hp.tabClicks[key] = c
+	}
+	return c
+}
+
+func (hp *HomePage) currentWalletPage() *walletpage.SingleWalletMasterPage {
+	p, ok := hp.CurrentPage().(*walletpage.SingleWalletMasterPage)
+	if !ok {
+		return nil
+	}
+	return p
+}
+
+func (hp *HomePage) sidebarTargetWallet() sharedW.Asset {
+	if hp.selectedWalletID >= 0 {
+		for _, e := range hp.walletEntries {
+			if e.wallet != nil && e.wallet.GetWalletID() == hp.selectedWalletID {
+				return e.wallet
+			}
+		}
+	}
+	if len(hp.walletEntries) > 0 {
+		return hp.walletEntries[0].wallet
+	}
+	return nil
+}
+
+func (hp *HomePage) sidebarWalletTabs() []string {
+	if wp := hp.currentWalletPage(); wp != nil {
+		return wp.TabKeys()
+	}
+	return walletpage.TabsForWallet(hp.sidebarTargetWallet())
+}
+
+func (hp *HomePage) openWalletTab(tab string) {
+	if wp := hp.currentWalletPage(); wp != nil {
+		wp.SelectTab(tab)
+		return
+	}
+	w := hp.sidebarTargetWallet()
+	if w == nil {
+		return
+	}
+	walletpage.SetSelectedTab(w.GetWalletID(), tab)
+	hp.openWallet(w)
 }
 
 // ID returns the page ID.
@@ -313,6 +369,12 @@ func (hp *HomePage) HandleUserInteractions(gtx layout.Context) {
 		// modal-style page rather than a wallet-scoped one.
 		hp.ParentWindow().Display(settings.NewAppSettingsPage(hp.Load))
 	}
+	for _, tab := range hp.sidebarWalletTabs() {
+		if hp.tabClick(tab).Clicked(gtx) {
+			hp.drawerOpen = false
+			hp.openWalletTab(tab)
+		}
+	}
 	if hp.createWalletClick.Clicked(gtx) {
 		hp.drawerOpen = false
 		// Reuse the onboarding wallet-creation flow. (The wallet-selector page
@@ -484,15 +546,12 @@ func (hp *HomePage) layoutSidebar(gtx layout.Context) layout.Dimensions {
 	gtx.Constraints.Min.X = gtx.Dp(unit.Dp(sidebarWidth))
 	gtx.Constraints.Max.X = gtx.Constraints.Min.X
 
-	return cryptomaterial.LinearLayout{
-		Width:       cryptomaterial.MatchParent,
-		Height:      cryptomaterial.MatchParent,
-		Background:  hp.Theme.Color.Surface,
-		Padding:     layout.UniformInset(unit.Dp(16)),
-		Orientation: layout.Vertical,
-	}.Layout(gtx,
-		// Brand + a single subtle network line (the old layout repeated the
-		// network in two captions and stacked a wallet count up here too).
+	overviewColor := hp.Theme.Color.GrayText1
+	if hp.selectedWalletID < 0 {
+		overviewColor = hp.Theme.Color.Primary
+	}
+
+	children := []layout.FlexChild{
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 			t := hp.Theme.H6("Skarb")
 			t.Font.Weight = font.Bold
@@ -507,30 +566,52 @@ func (hp *HomePage) layoutSidebar(gtx layout.Context) layout.Dimensions {
 		layout.Rigid(layout.Spacer{Height: unit.Dp(14)}.Layout),
 		layout.Rigid(hp.Theme.Separator().Layout),
 		layout.Rigid(layout.Spacer{Height: unit.Dp(10)}.Layout),
-
-		// Navigation.
+		// Overview + app-settings gear on one row.
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-			return hp.navRow(gtx, hp.overviewClick, values.String(values.StrOverview), hp.Theme.Color.GrayText1)
-		}),
-		layout.Rigid(layout.Spacer{Height: unit.Dp(2)}.Layout),
-		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-			// Gear instead of the word "Settings" so this app-wide
-			// page is not confused with the wallet Settings tab.
-			return hp.navIconRow(gtx, hp.settingsClick, hp.Theme.Icons.SettingsIcon)
+			return layout.Flex{Alignment: layout.Middle}.Layout(gtx,
+				layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
+					return hp.navRow(gtx, hp.overviewClick, values.String(values.StrOverview), overviewColor)
+				}),
+				layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+					return hp.navIconButton(gtx, hp.settingsClick, hp.Theme.Icons.SettingsIcon)
+				}),
+			)
 		}),
 		layout.Rigid(layout.Spacer{Height: unit.Dp(10)}.Layout),
 		layout.Rigid(hp.Theme.Separator().Layout),
-		layout.Rigid(layout.Spacer{Height: unit.Dp(12)}.Layout),
+		layout.Rigid(layout.Spacer{Height: unit.Dp(8)}.Layout),
+	}
 
-		// Wallets section: header (label + count), create action, then the list.
+	selectedTab := ""
+	if wp := hp.currentWalletPage(); wp != nil {
+		selectedTab = wp.SelectedTab()
+	}
+	for _, tab := range hp.sidebarWalletTabs() {
+		tab := tab
+		color := hp.Theme.Color.GrayText1
+		if selectedTab == tab {
+			color = hp.Theme.Color.Primary
+		}
+		children = append(children,
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+				return hp.navRow(gtx, hp.tabClick(tab), values.String(tab), color)
+			}),
+		)
+	}
+
+	children = append(children,
+		layout.Rigid(layout.Spacer{Height: unit.Dp(10)}.Layout),
+		layout.Rigid(hp.Theme.Separator().Layout),
+		layout.Rigid(layout.Spacer{Height: unit.Dp(12)}.Layout),
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-			return layout.Flex{Alignment: layout.Middle, Spacing: layout.SpaceBetween}.Layout(gtx,
+			return layout.Flex{Alignment: layout.Middle}.Layout(gtx,
 				layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 					label := hp.Theme.Caption(strings.ToUpper(values.String(values.StrWallets)))
 					label.Color = hp.Theme.Color.GrayText2
 					label.Font.Weight = font.SemiBold
 					return label.Layout(gtx)
 				}),
+				layout.Rigid(layout.Spacer{Width: unit.Dp(8)}.Layout),
 				layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 					count := hp.Theme.Caption(fmt.Sprintf("%d", len(hp.walletEntries)))
 					count.Color = hp.Theme.Color.GrayText3
@@ -555,6 +636,14 @@ func (hp *HomePage) layoutSidebar(gtx layout.Context) layout.Dimensions {
 			})
 		}),
 	)
+
+	return cryptomaterial.LinearLayout{
+		Width:       cryptomaterial.MatchParent,
+		Height:      cryptomaterial.MatchParent,
+		Background:  hp.Theme.Color.Surface,
+		Padding:     layout.UniformInset(unit.Dp(16)),
+		Orientation: layout.Vertical,
+	}.Layout(gtx, children...)
 }
 
 func (hp *HomePage) layoutWalletEntry(gtx layout.Context, e *walletEntry) layout.Dimensions {
