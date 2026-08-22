@@ -5,7 +5,6 @@ import (
 
 	"gioui.org/font"
 	"gioui.org/layout"
-	"gioui.org/op"
 	"gioui.org/text"
 	"gioui.org/widget"
 
@@ -78,46 +77,29 @@ func (pg *Page) contentLayout(gtx C) D {
 		}
 	}
 
-	// Prevent total balance section from being sticky on mobile, this creates more view area.
-	if pg.IsMobileView() {
-		pageContent = append(pageContent, pg.balanceSection)
-		return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
-			layout.Rigid(func(gtx C) D {
-				return pg.Theme.List(pg.pageContainer).Layout(gtx, len(pageContent), func(gtx C, i int) D {
-					mp := values.MarginPaddingTransform(pg.IsMobileView(), values.MarginPadding8)
-					if i == len(pageContent)-1 {
-						mp = values.MarginPadding0
-					}
-					return layout.Inset{Bottom: mp}.Layout(gtx, pageContent[i])
-				})
-			}),
-		)
+	list := func(gtx C) D {
+		return pg.Theme.List(pg.pageContainer).Layout(gtx, len(pageContent), func(gtx C, i int) D {
+			mp := values.MarginPaddingTransform(pg.IsMobileView(), values.MarginPadding8)
+			if i == len(pageContent)-1 {
+				mp = values.MarginPadding0
+			}
+			return layout.Inset{Bottom: mp}.Layout(gtx, pageContent[i])
+		})
 	}
 
-	cgtx := gtx
-	macro := op.Record(cgtx.Ops)
-	dims := pg.balanceSection(cgtx)
-	call := macro.Stop()
-	pageContent = append(pageContent, func(gtx C) D {
-		return layout.Spacer{Height: gtx.Metric.PxToDp(dims.Size.Y)}.Layout(gtx)
-	})
-
-	return layout.Stack{Alignment: layout.S}.Layout(gtx,
-		layout.Expanded(func(gtx C) D {
-			return pg.Theme.List(pg.pageContainer).Layout(gtx, len(pageContent), func(gtx C, i int) D {
-				mp := values.MarginPaddingTransform(pg.IsMobileView(), values.MarginPadding8)
-				if i == len(pageContent)-1 {
-					mp = values.MarginPadding0
-				}
-				return layout.Inset{Bottom: mp}.Layout(gtx, pageContent[i])
-			})
-		}),
-		layout.Stacked(func(gtx C) D {
-			return layout.S.Layout(gtx, func(gtx C) D {
-				call.Add(gtx.Ops)
-				return dims
-			})
-		}),
+	// Phone: fee/total/Next scrolls with the form so more of the fields
+	// stay on screen. Desktop: those rows stay at the bottom of the page.
+	// A Stack+op.Record footer used to do that, but it recorded the
+	// footer with the page's Min.Y (full remaining height). After the
+	// sidebar swallowed the tab strip, that min is the whole body, so
+	// the footer laid itself out at the top and covered the form.
+	if pg.IsMobileView() {
+		pageContent = append(pageContent, pg.balanceSection)
+		return list(gtx)
+	}
+	return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
+		layout.Flexed(1, list),
+		layout.Rigid(pg.balanceSection),
 	)
 }
 
