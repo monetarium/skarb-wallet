@@ -44,6 +44,13 @@ func (asset *Asset) IsVSPFeePayment(hash string) bool {
 }
 
 // VSPFeeTxPhase returns the UI phase of tx if it is a VSP fee payment.
+// Order is the one the UI shows:
+//
+//	Waiting for Split → Pending by VSP → Unconfirmed → mined → Completed
+//
+// Split is checked before the unpublished flag: auto-buy used to publish
+// (or mark published) the fee tx immediately, which skipped the first two
+// labels and jumped to Unconfirmed.
 func (asset *Asset) VSPFeeTxPhase(tx *sharedW.Transaction) VSPFeeTxPhase {
 	if tx == nil || !asset.IsVSPFeePayment(tx.Hash) {
 		return VSPFeePhaseNone
@@ -51,17 +58,17 @@ func (asset *Asset) VSPFeeTxPhase(tx *sharedW.Transaction) VSPFeeTxPhase {
 	if tx.BlockHeight != sharedW.UnminedTxHeight {
 		return VSPFeePhaseMined
 	}
+	if !asset.vspFeeSplitCompleted(tx) {
+		return VSPFeePhasePending
+	}
 	asset.refreshVSPFeeCache()
 	asset.vspFeeMu.Lock()
 	unpublished := asset.vspFeeUnpublished[tx.Hash]
 	asset.vspFeeMu.Unlock()
-	if !unpublished {
-		return VSPFeePhaseUnconfirmed
-	}
-	if asset.vspFeeSplitCompleted(tx) {
+	if unpublished {
 		return VSPFeePhasePendingByVSP
 	}
-	return VSPFeePhasePending
+	return VSPFeePhaseUnconfirmed
 }
 
 func (asset *Asset) refreshVSPFeeCache() {

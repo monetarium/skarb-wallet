@@ -410,6 +410,12 @@ func (hp *HomePage) HandleUserInteractions(gtx layout.Context) {
 // Layout draws sidebar + subpage.
 func (hp *HomePage) Layout(gtx layout.Context) layout.Dimensions {
 	hp.refreshWalletList()
+	// Header wallet dropdown switches the page's wallet in place without
+	// going through openWallet, so selectedWalletID would stay on the
+	// previous wallet. Follow the page that's actually showing.
+	if wp := hp.currentWalletPage(); wp != nil {
+		hp.selectedWalletID = wp.WalletID()
+	}
 	if hp.IsMobileView() {
 		return hp.layoutMobile(gtx)
 	}

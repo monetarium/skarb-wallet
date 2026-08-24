@@ -394,7 +394,6 @@ func (c *VSPClient) setVoteChoices(ctx context.Context, ticket *VSPTicket,
 
 func (fp *vspFeePayment) reconcilePayment() error {
 	ctx := fp.ctx
-	w := fp.client.wallet
 
 	// stop processing if ticket is expired or spent
 	// TODO: if the ticket is no longer saved by the wallet (tx expired,
@@ -442,10 +441,9 @@ func (fp *vspFeePayment) reconcilePayment() error {
 	if errors.As(err, &apiErr) {
 		switch apiErr.Code {
 		case types.ErrFeeAlreadyReceived:
-			err = w.SetPublished(ctx, &feeHash, true)
-			if err != nil {
-				return err
-			}
+			// VSP has the signed fee tx ("received"), not necessarily
+			// in the mempool yet. Leave it unpublished so the UI stays
+			// on Pending by VSP until FeeTxStatus is "broadcast".
 			err = fp.ticket.UpdateFeePaid(ctx, feeHash, fp.client.URL, fp.client.PubKey)
 			if err != nil {
 				return err

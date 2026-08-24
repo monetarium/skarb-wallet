@@ -490,20 +490,18 @@ func (pg *TransactionsPage) refreshAvailableTxType() {
 	settingCommonDropdown(pg.Theme, pg.statusDropDown)
 
 	// Recreating the dropdown resets selectedIndex to 0. Opening a tx card
-	// and closing it remounts this page via OnNavigatedTo, which used to
-	// force "All without Split" even when the user had "All Types" selected
-	// — while FetchScrollData(reset=false) kept the previous list, so the
-	// label and the rows disagreed. Restore the previous label when it is
-	// still a valid choice; only default Regular to "All without Split" on
-	// first open or when the previous label is not in this tab's set.
+	// and closing it remounts this page via OnNavigatedTo. Restore the
+	// previous label when it is still a valid choice; default Regular to
+	// "All Types" on first open or when the previous label is not in this
+	// tab's set.
 	if tableTab(pg.selectedTxCategoryTab) == 0 {
 		if prevStatusLabel != "" {
 			pg.statusDropDown.SetSelectedValue(prevStatusLabel)
 			if pg.statusDropDown.Selected() != prevStatusLabel {
-				pg.statusDropDown.SetSelectedValue(values.String(values.StrAllWithoutSplit))
+				pg.statusDropDown.SetSelectedValue(values.String(values.StrAllTypes))
 			}
 		} else {
-			pg.statusDropDown.SetSelectedValue(values.String(values.StrAllWithoutSplit))
+			pg.statusDropDown.SetSelectedValue(values.String(values.StrAllTypes))
 		}
 	} else if prevStatusLabel != "" {
 		pg.statusDropDown.SetSelectedValue(prevStatusLabel)
@@ -749,7 +747,17 @@ func (pg *TransactionsPage) loadAllTransactions(v txView) ([]*multiWalletTx, err
 			all = append(all, mw.Transaction)
 		}
 	}
-	dcr.ApplySplitAmounts(all)
+	wallets := make([]sharedW.Asset, 0)
+	seenWal := map[int]bool{}
+	for _, mw := range raw {
+		_, wal := pg.txAndWallet(mw)
+		if wal == nil || seenWal[wal.GetWalletID()] {
+			continue
+		}
+		seenWal[wal.GetWalletID()] = true
+		wallets = append(wallets, wal)
+	}
+	dcr.PriceSplitsMany(wallets, all)
 
 	// Price EVERY split up front — batched, one ticket fetch per wallet —
 	// for the views whose coarse superset carries no ticket rows, because the
@@ -855,7 +863,7 @@ func (pg *TransactionsPage) priceAllSplits(raw []*multiWalletTx) {
 				break
 			}
 		}
-		dcr.ApplySplitAmounts(supplement)
+		dcr.PriceSplits(ws.wal, supplement)
 	}
 }
 
@@ -882,7 +890,7 @@ func ensureSplitAmount(wal sharedW.Asset, tx *sharedW.Transaction) {
 			break
 		}
 	}
-	dcr.ApplySplitAmounts(supplement)
+	dcr.PriceSplits(wal, supplement)
 }
 
 // coarseFetchFilter maps a logical (tab,status) filter to a DB-supported filter

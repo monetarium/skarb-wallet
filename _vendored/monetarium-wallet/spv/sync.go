@@ -1168,6 +1168,13 @@ func (s *Syncer) handleTxInvs(ctx context.Context, rp *p2p.RemotePeer, hashes []
 			op := errors.Opf(opf, rp.RemoteAddr())
 			log.Warn(errors.E(op, err))
 		}
+		// A peer announced this tx, so it is in the network mempool.
+		// Unpublished VSP fee txs stay "Pending by VSP" until this bit
+		// flips — the VSP API "broadcast" poll can lag the explorer.
+		hash := tx.TxHash()
+		if err := s.wallet.SetPublished(ctx, &hash, true); err != nil {
+			log.Debugf("SetPublished(%v) after mempool announce: %v", &hash, err)
+		}
 	}
 	s.mempoolTxs(relevant)
 }
