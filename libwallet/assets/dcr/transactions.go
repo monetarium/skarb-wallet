@@ -460,10 +460,27 @@ func IsSplitTx(tx *sharedW.Transaction) bool {
 // superset fetch does); a split whose tickets are absent keeps its stored
 // Amount (the fee) as a fallback. Mutation is by pointer and idempotent, so
 // repeated application over cached rows is safe.
+//
+// isVSPFee, when set, also counts inputs of VSP fee-payment txs: the split
+// prepares those fee-sized outputs in the same transaction as the ticket
+// amounts, so the displayed split total is tickets + VSP fees (not tickets
+// alone).
 func ApplySplitAmounts(txs []*sharedW.Transaction) {
+	applySplitAmounts(txs, nil)
+}
+
+// ApplySplitAmountsWithFees is ApplySplitAmounts plus VSP fee outputs.
+func ApplySplitAmountsWithFees(txs []*sharedW.Transaction, isVSPFee func(hash string) bool) {
+	applySplitAmounts(txs, isVSPFee)
+}
+
+func applySplitAmounts(txs []*sharedW.Transaction, isVSPFee func(hash string) bool) {
 	consumed := make(map[string]int64)
 	for _, tx := range txs {
-		if tx == nil || tx.Type != TxTypeTicketPurchase {
+		if tx == nil {
+			continue
+		}
+		if tx.Type != TxTypeTicketPurchase && (isVSPFee == nil || !isVSPFee(tx.Hash)) {
 			continue
 		}
 		for _, in := range tx.Inputs {
@@ -483,6 +500,63 @@ func ApplySplitAmounts(txs []*sharedW.Transaction) {
 			tx.Amount = sum
 		}
 	}
+}
+
+// PriceSplits prices split rows using ticket purchases in txs plus each
+// wallet's VSP fee-payment txs (loaded by fee hash when missing from txs).
+func PriceSplits(wal sharedW.Asset, txs []*sharedW.Transaction) {
+	if wal == nil {
+		ApplySplitAmounts(txs)
+		return
+	}
+	PriceSplitsMany([]sharedW.Asset{wal}, txs)
+}
+
+func PriceSplitsMany(wallets []sharedW.Asset, txs []*sharedW.Transaction) {
+	extra := make([]*sharedW.Transaction, 0)
+	seen := make(map[int]bool)
+	for _, wal := range wallets {
+		a, ok := wal.(*Asset)
+		if !ok || a == nil || seen[a.ID] {
+			continue
+		}
+		seen[a.ID] = true
+		extra = append(extra, a.vspFeeTransactions()...)
+	}
+	isFee := func(h string) bool {
+		for _, wal := range wallets {
+			if a, ok := wal.(*Asset); ok && a.IsVSPFeePayment(h) {
+				return true
+			}
+		}
+		return false
+	}
+	combined := make([]*sharedW.Transaction, 0, len(txs)+len(extra))
+	combined = append(combined, txs...)
+	combined = append(combined, extra...)
+	ApplySplitAmountsWithFees(combined, isFee)
+}
+
+func (asset *Asset) vspFeeTransactions() []*sharedW.Transaction {
+	if asset == nil || !asset.WalletOpened() {
+		return nil
+	}
+	asset.refreshVSPFeeCache()
+	asset.vspFeeMu.Lock()
+	hashes := make([]string, 0, len(asset.vspFeeHashSet))
+	for h := range asset.vspFeeHashSet {
+		hashes = append(hashes, h)
+	}
+	asset.vspFeeMu.Unlock()
+	out := make([]*sharedW.Transaction, 0, len(hashes))
+	for _, h := range hashes {
+		tx, err := asset.GetTransactionRaw(h)
+		if err != nil || tx == nil {
+			continue
+		}
+		out = append(out, tx)
+	}
+	return out
 }
 
 func (asset *Asset) TxMatchesFilter2(direction, blockHeight int32, txType, ticketSpender string, txFilter int32) bool {

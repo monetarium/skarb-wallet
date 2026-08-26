@@ -610,7 +610,7 @@ func (pg *WalletInfo) loadRecentByFilter(filter int32, want int) []*sharedW.Tran
 			break
 		}
 	}
-	dcr.ApplySplitAmounts(fetched)
+	dcr.PriceSplits(pg.wallet, fetched)
 	return out
 }
 
@@ -624,10 +624,9 @@ func (pg *WalletInfo) loadTransactions() {
 		return
 	}
 
-	// The Regular tab's default "All without Split" filter — same
-	// classification as the Transactions page Regular list opens with
-	// (no splits, no stake-fees, no rewards).
-	txs := pg.loadRecentByFilter(mapInfo[values.String(values.StrAllWithoutSplit)], 3)
+	// Same "All Types" filter the Transactions Regular list opens with
+	// (includes splits, excludes staking/reward types).
+	txs := pg.loadRecentByFilter(mapInfo[values.String(values.StrAllTypes)], 3)
 	// Diagnostic log: surfaces what's in storm DB at the moment Info
 	// page (re)mounts. If the user reports "I sent a tx but it doesn't
 	// appear", grep for "InfoPage.loadTransactions" in the wallet log

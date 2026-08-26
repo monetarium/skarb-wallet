@@ -782,7 +782,7 @@ func (pg *TxDetailsPage) vspFeeStatusLabel() (string, bool) {
 		reqConf := pg.wallet.RequiredConfirmations()
 		confs := pg.txConfirmations()
 		if confs < reqConf {
-			return values.StringF(values.StrTxStatusConfirming, confs, reqConf), true
+			return values.StringF(values.StrTxStatusPending, confs, reqConf), true
 		}
 		return "", false
 	default:

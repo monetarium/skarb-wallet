@@ -44,6 +44,13 @@ func (asset *Asset) IsVSPFeePayment(hash string) bool {
 }
 
 // VSPFeeTxPhase returns the UI phase of tx if it is a VSP fee payment.
+// Order is the one the UI shows:
+//
+//	Waiting for Split → Pending by VSP → Unconfirmed → mined → Completed
+//
+// Split is checked before the unpublished flag: auto-buy used to publish
+// (or mark published) the fee tx immediately, which skipped the first two
+// labels and jumped to Unconfirmed.
 func (asset *Asset) VSPFeeTxPhase(tx *sharedW.Transaction) VSPFeeTxPhase {
 	if tx == nil || !asset.IsVSPFeePayment(tx.Hash) {
 		return VSPFeePhaseNone
@@ -51,17 +58,17 @@ func (asset *Asset) VSPFeeTxPhase(tx *sharedW.Transaction) VSPFeeTxPhase {
 	if tx.BlockHeight != sharedW.UnminedTxHeight {
 		return VSPFeePhaseMined
 	}
+	if !asset.vspFeeSplitCompleted(tx) {
+		return VSPFeePhasePending
+	}
 	asset.refreshVSPFeeCache()
 	asset.vspFeeMu.Lock()
 	unpublished := asset.vspFeeUnpublished[tx.Hash]
 	asset.vspFeeMu.Unlock()
-	if !unpublished {
-		return VSPFeePhaseUnconfirmed
-	}
-	if asset.vspFeeSplitCompleted(tx) {
+	if unpublished {
 		return VSPFeePhasePendingByVSP
 	}
-	return VSPFeePhasePending
+	return VSPFeePhaseUnconfirmed
 }
 
 func (asset *Asset) refreshVSPFeeCache() {
@@ -116,8 +123,9 @@ func (asset *Asset) invalidateVSPFeeCache() {
 }
 
 // vspFeeSplitCompleted reports whether the split (or other tx) that funded
-// this fee payment has the required confirmations. Missing split rows are
-// treated as complete so the status cannot stick on Pending forever.
+// this fee payment has the required confirmations. If the parent tx is not
+// in the DB yet, it is NOT complete — otherwise auto-buy jumps to
+// Unconfirmed before the split confirms.
 func (asset *Asset) vspFeeSplitCompleted(tx *sharedW.Transaction) bool {
 	if tx == nil || len(tx.Inputs) == 0 {
 		return true
@@ -129,14 +137,29 @@ func (asset *Asset) vspFeeSplitCompleted(tx *sharedW.Transaction) bool {
 	}
 	asset.vspFeeMu.Unlock()
 
-	prev := tx.Inputs[0].PreviousTransactionHash
+	need := asset.RequiredConfirmations()
+	best := asset.GetBestBlockHeight()
+	found := false
 	done := true
-	if prev != "" {
-		var split sharedW.Transaction
-		if err := asset.GetWalletDataDb().FindOne("Hash", prev, &split); err == nil {
-			need := asset.RequiredConfirmations()
-			done = Confirmations(asset.GetBestBlockHeight(), &split) >= need
+	for _, in := range tx.Inputs {
+		if in == nil || in.PreviousTransactionHash == "" {
+			continue
 		}
+		prev, ok := asset.lookupTx(in.PreviousTransactionHash)
+		if !ok {
+			continue
+		}
+		found = true
+		if Confirmations(best, prev) < need {
+			done = false
+			break
+		}
+	}
+	if !found {
+		// Parent not in DB yet — do not cache, so the next frame can
+		// pick it up. Caching false here stuck auto-buy on Waiting
+		// for Split forever.
+		return false
 	}
 	asset.vspFeeMu.Lock()
 	if asset.vspFeeSplitDone == nil {
@@ -145,6 +168,18 @@ func (asset *Asset) vspFeeSplitCompleted(tx *sharedW.Transaction) bool {
 	asset.vspFeeSplitDone[tx.Hash] = done
 	asset.vspFeeMu.Unlock()
 	return done
+}
+
+func (asset *Asset) lookupTx(hash string) (*sharedW.Transaction, bool) {
+	var row sharedW.Transaction
+	if err := asset.GetWalletDataDb().FindOne("Hash", hash, &row); err == nil {
+		return &row, true
+	}
+	raw, err := asset.GetTransactionRaw(hash)
+	if err != nil || raw == nil {
+		return nil, false
+	}
+	return raw, true
 }
 
 // ReconcileVSPFeeTransactions keeps VSP fee-payment rows in walletdata in

@@ -436,7 +436,7 @@ func LayoutTransactionRow(gtx C, l *load.Load, wal sharedW.Asset, tx *sharedW.Tr
 				dateTimeLbl = l.Theme.Label(l.ConvertTextSize(txSize), values.StringF(values.StrDateAtTime, date, timeSplit))
 				dateTimeLbl.Color = grayText
 			} else if vspPhase == dcr.VSPFeePhaseMined {
-				status = l.Theme.Label(txSize, values.StringF(values.StrTxStatusConfirming, txConfirmations, reqConf))
+				status = l.Theme.Label(txSize, values.StringF(values.StrTxStatusPending, txConfirmations, reqConf))
 				status.Color = l.Theme.Color.GrayText1
 			} else {
 				status = l.Theme.Label(txSize, values.StringF(values.StrTxStatusPending, txConfirmations, reqConf))
@@ -704,10 +704,9 @@ func TxPageDropDownFields(wType libutils.AssetType, tabIndex int) (mapInfo map[s
 		// DCR Regular Transactions dropdown fields.
 		// "Mixed" (CoinShuffle++) is intentionally omitted — the mixer was removed
 		// from Skarb, so a Mixed tx filter would always be empty and just confuses.
-		// "All types" includes split rows; "All without Split" (the tab's
-		// default — see refreshAvailableTxType) hides the ticket-funding
-		// self-transfers. Both exclude the staking/reward types that live
-		// on the other tabs.
+		// "All types" (the Regular tab default) includes split rows;
+		// "All without Split" hides the ticket-funding self-transfers.
+		// Both exclude the staking/reward types that live on the other tabs.
 		mapInfo = map[string]int32{
 			values.String(values.StrAllTypes):        libutils.TxFilterRegularList,
 			values.String(values.StrAllWithoutSplit): libutils.TxFilterRegularNoSplit,
