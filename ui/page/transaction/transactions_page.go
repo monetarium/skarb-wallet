@@ -147,6 +147,12 @@ type TransactionsPage struct {
 	// concurrent loadNewItem resets race the scroll component's data / offset /
 	// list.Position and break scrolling until the app is restarted.
 	txRefreshInFlight atomic.Bool
+	// txRefreshQueued marks a notification that arrived WHILE a refresh was
+	// running (the runner captured pre-notification state — e.g. a Split
+	// mined in the new block, VSP fee created a moment later). The in-flight
+	// goroutine reruns once more before releasing, otherwise the fee row
+	// stays missing until the next pointer event.
+	txRefreshQueued atomic.Bool
 
 	// txCache memoizes the complete decoded+post-filtered tx set so reopening the
 	// Transactions page (and scrolling within it) doesn't re-read & re-decode the
@@ -890,7 +896,30 @@ func ensureSplitAmount(wal sharedW.Asset, tx *sharedW.Transaction) {
 			break
 		}
 	}
+	before := tx.Amount
 	dcr.PriceSplits(wal, supplement)
+	if tx.Amount != before {
+		log.Debugf("ensureSplitAmount: %s %d -> %d", tx.Hash, before, tx.Amount)
+	}
+}
+
+// keepPricedSplitAmount re-prices a split after a raw re-decode (GetTransactionRaw
+// stores the fee as Amount). If spenders are missing, keep the already-priced
+// snapshot from the list that opened the card.
+func keepPricedSplitAmount(wal sharedW.Asset, tx, snapshot *sharedW.Transaction) {
+	if tx == nil {
+		return
+	}
+	ensureSplitAmount(wal, tx)
+	if snapshot != nil && dcr.IsSplitTx(tx) && snapshot.Amount > tx.Amount {
+		log.Infof("tx details: keep split amount %d (re-decode was %d) for %s",
+			snapshot.Amount, tx.Amount, tx.Hash)
+		tx.Amount = snapshot.Amount
+		tx.AmountAtoms = snapshot.AmountAtoms
+	}
+	if dcr.IsSplitTx(tx) {
+		tx.AmountAtoms = ""
+	}
 }
 
 // coarseFetchFilter maps a logical (tab,status) filter to a DB-supported filter
@@ -1710,10 +1739,22 @@ func (pg *TransactionsPage) ListenForTxNotification(walletID int) {
 	// needs coalescing.
 	pg.txCacheDirty.Store(true)
 	if !pg.txRefreshInFlight.CompareAndSwap(false, true) {
+		pg.txRefreshQueued.Store(true)
+		log.Debugf("tx list refresh queued (one already in flight)")
 		return
 	}
 	defer pg.txRefreshInFlight.Store(false)
-	pg.scroll.FetchScrollDataHandler(false, pg.ParentWindow(), false, true)
+	for {
+		pg.scroll.FetchScrollDataHandler(false, pg.ParentWindow(), false, true)
+		// refreshInPlace updates s.data but does not redraw. Without this
+		// the new VSP fee row (and Unconfirmed status) wait for a mouse move.
+		pg.ParentWindow().Reload()
+		if !pg.txRefreshQueued.CompareAndSwap(true, false) {
+			return
+		}
+		log.Debugf("tx list refresh follow-up (queued while previous ran)")
+		pg.txCacheDirty.Store(true)
+	}
 }
 
 func (pg *TransactionsPage) stopTxNotificationsListener() {

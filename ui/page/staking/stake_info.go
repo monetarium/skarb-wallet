@@ -2,10 +2,12 @@ package staking
 
 import (
 	"fmt"
+	"image"
 	"strings"
 
 	"gioui.org/font"
 	"gioui.org/layout"
+	"gioui.org/op"
 	"gioui.org/unit"
 
 	"github.com/monetarium/monetarium-node/dcrutil"
@@ -13,6 +15,77 @@ import (
 	"github.com/monetarium/skarb-wallet/ui/page/components"
 	"github.com/monetarium/skarb-wallet/ui/values"
 )
+
+// layoutWrapRow lays widgets on one row with space between them. If they no
+// longer fit, they wrap to the next line instead of compressing (Gio labels
+// otherwise wrap letter-by-letter when Max.X is tight).
+func layoutWrapRow(gtx C, widgets ...layout.Widget) D {
+	if len(widgets) == 0 {
+		return D{}
+	}
+	if len(widgets) == 1 {
+		return widgets[0](gtx)
+	}
+
+	const infX = 1e6
+	type measured struct {
+		call op.CallOp
+		size image.Point
+	}
+	items := make([]measured, 0, len(widgets))
+	totalX := 0
+	maxY := 0
+	for _, w := range widgets {
+		rec := op.Record(gtx.Ops)
+		cgtx := gtx
+		cgtx.Constraints.Min = image.Point{}
+		cgtx.Constraints.Max.X = infX
+		d := w(cgtx)
+		items = append(items, measured{rec.Stop(), d.Size})
+		totalX += d.Size.X
+		if d.Size.Y > maxY {
+			maxY = d.Size.Y
+		}
+	}
+
+	avail := gtx.Constraints.Max.X
+	if avail <= 0 {
+		avail = infX
+	}
+	if totalX <= avail {
+		x := 0
+		gaps := len(widgets) - 1
+		extra := 0
+		if gaps > 0 && avail > totalX {
+			extra = (avail - totalX) / gaps
+		}
+		for i, it := range items {
+			if i > 0 {
+				x += extra
+			}
+			if x != 0 {
+				op.Offset(image.Pt(x, 0)).Add(gtx.Ops)
+			}
+			it.call.Add(gtx.Ops)
+			if x != 0 {
+				op.Offset(image.Pt(-x, 0)).Add(gtx.Ops)
+			}
+			x += it.size.X
+		}
+		w := totalX
+		if extra > 0 {
+			w = avail
+		}
+		if w < gtx.Constraints.Min.X {
+			w = gtx.Constraints.Min.X
+		}
+		return D{Size: image.Pt(w, maxY)}
+	}
+
+	return cryptomaterial.GridWrap{Alignment: layout.Middle}.Layout(gtx, len(widgets), func(gtx C, i int) D {
+		return layout.Inset{Right: values.MarginPadding12, Bottom: values.MarginPadding8}.Layout(gtx, widgets[i])
+	})
+}
 
 func (pg *Page) initStakePriceWidget() *Page {
 	pg.stakeSettings = pg.Theme.NewClickable(false)
@@ -29,36 +102,34 @@ func (pg *Page) pageHead(gtx C) D {
 	return layout.Inset{
 		Bottom: values.MarginPaddingTransform(pg.IsMobileView(), values.MarginPadding24),
 	}.Layout(gtx, func(gtx C) D {
-		return layout.Flex{Spacing: layout.SpaceBetween}.Layout(gtx,
-			layout.Rigid(txt.Layout),
-			layout.Rigid(func(gtx C) D {
-				if pg.dcrWallet.IsWatchingOnlyWallet() {
-					return D{}
-				}
-				return layout.Flex{Alignment: layout.Middle}.Layout(gtx,
-					layout.Rigid(func(gtx C) D {
-						// "Авто-стейкінг" — the toggle is the *automatic* buyer (needs
-						// the passphrase, so it doesn't survive a restart). The one-time
-						// manual purchase is the separate "Купити тикети" button below.
-						title := pg.Theme.Label(values.TextSizeTransform(isMobile, values.TextSize16), values.String(values.StrAutoStaking))
-						title.Color = pg.Theme.Color.GrayText2
-						return title.Layout(gtx)
-					}),
-					layout.Rigid(func(gtx C) D {
-						return layout.Inset{
-							Right: values.MarginPadding24,
-							Left:  values.MarginPadding8,
-						}.Layout(gtx, pg.stake.Layout)
-					}),
-					layout.Rigid(func(gtx C) D {
-						icon := pg.Theme.Icons.SettingsIcon
-						return pg.stakeSettings.Layout(gtx, func(gtx C) D {
-							return icon.LayoutTransform(gtx, isMobile, values.MarginPadding24)
-						})
-					}),
-				)
-			}),
-		)
+		controls := func(gtx C) D {
+			if pg.dcrWallet.IsWatchingOnlyWallet() {
+				return D{}
+			}
+			return layout.Flex{Alignment: layout.Middle}.Layout(gtx,
+				layout.Rigid(func(gtx C) D {
+					// "Авто-стейкінг" — the toggle is the *automatic* buyer (needs
+					// the passphrase, so it doesn't survive a restart). The one-time
+					// manual purchase is the separate "Купити тикети" button below.
+					title := pg.Theme.Label(values.TextSizeTransform(isMobile, values.TextSize16), values.String(values.StrAutoStaking))
+					title.Color = pg.Theme.Color.GrayText2
+					return title.Layout(gtx)
+				}),
+				layout.Rigid(func(gtx C) D {
+					return layout.Inset{
+						Right: values.MarginPadding24,
+						Left:  values.MarginPadding8,
+					}.Layout(gtx, pg.stake.Layout)
+				}),
+				layout.Rigid(func(gtx C) D {
+					icon := pg.Theme.Icons.SettingsIcon
+					return pg.stakeSettings.Layout(gtx, func(gtx C) D {
+						return icon.LayoutTransform(gtx, isMobile, values.MarginPadding24)
+					})
+				}),
+			)
+		}
+		return layoutWrapRow(gtx, txt.Layout, controls)
 	})
 }
 
@@ -67,12 +138,6 @@ func (pg *Page) stakePriceSection(gtx C) D {
 		mobileView := pg.IsMobileView()
 		textSize16 := values.TextSizeTransform(mobileView, values.TextSize16)
 		grayText := pg.Theme.Color.GrayText2
-		flexAxis := layout.Horizontal
-		alignment := layout.Middle
-		if mobileView {
-			flexAxis = layout.Vertical
-			alignment = layout.Start
-		}
 
 		// Cached — recomputed by loadPageData on every block/tx. The old
 		// per-frame CalculateTotalTicketsCanBuy call opened a bbolt read
@@ -88,41 +153,35 @@ func (pg *Page) stakePriceSection(gtx C) D {
 			// coin's amount inline on ONE line (totalRewardRow carries its
 			// own vertical inset).
 			layout.Rigid(func(gtx C) D {
-				return pg.totalRewardRow(gtx, flexAxis, alignment)
+				return pg.totalRewardRow(gtx)
 			}),
 			layout.Rigid(layout.Spacer{Height: values.MarginPadding12}.Layout),
 			// Row 2: Ticket Price (left) and Time Left (right).
 			layout.Rigid(func(gtx C) D {
 				priceWg := func(gtx C) D {
-					return layout.Flex{Axis: flexAxis, Alignment: alignment}.Layout(gtx,
-						layout.Rigid(func(gtx C) D {
-							title := pg.Theme.Label(textSize16, values.String(values.StrTicketPrice)+" ")
-							title.Color = grayText
-							return title.Layout(gtx)
-						}),
-						layout.Rigid(func(gtx C) D {
-							return layout.Center.Layout(gtx, func(gtx C) D {
-								if !pg.dcrWallet.IsSynced() || pg.dcrWallet.IsRescanning() || !pg.isTicketsPurchaseAllowed() {
-									title := pg.Theme.Label(textSize16, values.String(values.StrLoadingPrice))
-									title.Color = grayText
-									return title.Layout(gtx)
-								}
-								return components.LayoutBalanceWithUnitSizeBoldText(gtx, pg.Load, pg.ticketPrice, textSize16)
-							})
-						}),
-					)
+					title := func(gtx C) D {
+						lbl := pg.Theme.Label(textSize16, values.String(values.StrTicketPrice)+" ")
+						lbl.Color = grayText
+						return lbl.Layout(gtx)
+					}
+					price := func(gtx C) D {
+						if !pg.dcrWallet.IsSynced() || pg.dcrWallet.IsRescanning() || !pg.isTicketsPurchaseAllowed() {
+							lbl := pg.Theme.Label(textSize16, values.String(values.StrLoadingPrice))
+							lbl.Color = grayText
+							return lbl.Layout(gtx)
+						}
+						return components.LayoutBalanceWithUnitSizeBoldText(gtx, pg.Load, pg.ticketPrice, textSize16)
+					}
+					return layoutWrapRow(gtx, title, price)
 				}
 
 				timeLeftWg := func(gtx C) D {
 					secs, _ := pg.dcrWallet.NextTicketPriceRemaining()
 					timeleft := nextTicketRemaining(int(secs))
-					return pg.dataRows(gtx, values.String(values.StrTimeLeft), timeleft, flexAxis, alignment)
+					return pg.dataRows(gtx, values.String(values.StrTimeLeft), timeleft)
 				}
 
-				return layout.Flex{Alignment: layout.Middle, Spacing: layout.SpaceBetween}.Layout(gtx,
-					layout.Rigid(priceWg),
-					layout.Rigid(timeLeftWg),
-				)
+				return layoutWrapRow(gtx, priceWg, timeLeftWg)
 			}),
 			layout.Rigid(pg.balanceProgressBarLayout),
 			layout.Rigid(pg.buyTicketsButtonLayout),
@@ -197,76 +256,74 @@ func (pg *Page) stakeStatusLayout(gtx C, ticketsCanBuy int) D {
 // semibold; the remaining decimal digits render smaller (same treatment as the
 // Ticket Price card); the coin name stays regular weight — it is a unit, not a
 // figure, so bolding it read as part of the number.
-func (pg *Page) totalRewardRow(gtx C, axis layout.Axis, alignment layout.Alignment) D {
+func (pg *Page) totalRewardRow(gtx C) D {
 	textSize16 := values.TextSizeTransform(pg.IsMobileView(), values.TextSize16)
 	subSize := unit.Sp(float32(textSize16) * 0.7) // same scale as formatBalance's defaultScale
 	return components.VerticalInset(values.MarginPadding6).Layout(gtx, func(gtx C) D {
-		return layout.Flex{Axis: axis, Alignment: alignment}.Layout(gtx,
-			layout.Rigid(func(gtx C) D {
-				label := pg.Theme.Label(textSize16, values.String(values.StrTotalReward))
-				label.Color = pg.Theme.Color.GrayText2
-				return label.Layout(gtx)
-			}),
-			layout.Rigid(func(gtx C) D {
-				return layout.Inset{Left: values.MarginPadding4}.Layout(gtx, func(gtx C) D {
-					var children []layout.FlexChild
-					for i, row := range pg.rewardRows {
-						if i > 0 {
-							children = append(children, layout.Rigid(func(gtx C) D {
-								sep := pg.Theme.Label(textSize16, "  ·  ")
-								sep.Color = pg.Theme.Color.GrayText2
-								return sep.Layout(gtx)
-							}))
-						}
-						main, sub, txtUnit, ok := components.SplitBalanceParts(row)
-						if !ok {
-							main, sub, txtUnit = row, "", ""
-						}
-						children = append(children,
-							layout.Rigid(func(gtx C) D {
-								lbl := pg.Theme.Label(textSize16, main)
-								lbl.Color = pg.Theme.Color.Text
-								lbl.Font.Weight = font.SemiBold
-								return lbl.Layout(gtx)
-							}),
-							layout.Rigid(func(gtx C) D {
-								lbl := pg.Theme.Label(subSize, sub)
-								lbl.Color = pg.Theme.Color.Text
-								lbl.Font.Weight = font.SemiBold
-								return lbl.Layout(gtx)
-							}),
-							layout.Rigid(func(gtx C) D {
-								lbl := pg.Theme.Label(textSize16, txtUnit)
-								lbl.Color = pg.Theme.Color.Text
-								return lbl.Layout(gtx)
-							}),
-						)
+		title := func(gtx C) D {
+			label := pg.Theme.Label(textSize16, values.String(values.StrTotalReward))
+			label.Color = pg.Theme.Color.GrayText2
+			return label.Layout(gtx)
+		}
+		amounts := func(gtx C) D {
+			return layout.Inset{Left: values.MarginPadding4}.Layout(gtx, func(gtx C) D {
+				var children []layout.FlexChild
+				for i, row := range pg.rewardRows {
+					if i > 0 {
+						children = append(children, layout.Rigid(func(gtx C) D {
+							sep := pg.Theme.Label(textSize16, "  ·  ")
+							sep.Color = pg.Theme.Color.GrayText2
+							return sep.Layout(gtx)
+						}))
 					}
-					return layout.Flex{Axis: layout.Horizontal, Alignment: layout.Baseline}.Layout(gtx, children...)
-				})
-			}),
-		)
+					main, sub, txtUnit, ok := components.SplitBalanceParts(row)
+					if !ok {
+						main, sub, txtUnit = row, "", ""
+					}
+					children = append(children,
+						layout.Rigid(func(gtx C) D {
+							lbl := pg.Theme.Label(textSize16, main)
+							lbl.Color = pg.Theme.Color.Text
+							lbl.Font.Weight = font.SemiBold
+							return lbl.Layout(gtx)
+						}),
+						layout.Rigid(func(gtx C) D {
+							lbl := pg.Theme.Label(subSize, sub)
+							lbl.Color = pg.Theme.Color.Text
+							lbl.Font.Weight = font.SemiBold
+							return lbl.Layout(gtx)
+						}),
+						layout.Rigid(func(gtx C) D {
+							lbl := pg.Theme.Label(textSize16, txtUnit)
+							lbl.Color = pg.Theme.Color.Text
+							return lbl.Layout(gtx)
+						}),
+					)
+				}
+				return layout.Flex{Axis: layout.Horizontal, Alignment: layout.Baseline}.Layout(gtx, children...)
+			})
+		}
+		return layoutWrapRow(gtx, title, amounts)
 	})
 }
 
-func (pg *Page) dataRows(gtx C, title1, value1 string, axis layout.Axis, alignment layout.Alignment) D {
+func (pg *Page) dataRows(gtx C, title1, value1 string) D {
 	textSize16 := values.TextSizeTransform(pg.IsMobileView(), values.TextSize16)
 	return components.VerticalInset(values.MarginPadding6).Layout(gtx, func(gtx C) D {
-		return layout.Flex{Axis: axis, Alignment: alignment}.Layout(gtx,
-			layout.Rigid(func(gtx C) D {
-				label := pg.Theme.Label(textSize16, title1)
-				label.Color = pg.Theme.Color.GrayText2
+		title := func(gtx C) D {
+			label := pg.Theme.Label(textSize16, title1)
+			label.Color = pg.Theme.Color.GrayText2
+			return label.Layout(gtx)
+		}
+		value := func(gtx C) D {
+			return layout.Inset{Left: values.MarginPadding4}.Layout(gtx, func(gtx C) D {
+				label := pg.Theme.Label(textSize16, value1)
+				label.Color = pg.Theme.Color.Text
+				label.Font.Weight = font.SemiBold
 				return label.Layout(gtx)
-			}),
-			layout.Rigid(func(gtx C) D {
-				return layout.Inset{Left: values.MarginPadding4}.Layout(gtx, func(gtx C) D {
-					label := pg.Theme.Label(textSize16, value1)
-					label.Color = pg.Theme.Color.Text
-					label.Font.Weight = font.SemiBold
-					return label.Layout(gtx)
-				})
-			}),
-		)
+			})
+		}
+		return layoutWrapRow(gtx, title, value)
 	})
 }
 
@@ -317,31 +374,26 @@ func (pg *Page) balanceProgressBarLayout(gtx C) D {
 	}
 
 	labelWdg := func(gtx C) D {
-		return layout.Flex{Alignment: layout.Middle}.Layout(gtx,
-			layout.Rigid(func(gtx C) D {
-				text := values.String(values.StrStaked) + ": " + totalBalance.LockedByTickets.String()
-				return components.LayoutIconAndTextWithSize(pg.Load, gtx, text, items[0].Color, textSize16, values.MarginPadding10)
-			}),
-			layout.Rigid(func(gtx C) D {
-				text := values.String(values.StrLabelSpendable) + ": " + totalBalance.Spendable.String()
-				return components.LayoutIconAndTextWithSize(pg.Load, gtx, text, items[1].Color, textSize16, values.MarginPadding10)
-			}),
-			// "Tickets You Can Buy" lives in this row, pushed to the right
-			// edge — it is derived from the same balances the bar shows.
-			layout.Flexed(1, func(gtx C) D {
-				return layout.E.Layout(gtx, func(gtx C) D {
-					label := pg.Theme.Label(textSize16, values.String(values.StrCanBuy)+": ")
-					label.Color = pg.Theme.Color.GrayText2
-					value := pg.Theme.Label(textSize16, fmt.Sprintf("%d", pg.ticketsCanBuy))
-					value.Color = pg.Theme.Color.Text
-					value.Font.Weight = font.SemiBold
-					return layout.Flex{Alignment: layout.Middle}.Layout(gtx,
-						layout.Rigid(label.Layout),
-						layout.Rigid(value.Layout),
-					)
-				})
-			}),
-		)
+		staked := func(gtx C) D {
+			text := values.String(values.StrStaked) + ": " + totalBalance.LockedByTickets.String()
+			return components.LayoutIconAndTextWithSize(pg.Load, gtx, text, items[0].Color, textSize16, values.MarginPadding10)
+		}
+		spendable := func(gtx C) D {
+			text := values.String(values.StrLabelSpendable) + ": " + totalBalance.Spendable.String()
+			return components.LayoutIconAndTextWithSize(pg.Load, gtx, text, items[1].Color, textSize16, values.MarginPadding10)
+		}
+		canBuy := func(gtx C) D {
+			label := pg.Theme.Label(textSize16, values.String(values.StrCanBuy)+": ")
+			label.Color = pg.Theme.Color.GrayText2
+			value := pg.Theme.Label(textSize16, fmt.Sprintf("%d", pg.ticketsCanBuy))
+			value.Color = pg.Theme.Color.Text
+			value.Font.Weight = font.SemiBold
+			return layout.Flex{Alignment: layout.Middle}.Layout(gtx,
+				layout.Rigid(label.Layout),
+				layout.Rigid(value.Layout),
+			)
+		}
+		return layoutWrapRow(gtx, staked, spendable, canBuy)
 	}
 	total := totalBalance.Spendable.ToInt() + totalBalance.LockedByTickets.ToInt()
 	pb := pg.Theme.MultiLayerProgressBar(pg.dcrWallet.ToAmount(total).ToCoin(), items)

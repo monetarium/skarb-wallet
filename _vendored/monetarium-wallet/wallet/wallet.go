@@ -7011,6 +7011,26 @@ func (w *Wallet) SetPublished(ctx context.Context, hash *chainhash.Hash, publish
 	if err != nil {
 		return err
 	}
+	if !published {
+		return nil
+	}
+	// Unpublished → published (VSP fee entered the mempool). Notify off
+	// this stack so we do not hold the db view while the UI listener
+	// runs. The storm row is already saved; listenForTransactions must
+	// still fire OnTransaction on overwrite so Gio redraws.
+	h := *hash
+	go func() {
+		_ = walletdb.View(ctx, w.db, func(dbtx walletdb.ReadTx) error {
+			ns := dbtx.ReadBucket(wtxmgrNamespaceKey)
+			details, err := w.txStore.UniqueTxDetails(ns, &h, nil)
+			if err != nil || details == nil {
+				return nil
+			}
+			log.Infof("SetPublished(%v)=true; notifying unmined tx for UI", &h)
+			w.NtfnServer.notifyUnminedTransaction(dbtx, details)
+			return nil
+		})
+	}()
 	return nil
 }
 

@@ -34,16 +34,24 @@ func TestApplySplitAmountsIncludesVSPFee(t *testing.T) {
 		Amount: 1000, // stored fee placeholder
 	}
 
+	split.AmountAtoms = "1000"
 	ApplySplitAmounts([]*sharedW.Transaction{split, ticket})
 	if split.Amount != 37_0000_0000 {
 		t.Fatalf("tickets only: got %d, want %d", split.Amount, int64(37_0000_0000))
 	}
+	if split.AmountAtoms != "" {
+		t.Fatalf("tickets only: AmountAtoms still %q, want empty so the UI uses Amount", split.AmountAtoms)
+	}
 
+	split.AmountAtoms = "1000"
 	ApplySplitAmountsWithFees([]*sharedW.Transaction{split, ticket, feeTx}, func(h string) bool {
 		return h == "feepayment"
 	})
 	want := int64(37_0000_0000 + 27_000_000)
 	if split.Amount != want {
 		t.Fatalf("tickets+fee: got %d, want %d", split.Amount, want)
+	}
+	if split.AmountAtoms != "" {
+		t.Fatalf("tickets+fee: AmountAtoms still %q, want empty", split.AmountAtoms)
 	}
 }

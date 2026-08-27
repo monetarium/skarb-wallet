@@ -498,6 +498,10 @@ func applySplitAmounts(txs []*sharedW.Transaction, isVSPFee func(hash string) bo
 		}
 		if sum, ok := consumed[tx.Hash]; ok && sum > 0 {
 			tx.Amount = sum
+			// Display prefers AmountAtoms when set. The decoder stores the
+			// fee there for some self-transfers; the list/details header
+			// must follow the priced Amount instead.
+			tx.AmountAtoms = ""
 		}
 	}
 }
