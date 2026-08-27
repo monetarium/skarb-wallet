@@ -47,15 +47,17 @@ func (asset *Asset) listenForTransactions() {
 						log.Infof("[%d] New Transaction %s (direction=%d amount=%d type=%s)",
 							asset.ID, tempTransaction.Hash, tempTransaction.Direction,
 							tempTransaction.Amount, tempTransaction.Type)
-					} else {
-						// Overwrite is the SetPublished / mempool-reannounce
-						// path: storm already has the row, but Gio will not
-						// redraw "Pending by VSP" → "Unconfirmed" without a
-						// listener callback.
-						log.Infof("[%d] Unmined tx %s updated (type=%s); notifying UI",
-							asset.ID, tempTransaction.Hash, tempTransaction.Type)
+						asset.mempoolTransactionNotification(tempTransaction)
+					} else if asset.IsVSPFeePayment(tempTransaction.Hash) {
+						// SetPublished / mempool re-announce of a VSP fee:
+						// storm already has the row, but Gio will not redraw
+						// "Pending by VSP" → "Unconfirmed" without a callback.
+						// Other unmined overwrites stay silent — otherwise
+						// incoming payments toast again on every peer inv.
+						log.Infof("[%d] VSP fee tx %s unmined update; notifying UI",
+							asset.ID, tempTransaction.Hash)
+						asset.mempoolTransactionNotification(tempTransaction)
 					}
-					asset.mempoolTransactionNotification(tempTransaction)
 				}
 
 				for _, block := range v.AttachedBlocks {

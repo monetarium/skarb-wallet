@@ -1495,10 +1495,12 @@ func (pg *TxDetailsPage) wireBlockListener() {
 		},
 		OnTransaction: func(_ int, tx *sharedW.Transaction) {
 			// VSP fee "Pending by VSP" → "Unconfirmed" is a SetPublished
-			// change, not a new block. Reload so VSPFeeTxPhase re-reads.
-			if tx != nil && pg.transaction != nil && tx.Hash == pg.transaction.Hash {
-				pg.pendingTxRefresh.Store(true)
+			// change, not a new block. Only this card's hash: a Reload on
+			// every mempool tx would flicker any open details page.
+			if tx == nil || pg.transaction == nil || tx.Hash != pg.transaction.Hash {
+				return
 			}
+			pg.pendingTxRefresh.Store(true)
 			pg.ParentWindow().Reload()
 		},
 	}
