@@ -48,6 +48,15 @@ func (asset *Asset) listenForTransactions() {
 							asset.ID, tempTransaction.Hash, tempTransaction.Direction,
 							tempTransaction.Amount, tempTransaction.Type)
 						asset.mempoolTransactionNotification(tempTransaction)
+					} else if asset.IsVSPFeePayment(tempTransaction.Hash) {
+						// SetPublished / mempool re-announce of a VSP fee:
+						// storm already has the row, but Gio will not redraw
+						// "Pending by VSP" → "Unconfirmed" without a callback.
+						// Other unmined overwrites stay silent — otherwise
+						// incoming payments toast again on every peer inv.
+						log.Infof("[%d] VSP fee tx %s unmined update; notifying UI",
+							asset.ID, tempTransaction.Hash)
+						asset.mempoolTransactionNotification(tempTransaction)
 					}
 				}
 

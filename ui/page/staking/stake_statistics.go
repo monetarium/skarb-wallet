@@ -44,42 +44,14 @@ func (pg *Page) stakeStatisticsSection(gtx C) D {
 				}.Layout(gtx, txt.Layout)
 			}),
 			layout.Rigid(func(gtx C) D {
-				var flexChilds []layout.FlexChild
-				if isMobile {
-					flexChilds = []layout.FlexChild{
-						pg.dataStatisticsCol(liveItem, revokedItem, uminedItem, isMobile),
-						pg.dataStatisticsCol(votedItem, immatureItem, expiredItem, isMobile),
-					}
-				} else {
-					flexChilds = []layout.FlexChild{
-						pg.dataStatisticsCol(liveItem, revokedItem, nil, isMobile),
-						pg.dataStatisticsCol(uminedItem, votedItem, nil, isMobile),
-						pg.dataStatisticsCol(immatureItem, expiredItem, nil, isMobile),
-					}
-				}
-				return layout.Flex{Axis: layout.Horizontal, Spacing: layout.SpaceBetween}.Layout(gtx, flexChilds...) // layout.Rigid(func(gtx C) D {
-			}),
-		)
-	})
-}
-
-func (pg *Page) dataStatisticsCol(item1, item2, item3 *statisticsItem, isMobile bool) layout.FlexChild {
-	spacerHeight := values.MarginPaddingTransform(isMobile, values.MarginPadding24)
-	return layout.Rigid(func(gtx C) D {
-		return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
-			layout.Rigid(func(gtx C) D {
-				return pg.dataStatisticsItem(gtx, item1)
-			}),
-			layout.Rigid(layout.Spacer{Height: spacerHeight}.Layout),
-			layout.Rigid(func(gtx C) D {
-				return pg.dataStatisticsItem(gtx, item2)
-			}),
-			layout.Rigid(func(gtx C) D {
-				if item3 == nil {
-					return D{}
-				}
-				return layout.Inset{Top: spacerHeight}.Layout(gtx, func(gtx C) D {
-					return pg.dataStatisticsItem(gtx, item3)
+				items := []*statisticsItem{liveItem, uminedItem, immatureItem, revokedItem, votedItem, expiredItem}
+				return cryptomaterial.GridWrap{Alignment: layout.Start}.Layout(gtx, len(items), func(gtx C, i int) D {
+					return layout.Inset{
+						Right:  values.MarginPadding16,
+						Bottom: values.MarginPaddingTransform(isMobile, values.MarginPadding24),
+					}.Layout(gtx, func(gtx C) D {
+						return pg.dataStatisticsItem(gtx, items[i])
+					})
 				})
 			}),
 		)

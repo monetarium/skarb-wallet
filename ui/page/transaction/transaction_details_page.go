@@ -300,6 +300,10 @@ func (pg *TxDetailsPage) OnNavigatedTo() {
 					}
 				}
 			}
+			// GetTransactionRaw of a split stores the fee as Amount. Re-price
+			// from ticket/VSP-fee spenders (or keep the list snapshot) so the
+			// header does not show the fee while the tx is still unmined.
+			keepPricedSplitAmount(pg.wallet, updated, pg.transaction)
 			pg.transaction = updated
 			pg.txnWidgets = pg.initTxnWidgets()
 			pg.refreshSenderClickables()
@@ -1310,10 +1314,7 @@ func (pg *TxDetailsPage) HandleUserInteractions(gtx C) {
 			// silently flip from e.g. "205 VAR" to the fee on the next attached
 			// block. If the tickets can't be found, keep the already-priced
 			// value from the list that opened this page.
-			ensureSplitAmount(pg.wallet, updated)
-			if dcr.IsSplitTx(updated) && pg.transaction.Amount > updated.Amount {
-				updated.Amount = pg.transaction.Amount
-			}
+			keepPricedSplitAmount(pg.wallet, updated, pg.transaction)
 			// Re-resolve the ticket's spender so a Voted/Revoked header never
 			// regresses to "Live" (and catches a Live→Voted transition while
 			// the page is open). GetTransactionRaw back-fills TicketSpender
@@ -1489,6 +1490,16 @@ func (pg *TxDetailsPage) wireBlockListener() {
 			pg.ParentWindow().Reload()
 		},
 		OnTransactionConfirmed: func(_ int, _ string, _ int32) {
+			pg.pendingTxRefresh.Store(true)
+			pg.ParentWindow().Reload()
+		},
+		OnTransaction: func(_ int, tx *sharedW.Transaction) {
+			// VSP fee "Pending by VSP" → "Unconfirmed" is a SetPublished
+			// change, not a new block. Only this card's hash: a Reload on
+			// every mempool tx would flicker any open details page.
+			if tx == nil || pg.transaction == nil || tx.Hash != pg.transaction.Hash {
+				return
+			}
 			pg.pendingTxRefresh.Store(true)
 			pg.ParentWindow().Reload()
 		},

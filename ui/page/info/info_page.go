@@ -5,6 +5,7 @@ import (
 	"image/color"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"gioui.org/font"
@@ -88,6 +89,12 @@ type WalletInfo struct {
 	// settings page uses) — Staking's "View All" opens the Staking TAB,
 	// not a Transactions sub-page. Optional: nil falls back to nothing.
 	changeTab func(tab string)
+
+	// txRefreshInFlight / txRefreshQueued serialize ListenForNewTx: a block
+	// confirms the split then auto-buy creates the VSP fee a moment later.
+	// Without a follow-up load the fee row is missing until a pointer event.
+	txRefreshInFlight atomic.Bool
+	txRefreshQueued   atomic.Bool
 }
 
 func NewInfoPage(l *load.Load, wallet sharedW.Asset, backup func(sharedW.Asset), changeTab func(string)) *WalletInfo {
@@ -559,11 +566,23 @@ func (pg *WalletInfo) ListenForNewTx(walletID int) {
 	if walletID != pg.wallet.GetWalletID() {
 		return
 	}
-	pg.loadTransactions()
-	if pg.wallet.GetAssetType() == libutils.DCRWalletAsset {
-		pg.loadStakes()
-		pg.loadRewards()
-		pg.loadGovernanceAgendas()
+	if !pg.txRefreshInFlight.CompareAndSwap(false, true) {
+		pg.txRefreshQueued.Store(true)
+		log.Debugf("InfoPage tx refresh queued (one already in flight)")
+		return
+	}
+	defer pg.txRefreshInFlight.Store(false)
+	for {
+		pg.loadTransactions()
+		if pg.wallet.GetAssetType() == libutils.DCRWalletAsset {
+			pg.loadStakes()
+			pg.loadRewards()
+			pg.loadGovernanceAgendas()
+		}
+		if !pg.txRefreshQueued.CompareAndSwap(true, false) {
+			return
+		}
+		log.Debugf("InfoPage tx refresh follow-up (queued while previous ran)")
 	}
 }
 
