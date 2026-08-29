@@ -11,7 +11,7 @@ import (
 type Icons struct {
 	ContentAdd, NavigationCheck, NavigationMore, ActionCheckCircle, ActionInfo, NavigationArrowBack,
 	NavigationArrowForward, ActionCheck, NavigationCancel, NavMoreIcon,
-	DotIcon, ContentClear, DropDownIcon, Cached, ContentRemove, SearchIcon, PlayIcon,
+	DotIcon, RadioUncheckedIcon, ContentClear, DropDownIcon, Cached, ContentRemove, SearchIcon, PlayIcon,
 	ActionSettings, ActionSwapHoriz, ActionSwapVertical, NavigationRefresh, ContentCopy, MenuIcon, CopyIcon, ArrowDropDown, ArrowDropUp,
 	ChevronLeft, ChevronRight, ChevronUp, ChevronDown, DeleteIcon, VisibilityIcon, VisibilityOffIcon *widget.Icon
 
@@ -52,6 +52,7 @@ func (i *Icons) StandardMaterialIcons() *Icons {
 	i.ActionCheck = MustIcon(widget.NewIcon(icons.ActionCheckCircle))
 	i.NavigationCancel = MustIcon(widget.NewIcon(icons.NavigationCancel))
 	i.DotIcon = MustIcon(widget.NewIcon(icons.ImageBrightness1))
+	i.RadioUncheckedIcon = MustIcon(widget.NewIcon(icons.ToggleRadioButtonUnchecked))
 	i.ContentClear = MustIcon(widget.NewIcon(icons.ContentClear))
 	i.DropDownIcon = MustIcon(widget.NewIcon(icons.NavigationArrowDropDown))
 	i.Cached = MustIcon(widget.NewIcon(icons.ActionCached))
