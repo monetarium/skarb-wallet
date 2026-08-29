@@ -44,23 +44,35 @@ func (pg *Page) stakeStatisticsSection(gtx C) D {
 				}.Layout(gtx, txt.Layout)
 			}),
 			layout.Rigid(func(gtx C) D {
-				// 2×3 table: equal-width columns so icons and labels line
-				// up both horizontally and vertically (GridWrap packed
-				// each cell to its text width, so columns drifted).
-				rows := [][]*statisticsItem{
-					{liveItem, uminedItem, immatureItem},
-					{revokedItem, votedItem, expiredItem},
+				// Equal-width cells so icons and labels line up as a table
+				// (GridWrap packed each cell to its text width, so columns
+				// drifted). Desktop: 2×3. Phone: 3×2 — the old 3-column
+				// phone grid squeezed "Live Tickets" letter-by-letter.
+				var rows [][]*statisticsItem
+				if isMobile {
+					rows = [][]*statisticsItem{
+						{liveItem, votedItem},
+						{revokedItem, immatureItem},
+						{uminedItem, expiredItem},
+					}
+				} else {
+					rows = [][]*statisticsItem{
+						{liveItem, uminedItem, immatureItem},
+						{revokedItem, votedItem, expiredItem},
+					}
 				}
 				rowGap := values.MarginPaddingTransform(isMobile, values.MarginPadding24)
-				return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
-					layout.Rigid(func(gtx C) D {
-						return pg.statisticsRow(gtx, rows[0])
-					}),
-					layout.Rigid(layout.Spacer{Height: rowGap}.Layout),
-					layout.Rigid(func(gtx C) D {
-						return pg.statisticsRow(gtx, rows[1])
-					}),
-				)
+				children := make([]layout.FlexChild, 0, len(rows)*2-1)
+				for i, row := range rows {
+					if i > 0 {
+						children = append(children, layout.Rigid(layout.Spacer{Height: rowGap}.Layout))
+					}
+					row := row
+					children = append(children, layout.Rigid(func(gtx C) D {
+						return pg.statisticsRow(gtx, row)
+					}))
+				}
+				return layout.Flex{Axis: layout.Vertical}.Layout(gtx, children...)
 			}),
 		)
 	})

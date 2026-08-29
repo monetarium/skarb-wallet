@@ -254,6 +254,9 @@ func ticketListLayout(gtx C, l *load.Load, wallet *dcr.Asset, ticket *transactio
 }
 
 func nextTicketRemaining(allsecs int) string {
+	if allsecs < 0 {
+		return values.String(values.StrLoading)
+	}
 	if allsecs == 0 {
 		return values.String(values.StrImminent)
 	}

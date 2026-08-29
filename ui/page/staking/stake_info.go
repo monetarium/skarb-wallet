@@ -182,7 +182,7 @@ func (pg *Page) stakePriceSection(gtx C) D {
 						return lbl.Layout(gtx)
 					}
 					price := func(gtx C) D {
-						if !pg.dcrWallet.IsSynced() || pg.dcrWallet.IsRescanning() || !pg.isTicketsPurchaseAllowed() {
+						if !pg.dcrWallet.IsSynced() || pg.dcrWallet.IsRescanning() || !pg.isTicketsPurchaseAllowed() || pg.ticketPrice == "" {
 							lbl := pg.Theme.Label(textSize16, values.String(values.StrLoadingPrice))
 							lbl.Color = grayText
 							return lbl.Layout(gtx)
