@@ -144,6 +144,13 @@ func NewManualCoinSelectionPage(l *load.Load, sendPage *Page) *ManualCoinSelecti
 	}
 
 	pg.actionButton.Font.Weight = font.SemiBold
+	pg.actionButton.TextSize = values.TextSizeTransform(l.IsMobileView(), values.TextSize16)
+	pg.actionButton.Inset = layout.Inset{
+		Top:    values.MarginPadding12,
+		Right:  values.MarginPadding16,
+		Bottom: values.MarginPadding12,
+		Left:   values.MarginPadding16,
+	}
 	pg.clearButton.Font.Weight = font.SemiBold
 	pg.clearButton.Color = l.Theme.Color.Danger
 	pg.clearButton.Inset = layout.UniformInset(values.MarginPadding4)
@@ -473,8 +480,9 @@ func (pg *ManualCoinSelectionPage) contentLayout(gtx C) D {
 		}),
 		layout.Rigid(func(gtx C) D {
 			gtx.Constraints.Min.X = gtx.Constraints.Max.X
-			return layout.Inset{Top: values.MarginPadding5}.Layout(gtx, func(gtx C) D {
-				return layout.E.Layout(gtx, pg.actionButton.Layout)
+			return layout.Inset{Top: values.MarginPadding16}.Layout(gtx, func(gtx C) D {
+				gtx.Constraints.Min.X = gtx.Constraints.Max.X
+				return pg.actionButton.Layout(gtx)
 			})
 		}),
 	)

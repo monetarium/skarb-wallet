@@ -49,8 +49,23 @@ func layoutWrapRow(gtx C, widgets ...layout.Widget) D {
 	}
 
 	avail := gtx.Constraints.Max.X
-	if avail <= 0 {
-		avail = infX
+	// Nested wrap / GridWrap measure with Max.X = inf. Expanding to that
+	// width put the right-hand values (Ticket Price, Time Left) at x≈1e6
+	// and they vanished off-screen. Pack tightly and report the natural
+	// size so the parent can decide wrap vs space-between.
+	if avail <= 0 || avail >= infX {
+		x := 0
+		for _, it := range items {
+			if x != 0 {
+				op.Offset(image.Pt(x, 0)).Add(gtx.Ops)
+			}
+			it.call.Add(gtx.Ops)
+			if x != 0 {
+				op.Offset(image.Pt(-x, 0)).Add(gtx.Ops)
+			}
+			x += it.size.X
+		}
+		return D{Size: image.Pt(totalX, maxY)}
 	}
 	if totalX <= avail {
 		x := 0
@@ -156,16 +171,18 @@ func (pg *Page) stakePriceSection(gtx C) D {
 				return pg.totalRewardRow(gtx)
 			}),
 			layout.Rigid(layout.Spacer{Height: values.MarginPadding12}.Layout),
-			// Row 2: Ticket Price (left) and Time Left (right).
+			// Ticket Price and Time Left each take a full-width row, same
+			// as Total Reward: label left, value right. Nested wrap used
+			// to hide the values off-screen (measure pass at Max.X=inf).
 			layout.Rigid(func(gtx C) D {
-				priceWg := func(gtx C) D {
+				return components.VerticalInset(values.MarginPadding6).Layout(gtx, func(gtx C) D {
 					title := func(gtx C) D {
-						lbl := pg.Theme.Label(textSize16, values.String(values.StrTicketPrice)+" ")
+						lbl := pg.Theme.Label(textSize16, values.String(values.StrTicketPrice))
 						lbl.Color = grayText
 						return lbl.Layout(gtx)
 					}
 					price := func(gtx C) D {
-						if !pg.dcrWallet.IsSynced() || pg.dcrWallet.IsRescanning() || !pg.isTicketsPurchaseAllowed() {
+						if !pg.dcrWallet.IsSynced() || pg.dcrWallet.IsRescanning() || !pg.isTicketsPurchaseAllowed() || pg.ticketPrice == "" {
 							lbl := pg.Theme.Label(textSize16, values.String(values.StrLoadingPrice))
 							lbl.Color = grayText
 							return lbl.Layout(gtx)
@@ -173,15 +190,11 @@ func (pg *Page) stakePriceSection(gtx C) D {
 						return components.LayoutBalanceWithUnitSizeBoldText(gtx, pg.Load, pg.ticketPrice, textSize16)
 					}
 					return layoutWrapRow(gtx, title, price)
-				}
-
-				timeLeftWg := func(gtx C) D {
-					secs, _ := pg.dcrWallet.NextTicketPriceRemaining()
-					timeleft := nextTicketRemaining(int(secs))
-					return pg.dataRows(gtx, values.String(values.StrTimeLeft), timeleft)
-				}
-
-				return layoutWrapRow(gtx, priceWg, timeLeftWg)
+				})
+			}),
+			layout.Rigid(func(gtx C) D {
+				secs, _ := pg.dcrWallet.NextTicketPriceRemaining()
+				return pg.dataRows(gtx, values.String(values.StrTimeLeft), nextTicketRemaining(int(secs)))
 			}),
 			layout.Rigid(pg.balanceProgressBarLayout),
 			layout.Rigid(pg.buyTicketsButtonLayout),
@@ -388,10 +401,19 @@ func (pg *Page) balanceProgressBarLayout(gtx C) D {
 			value := pg.Theme.Label(textSize16, fmt.Sprintf("%d", pg.ticketsCanBuy))
 			value.Color = pg.Theme.Color.Text
 			value.Font.Weight = font.SemiBold
-			return layout.Flex{Alignment: layout.Middle}.Layout(gtx,
-				layout.Rigid(label.Layout),
-				layout.Rigid(value.Layout),
-			)
+			return layout.Inset{Right: values.MarginPadding12}.Layout(gtx, func(gtx C) D {
+				return layout.Flex{Alignment: layout.Middle}.Layout(gtx,
+					layout.Rigid(func(gtx C) D {
+						return layout.Inset{Right: values.MarginPadding5}.Layout(gtx, func(gtx C) D {
+							ic := cryptomaterial.NewIcon(pg.Theme.Icons.RadioUncheckedIcon)
+							ic.Color = pg.Theme.Color.Text
+							return ic.Layout(gtx, values.MarginPadding10)
+						})
+					}),
+					layout.Rigid(label.Layout),
+					layout.Rigid(value.Layout),
+				)
+			})
 		}
 		return layoutWrapRow(gtx, staked, spendable, canBuy)
 	}

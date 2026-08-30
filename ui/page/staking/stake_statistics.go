@@ -44,18 +44,49 @@ func (pg *Page) stakeStatisticsSection(gtx C) D {
 				}.Layout(gtx, txt.Layout)
 			}),
 			layout.Rigid(func(gtx C) D {
-				items := []*statisticsItem{liveItem, uminedItem, immatureItem, revokedItem, votedItem, expiredItem}
-				return cryptomaterial.GridWrap{Alignment: layout.Start}.Layout(gtx, len(items), func(gtx C, i int) D {
-					return layout.Inset{
-						Right:  values.MarginPadding16,
-						Bottom: values.MarginPaddingTransform(isMobile, values.MarginPadding24),
-					}.Layout(gtx, func(gtx C) D {
-						return pg.dataStatisticsItem(gtx, items[i])
-					})
-				})
+				// Equal-width cells so icons and labels line up as a table
+				// (GridWrap packed each cell to its text width, so columns
+				// drifted). Desktop: 2×3. Phone: 3×2 — the old 3-column
+				// phone grid squeezed "Live Tickets" letter-by-letter.
+				var rows [][]*statisticsItem
+				if isMobile {
+					rows = [][]*statisticsItem{
+						{liveItem, votedItem},
+						{revokedItem, immatureItem},
+						{uminedItem, expiredItem},
+					}
+				} else {
+					rows = [][]*statisticsItem{
+						{liveItem, uminedItem, immatureItem},
+						{revokedItem, votedItem, expiredItem},
+					}
+				}
+				rowGap := values.MarginPaddingTransform(isMobile, values.MarginPadding24)
+				children := make([]layout.FlexChild, 0, len(rows)*2-1)
+				for i, row := range rows {
+					if i > 0 {
+						children = append(children, layout.Rigid(layout.Spacer{Height: rowGap}.Layout))
+					}
+					row := row
+					children = append(children, layout.Rigid(func(gtx C) D {
+						return pg.statisticsRow(gtx, row)
+					}))
+				}
+				return layout.Flex{Axis: layout.Vertical}.Layout(gtx, children...)
 			}),
 		)
 	})
+}
+
+func (pg *Page) statisticsRow(gtx C, items []*statisticsItem) D {
+	children := make([]layout.FlexChild, 0, len(items))
+	for _, item := range items {
+		it := item
+		children = append(children, layout.Flexed(1, func(gtx C) D {
+			return pg.dataStatisticsItem(gtx, it)
+		}))
+	}
+	return layout.Flex{Alignment: layout.Start}.Layout(gtx, children...)
 }
 
 func (pg *Page) dataStatisticsItem(gtx C, item *statisticsItem) D {
@@ -66,7 +97,7 @@ func (pg *Page) dataStatisticsItem(gtx C, item *statisticsItem) D {
 					Right: values.MarginPadding10,
 				}.Layout(gtx, item.Icon.Layout36dp)
 			}),
-			layout.Rigid(func(gtx C) D {
+			layout.Flexed(1, func(gtx C) D {
 				return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
 					layout.Rigid(func(gtx C) D {
 						label := pg.Theme.Label(values.TextSize16, item.Title)
@@ -96,7 +127,7 @@ func (pg *Page) dataStatisticsItem(gtx C, item *statisticsItem) D {
 		bg = pg.Theme.Color.Gray4
 	}
 	return cryptomaterial.LinearLayout{
-		Width:      cryptomaterial.WrapContent,
+		Width:      cryptomaterial.MatchParent,
 		Height:     cryptomaterial.WrapContent,
 		Clickable:  clk,
 		Background: bg,
