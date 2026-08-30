@@ -38,7 +38,11 @@ DISPLAY_NAME="Skarb Wallet"
 BUNDLE_ID="io.monetarium.skarb"
 APP_DIR="${DISPLAY_NAME}.app"
 DMG_FILE="${DISPLAY_NAME}.dmg"
-VERSION_LONG="0.1.0"
+# One source of truth: main.Version. Do not keep a Cryptopower 2.x number.
+VERSION="$(sed -n 's/^\tVersion = "\(.*\)"/\1/p' main.go | head -1)"
+: "${VERSION:=0.1.0}"
+VERSION_LONG="${VERSION}"
+LDFLAGS="-s -w -buildid= -X main.Version=${VERSION}"
 
 echo "→ Cleaning previous bundle"
 rm -rf "${APP_DIR}" "${DMG_FILE}"
@@ -51,7 +55,7 @@ trap "rm -f $TMP_BIN_ARM $TMP_BIN_AMD" EXIT
 
 # arm64 (Apple Silicon native — uses host CGO toolchain).
 GOFLAGS="-mod=mod -trimpath" GOOS=darwin GOARCH=arm64 \
-    go build -trimpath -ldflags "-s -w -buildid=" -buildvcs=false -o "$TMP_BIN_ARM" .
+    go build -trimpath -ldflags "$LDFLAGS" -buildvcs=false -o "$TMP_BIN_ARM" .
 
 # amd64 cross from Apple Silicon: Gio needs CGO (OpenGL, AppKit) so we point
 # clang at the x86_64 macOS SDK target. Requires Xcode command line tools.
@@ -60,7 +64,7 @@ CGO_ENABLED=1 \
 CGO_CFLAGS="-target x86_64-apple-macos11" \
 CGO_LDFLAGS="-target x86_64-apple-macos11" \
 GOFLAGS="-mod=mod -trimpath" GOOS=darwin GOARCH=amd64 \
-    go build -trimpath -ldflags "-s -w -buildid=" -buildvcs=false -o "$TMP_BIN_AMD" .
+    go build -trimpath -ldflags "$LDFLAGS" -buildvcs=false -o "$TMP_BIN_AMD" .
 
 lipo -create "$TMP_BIN_ARM" "$TMP_BIN_AMD" -output "${APP_DIR}/Contents/MacOS/${EXEC_NAME}"
 echo "  binary archs: $(lipo -archs "${APP_DIR}/Contents/MacOS/${EXEC_NAME}")"
