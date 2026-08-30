@@ -497,7 +497,7 @@ func (hp *HomePage) layoutMobileTopBar(gtx layout.Context) layout.Dimensions {
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 			return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
 				layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-					t := hp.Theme.Body1("Skarb")
+					t := hp.Theme.Body1(values.String(values.StrAppWallet))
 					t.Font.Weight = font.Bold
 					return t.Layout(gtx)
 				}),
@@ -543,7 +543,7 @@ func (hp *HomePage) layoutSidebar(gtx layout.Context) layout.Dimensions {
 
 	children := []layout.FlexChild{
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-			t := hp.Theme.H6("Skarb")
+			t := hp.Theme.H6(values.String(values.StrAppWallet))
 			t.Font.Weight = font.Bold
 			return t.Layout(gtx)
 		}),

@@ -25,7 +25,10 @@ import (
 	"github.com/monetarium/skarb-wallet/ui/values"
 )
 
-const InfoID = "Info"
+const (
+	InfoID                = "Info"
+	infoTxIndexListenerID = InfoID + "-txindex"
+)
 
 type (
 	C = layout.Context
@@ -95,6 +98,11 @@ type WalletInfo struct {
 	// Without a follow-up load the fee row is missing until a pointer event.
 	txRefreshInFlight atomic.Bool
 	txRefreshQueued   atomic.Bool
+
+	// indexRetryCancel stops the post-restore retry that reloads the
+	// preview tables until IndexTransactions has written history (or the
+	// user leaves the page).
+	indexRetryCancel context.CancelFunc
 }
 
 func NewInfoPage(l *load.Load, wallet sharedW.Asset, backup func(sharedW.Asset), changeTab func(string)) *WalletInfo {
@@ -165,26 +173,21 @@ func (pg *WalletInfo) OnNavigatedTo() {
 	pg.walletSyncInfo.RefreshBlockAge()
 	pg.startBlockAgeTicker()
 
-	go pg.loadTransactions()
+	go pg.loadTxSections()
 
 	if pg.wallet.GetAssetType() == libutils.DCRWalletAsset {
-		go pg.loadStakes()
-		go pg.loadRewards()
-		pg.loadGovernanceAgendas()
-
 		if pg.wallet.(*dcr.Asset).IsAccountMixerActive() {
 			pg.listenForMixerNotifications()
 			pg.reloadMixerBalances()
 		}
 	}
 
-	// Right after a create/restore the loaders above legitimately read 0 rows
-	// (historical txs land in walletdata only when IndexTransactions finishes
-	// with SPV sync), and indexed history fires no new-tx notifications. The
-	// refresh is driven by the master page instead: its OnSyncCompleted calls
-	// listenForSubpage → ListenForNewTx, which re-runs all three loaders
-	// (single_wallet_main_page.go). A page-level SyncProgressListener here
-	// would double-load the lists concurrently on every sync completion.
+	// Restored wallets land here while address discovery / IndexTransactions
+	// is still filling walletdata. The first query is empty, and history
+	// writes no OnTransaction. The master-page OnSyncCompleted listener
+	// can miss that moment (registered after Display, or already fired).
+	// Listen here too, and retry while the lists stay empty.
+	pg.listenForIndexComplete()
 }
 
 func (pg *WalletInfo) reload() {
@@ -561,6 +564,54 @@ func (pg *WalletInfo) reloadMixerBalances() {
 	}
 }
 
+func (pg *WalletInfo) loadTxSections() {
+	pg.loadTransactions()
+	if pg.wallet.GetAssetType() == libutils.DCRWalletAsset {
+		pg.loadStakes()
+		pg.loadRewards()
+		pg.loadGovernanceAgendas()
+	}
+}
+
+func (pg *WalletInfo) listenForIndexComplete() {
+	pg.wallet.RemoveSyncProgressListener(infoTxIndexListenerID)
+	err := pg.wallet.AddSyncProgressListener(&sharedW.SyncProgressListener{
+		OnSyncCompleted: func() {
+			go pg.ListenForNewTx(pg.wallet.GetWalletID())
+		},
+	}, infoTxIndexListenerID)
+	if err != nil {
+		log.Errorf("InfoPage: add sync listener: %v", err)
+	}
+
+	if pg.indexRetryCancel != nil {
+		pg.indexRetryCancel()
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	pg.indexRetryCancel = cancel
+	go pg.retryEmptyTxLoad(ctx)
+}
+
+// retryEmptyTxLoad re-queries the preview tables after restore until history
+// appears or the wallet is synced and still empty (no txs on this seed).
+func (pg *WalletInfo) retryEmptyTxLoad(ctx context.Context) {
+	for i := 0; i < 12; i++ {
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(2 * time.Second):
+		}
+		empty := len(pg.snapshotTxs())+len(pg.snapshotStakes())+len(pg.snapshotRewards()) == 0
+		if !empty {
+			return
+		}
+		pg.loadTxSections()
+		if pg.wallet.IsSynced() && !pg.wallet.IsSyncing() && i >= 2 {
+			return
+		}
+	}
+}
+
 // Reload tx list when there is new tx. Called from parent page
 func (pg *WalletInfo) ListenForNewTx(walletID int) {
 	if walletID != pg.wallet.GetWalletID() {
@@ -733,6 +784,11 @@ func (pg *WalletInfo) OnNavigatedFrom() {
 		pg.blockAgeTickerCancel()
 		pg.blockAgeTickerCancel = nil
 	}
+	if pg.indexRetryCancel != nil {
+		pg.indexRetryCancel()
+		pg.indexRetryCancel = nil
+	}
+	pg.wallet.RemoveSyncProgressListener(infoTxIndexListenerID)
 	if pg.wallet.GetAssetType() == libutils.DCRWalletAsset {
 		pg.wallet.(*dcr.Asset).RemoveAccountMixerNotificationListener(InfoID)
 	}

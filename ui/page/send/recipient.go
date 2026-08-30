@@ -108,24 +108,6 @@ func (rp *recipient) setCoinType(ct cointype.CoinType) {
 	}
 }
 
-func (rp *recipient) isAccountValid(sourceAccount, account *sharedW.Account) bool {
-	if sourceAccount == nil || account == nil {
-		return false
-	}
-	accountIsValid := account.Number != load.MaxInt32
-	// Filter mixed wallet
-	destinationWallet := rp.sendDestination.walletDropdown.SelectedWallet()
-	isMixedAccount := load.MixedAccountNumber(destinationWallet) == account.Number
-
-	// Filter the sending account.
-	sourceWalletID := sourceAccount.WalletID
-	isSameAccount := sourceWalletID == account.WalletID && account.Number == sourceAccount.Number
-	if !accountIsValid || isSameAccount || isMixedAccount {
-		return false
-	}
-	return true
-}
-
 func (rp *recipient) initializeAccountSelectors(sourceAccount *sharedW.Account) {
 	rp.selectedSourceAccount = sourceAccount
 	rp.sendDestination.sourceAccount = sourceAccount
@@ -144,43 +126,6 @@ func (rp *recipient) initializeAccountSelectors(sourceAccount *sharedW.Account) 
 		rp.sendDestination.walletDropdown.SelectedWallet(),
 		rp.sendDestination.accountDropdown.SelectedAccount(),
 	)
-}
-
-func (rp *recipient) isShowSendToWallet() bool {
-	sourceWalletSelected := rp.sendDestination.walletDropdown.SelectedWallet()
-	if sourceWalletSelected == nil {
-		return false
-	}
-	var wallets []sharedW.Asset
-	switch sourceWalletSelected.GetAssetType() {
-	case libUtil.BTCWalletAsset:
-		wallets = append(wallets, rp.AssetsManager.AllBTCWallets()...)
-	case libUtil.DCRWalletAsset:
-		wallets = append(wallets, rp.AssetsManager.AllDCRWallets()...)
-	case libUtil.LTCWalletAsset:
-		wallets = append(wallets, rp.AssetsManager.AllLTCWallets()...)
-	}
-
-	if len(wallets) == 1 {
-		account, err := wallets[0].GetAccountsRaw()
-		if err != nil {
-			log.Errorf("Error getting accounts:", err)
-			return false
-		}
-		accountValids := make([]sharedW.Account, 0)
-		for _, acc := range account.Accounts {
-			if rp.isAccountValid(rp.selectedSourceAccount, acc) {
-				accountValids = append(accountValids, *acc)
-			}
-		}
-		return len(accountValids) > 0 // it should show the send to wallet if there is at least one valid account.
-	}
-
-	if len(wallets) > 1 {
-		return true
-	}
-
-	return false
 }
 
 func (rp *recipient) isSendToAddress() bool {
@@ -292,10 +237,6 @@ func (rp *recipient) recipientLayout(index int, showIcon bool) layout.Widget {
 					// calls produce.
 					txt := values.String(values.StrDestinationLabelAddress)
 					return rp.contentWrapper(gtx, txt, rp.sendDestination.destinationAddressEditor.Layout)
-				}
-
-				if !rp.isShowSendToWallet() {
-					return layoutBody(gtx)
 				}
 
 				if !rp.isSendToAddress() {
