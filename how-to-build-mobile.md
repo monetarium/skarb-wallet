@@ -18,7 +18,7 @@ Prerequisites:
 Install:
 
 ```bash
-~/Library/Android/sdk/platform-tools/adb install -r Skarb-2.1.0.apk
+~/Library/Android/sdk/platform-tools/adb install -r Skarb-0.1.0.apk
 ```
 
 ## 2. iPhone / iOS Simulator
@@ -41,7 +41,7 @@ binary ourselves:
 Install on a booted simulator:
 
 ```bash
-xcrun simctl install booted ./Skarb-2.1.0.app
+xcrun simctl install booted ./Skarb-0.1.0.app
 xcrun simctl launch booted com.monetarium.skarb
 ```
 
