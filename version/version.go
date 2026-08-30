@@ -26,7 +26,7 @@ const (
 	AppName  string = "skarb"
 	AppMajor uint   = 0
 	AppMinor uint   = 1
-	AppPatch uint   = 0
+	AppPatch uint   = 1
 )
 
 // go build -v -ldflags "-X github.com/monetarium/skarb-wallet/version.appPreRelease= -X github.com/monetarium/skarb-wallet/version.appBuild=`git rev-parse --short HEAD`"

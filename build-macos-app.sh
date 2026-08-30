@@ -40,7 +40,7 @@ APP_DIR="${DISPLAY_NAME}.app"
 DMG_FILE="${DISPLAY_NAME}.dmg"
 # One source of truth: main.Version. Do not keep a Cryptopower 2.x number.
 VERSION="$(sed -n 's/^\tVersion = "\(.*\)"/\1/p' main.go | head -1)"
-: "${VERSION:=0.1.0}"
+: "${VERSION:=0.1.1}"
 VERSION_LONG="${VERSION}"
 LDFLAGS="-s -w -buildid= -X main.Version=${VERSION}"
 
