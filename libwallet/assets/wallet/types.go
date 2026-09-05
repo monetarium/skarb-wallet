@@ -394,7 +394,10 @@ type Transaction struct {
 	// since the only callers (TicketHasVotedOrRevoked, TicketSpender in
 	// transactions.go) use FindOne which works on plain indexes.
 	TicketSpentHash    string `storm:"index" json:"ticket_spent_hash,omitempty"`
-	DaysToVoteOrRevoke int32  `json:"days_to_vote_revoke,omitempty"`
+	// DaysToVoteOrRevoke is how many whole days the ticket lived from
+	// purchase until it was spent (voted or revoked). It is elapsed
+	// time, not days remaining until a vote.
+	DaysToVoteOrRevoke int32 `json:"days_to_vote_revoke,omitempty"`
 }
 
 type TxInput struct {

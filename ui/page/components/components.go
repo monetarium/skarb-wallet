@@ -291,6 +291,14 @@ func isPlainRegularRow(wal sharedW.Asset, tx *sharedW.Transaction) bool {
 	return tx.Type == txhelper.TxTypeRegular && !tx.IsStakeFee && !dcr.IsSplitTx(tx) && !isVSPFeeTx(wal, tx)
 }
 
+// usesTicketLifetimeCountdown reports whether a staking-filter row should
+// show remaining ticket lifetime ("Xd to Expire") instead of Completed.
+// Vote and revocation are settled spenders: DaysToVoteOrRevoke on those
+// txs is elapsed life, not days remaining.
+func usesTicketLifetimeCountdown(tx *sharedW.Transaction) bool {
+	return tx != nil && tx.Type == txhelper.TxTypeTicketPurchase
+}
+
 // LayoutTransactionRow is a single transaction row on the transactions and overview
 // page. It lays out a transaction's direction, balance, status. hideTxAssetInfo
 // determines if the transaction should display additional information about the tx
@@ -482,24 +490,7 @@ func LayoutTransactionRow(gtx C, l *load.Load, wal sharedW.Asset, tx *sharedW.Tr
 											return txStakingStatus(gtx, l, wal, tx)
 										}
 
-										if tx.Type == txhelper.TxTypeVote || tx.Type == txhelper.TxTypeRevocation {
-											// Spender rows: DaysToVoteOrRevoke holds how long the
-											// ticket took to vote / get revoked (decode writes it
-											// on the spender tx only).
-											title := values.String(values.StrRevoke)
-											if tx.Type == txhelper.TxTypeVote {
-												title = values.String(values.StrVote)
-											}
-											lbl := l.Theme.Label(l.ConvertTextSize(values.TextSize16), fmt.Sprintf("%dd to %s", tx.DaysToVoteOrRevoke, title))
-											lbl.Color = grayText
-											return lbl.Layout(gtx)
-										}
-										// Ticket rows: DaysToVoteOrRevoke is never written on the
-										// purchase tx (the old code always rendered "0d"). What
-										// the row needs is a COUNTDOWN — the lifetime left before
-										// an unvoted ticket becomes revocable, i.e. the blocks
-										// until maturity+expiry runs out, as wall-clock days.
-										if dcrImpl, ok := wal.(*dcr.Asset); ok && tx.Type == txhelper.TxTypeTicketPurchase {
+										if dcrImpl, ok := wal.(*dcr.Asset); ok && usesTicketLifetimeCountdown(tx) {
 											maturity, expiry := dcrImpl.TicketMaturity(), dcrImpl.TicketExpiry()
 											best := wal.GetBestBlockHeight()
 											switch dcr.TicketStatus(maturity, expiry, best, tx) {
