@@ -73,29 +73,29 @@ func formatBalance(gtx C, l *load.Load, amount string, mainTextSize unit.Sp, col
 
 	subTextSize := unit.Sp(float32(mainTextSize) * defaultScale)
 
-	lblWidget := func(size unit.Sp, text string) D {
+	lblWidget := func(size unit.Sp, text string, bold bool) D {
 		lbl := l.Theme.Label(size, text)
 		lbl.Color = col
-
-		if isBoldText {
+		if bold {
 			lbl.Font.Weight = font.SemiBold
 		}
-
 		return lbl.Layout(gtx)
 	}
 
 	return layout.Flex{Axis: layout.Horizontal, Alignment: layout.Baseline}.Layout(gtx,
 		layout.Rigid(func(_ C) D {
-			return lblWidget(mainTextSize, mainText)
+			return lblWidget(mainTextSize, mainText, isBoldText)
 		}),
 		layout.Rigid(func(_ C) D {
-			return lblWidget(subTextSize, subText)
+			return lblWidget(subTextSize, subText, isBoldText)
 		}),
 		layout.Rigid(func(_ C) D {
+			// Unit is a suffix, not a figure — keep it regular even when
+			// the amount is bold (Ticket Price vs Total Reward).
 			if displayUnitText {
-				return lblWidget(mainTextSize, unitText)
+				return lblWidget(mainTextSize, unitText, false)
 			}
-			return lblWidget(subTextSize, unitText)
+			return lblWidget(subTextSize, unitText, false)
 		}),
 	)
 }

@@ -553,22 +553,6 @@ func (pg *TxDetailsPage) txDetailsHeader(gtx C) D {
 										Bottom: values.MarginPadding7,
 									}.Layout(gtx, lbl.Layout)
 								}),
-								layout.Rigid(func(gtx C) D {
-									immatureVoteOrRevocation := pg.txnWidgets.txStatus.TicketStatus == dcr.TicketStatusImmature && (pg.transaction.Type == txhelper.TxTypeVote || pg.transaction.Type == txhelper.TxTypeRevocation)
-									if !immatureVoteOrRevocation {
-										return D{}
-									}
-
-									// immature tx section
-									title := values.String(values.StrRevoke)
-									if pg.transaction.Type == txhelper.TxTypeVote {
-										title = values.String(values.StrVote)
-									}
-
-									lbl := pg.Theme.Label(values.TextSize16, fmt.Sprintf("%d days to %s", pg.transaction.DaysToVoteOrRevoke, title))
-									lbl.Color = col
-									return lbl.Layout(gtx)
-								}),
 							)
 						}),
 						layout.Rigid(func(gtx C) D {
