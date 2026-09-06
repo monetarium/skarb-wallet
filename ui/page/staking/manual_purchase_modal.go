@@ -3,6 +3,7 @@ package staking
 import (
 	"context"
 	"strconv"
+	"strings"
 	"sync/atomic"
 
 	"gioui.org/font"
@@ -137,7 +138,7 @@ func (mp *manualPurchaseModal) OnDismiss() {
 // parseTicketCount returns the integer ticket count entered, or 0 if the field
 // is empty or not a positive integer.
 func (mp *manualPurchaseModal) parseTicketCount() int {
-	n, err := strconv.Atoi(mp.ticketsEditor.Editor.Text())
+	n, err := strconv.Atoi(strings.TrimSpace(mp.ticketsEditor.Editor.Text()))
 	if err != nil || n < 1 {
 		return 0
 	}
@@ -221,9 +222,7 @@ func (mp *manualPurchaseModal) Layout(gtx C) D {
 			if vsp := mp.vspSelector.SelectedVSP(); vsp == nil || !vsp.IsDirectBuy() {
 				return D{}
 			}
-			warn := mp.Theme.Label(values.TextSize12, values.String(values.StrDirectBuyWarning))
-			warn.Color = mp.Theme.Color.Danger
-			return layout.Inset{Bottom: values.MarginPadding8}.Layout(gtx, warn.Layout)
+			return components.LayoutSoloStakingWarning(gtx, mp.Load, values.TextSize12, layout.Inset{Bottom: values.MarginPadding8})
 		},
 		func(gtx C) D {
 			return layout.E.Layout(gtx, func(gtx C) D {

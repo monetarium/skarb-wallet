@@ -8,6 +8,7 @@ import (
 
 	"gioui.org/font"
 	"gioui.org/layout"
+	"gioui.org/unit"
 	"gioui.org/widget"
 	"gioui.org/widget/material"
 
@@ -83,6 +84,14 @@ func (v *VSPSelector) SelectVSP(vspHost string) {
 
 func (v *VSPSelector) SelectedVSP() *dcr.VSP {
 	return v.selectedVSP
+}
+
+// LayoutSoloStakingWarning is the red Solo-mode caveat: Skarb only buys
+// tickets; a node wallet with the same seed must stay online to vote.
+func LayoutSoloStakingWarning(gtx C, l *load.Load, size unit.Sp, inset layout.Inset) D {
+	warn := l.Theme.Label(size, values.String(values.StrDirectBuyWarning))
+	warn.Color = l.Theme.Color.Danger
+	return inset.Layout(gtx, warn.Layout)
 }
 
 func (v *VSPSelector) handle(gtx C, window app.WindowNavigator) {
@@ -433,9 +442,7 @@ func (v *vspSelectorModal) Layout(gtx C) D {
 											return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
 												layout.Rigid(v.Theme.Label(textSize16, values.String(values.StrDirectBuy)).Layout),
 												layout.Rigid(func(gtx C) D {
-													warn := v.Theme.Label(values.TextSizeTransform(v.IsMobileView(), values.TextSize12), values.String(values.StrDirectBuyWarning))
-													warn.Color = v.Theme.Color.Danger
-													return layout.Inset{Top: values.MarginPadding4}.Layout(gtx, warn.Layout)
+													return LayoutSoloStakingWarning(gtx, v.Load, values.TextSizeTransform(v.IsMobileView(), values.TextSize12), layout.Inset{Top: values.MarginPadding4})
 												}),
 											)
 										})
