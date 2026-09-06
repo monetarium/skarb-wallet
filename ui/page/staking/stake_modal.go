@@ -46,8 +46,8 @@ func newTicketBuyerModal(l *load.Load, wallet *dcr.Asset) *ticketBuyerModal {
 		saveSettingsBtn: l.Theme.Button(values.String(values.StrSave)),
 		// AllowDirectBuy: the auto-buyer works solo too (nil VSPClient in
 		// StartTicketBuyer) — an empty saved host round-trips as Direct buy.
-		vspSelector:     components.NewVSPSelector(l, wallet).Title(values.String(values.StrSelectVSP)).AllowDirectBuy(),
-		dcrImpl:         wallet,
+		vspSelector: components.NewVSPSelector(l, wallet).Title(values.String(values.StrSelectVSP)).AllowDirectBuy(),
+		dcrImpl:     wallet,
 	}
 
 	tb.balToMaintainEditor = l.Theme.Editor(new(widget.Editor), values.String(values.StrBalToMaintain))
@@ -136,7 +136,7 @@ func (tb *ticketBuyerModal) Layout(gtx C) D {
 						layout.Rigid(func(gtx C) D {
 							// Clarify that this field is a RESERVE, not the spend amount.
 							hint := tb.Theme.Label(values.TextSize12, values.String(values.StrBalToMaintainHint))
-							hint.Color = tb.Theme.Color.GrayText2
+							hint.Color = tb.Theme.Color.Danger
 							return layout.Inset{Top: values.MarginPadding4}.Layout(gtx, hint.Layout)
 						}),
 					)
@@ -152,9 +152,7 @@ func (tb *ticketBuyerModal) Layout(gtx C) D {
 					if vsp := tb.vspSelector.SelectedVSP(); vsp == nil || !vsp.IsDirectBuy() {
 						return D{}
 					}
-					warn := tb.Theme.Label(values.TextSize12, values.String(values.StrDirectBuyWarning))
-					warn.Color = tb.Theme.Color.Danger
-					return layout.Inset{Bottom: values.MarginPadding8}.Layout(gtx, warn.Layout)
+					return components.LayoutSoloStakingWarning(gtx, tb.Load, values.TextSize12, layout.Inset{Bottom: values.MarginPadding8})
 				}),
 			)
 		},
@@ -182,7 +180,7 @@ func (tb *ticketBuyerModal) canSave() bool {
 		return false
 	}
 
-	if tb.balToMaintainEditor.Editor.Text() == "" {
+	if strings.TrimSpace(tb.balToMaintainEditor.Editor.Text()) == "" {
 		return false
 	}
 
@@ -237,7 +235,7 @@ func (tb *ticketBuyerModal) Handle(gtx C) {
 		vspHost := tb.vspSelector.SelectedVSP().Host
 		// Accept a comma decimal separator: uk-locale Android numeric
 		// keypads expose only ",".
-		balText := strings.Replace(tb.balToMaintainEditor.Editor.Text(), ",", ".", 1)
+		balText := strings.Replace(strings.TrimSpace(tb.balToMaintainEditor.Editor.Text()), ",", ".", 1)
 		amount, err := strconv.ParseFloat(balText, 64)
 		if err != nil {
 			tb.SetError(err.Error())

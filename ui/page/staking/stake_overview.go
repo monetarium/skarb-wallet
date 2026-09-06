@@ -743,9 +743,7 @@ func (pg *Page) startManualPurchasePasswordModal(accountNumber, numTickets int32
 					if !vsp.IsDirectBuy() {
 						return D{}
 					}
-					warn := pg.Theme.Label(values.TextSize12, values.String(values.StrDirectBuyWarning))
-					warn.Color = pg.Theme.Color.Danger
-					return layout.Inset{Bottom: values.MarginPadding12}.Layout(gtx, warn.Layout)
+					return components.LayoutSoloStakingWarning(gtx, pg.Load, values.TextSize12, layout.Inset{Bottom: values.MarginPadding12})
 				}),
 			)
 		}).
@@ -800,13 +798,15 @@ func (pg *Page) startTicketBuyerPasswordModal() {
 		Title(values.String(values.StrConfirmPurchase)).
 		SetCancelable(false).
 		UseCustomWidget(func(gtx C) D {
+			// Empty saved host == solo (Direct buy) auto-staking.
+			isSolo := tbConfig.VspHost == ""
 			return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
 				layout.Rigid(pg.Theme.Label(values.TextSize14, values.StringF(values.StrWalletToPurchaseFrom, pg.dcrWallet.GetWalletName())).Layout),
 				layout.Rigid(pg.Theme.Label(values.TextSize14, values.StringF(values.StrSelectedAccount, name)).Layout),
-				layout.Rigid(pg.Theme.Label(values.TextSize14, values.StringF(values.StrBalToMaintainValue, balToMaintain)).Layout), layout.Rigid(func(gtx C) D {
-					// Empty saved host == solo (Direct buy) auto-staking.
+				layout.Rigid(pg.Theme.Label(values.TextSize14, values.StringF(values.StrBalToMaintainValue, balToMaintain)).Layout),
+				layout.Rigid(func(gtx C) D {
 					vspName := tbConfig.VspHost
-					if vspName == "" {
+					if isSolo {
 						vspName = values.String(values.StrDirectBuy)
 					}
 					label := pg.Theme.Label(values.TextSize14, fmt.Sprintf("VSP: %s", vspName))
@@ -814,14 +814,20 @@ func (pg *Page) startTicketBuyerPasswordModal() {
 				}),
 				layout.Rigid(func(gtx C) D {
 					// Solo caveat — same warning as the manual Direct-buy flow.
-					if tbConfig.VspHost != "" {
+					if !isSolo {
 						return D{}
 					}
-					warn := pg.Theme.Label(values.TextSize12, values.String(values.StrDirectBuyWarning))
-					warn.Color = pg.Theme.Color.Danger
-					return layout.Inset{Bottom: values.MarginPadding12}.Layout(gtx, warn.Layout)
+					return components.LayoutSoloStakingWarning(gtx, pg.Load, values.TextSize12, layout.Inset{Bottom: values.MarginPadding12})
 				}),
 				layout.Rigid(func(gtx C) D {
+					// Solo: Skarb only buys tickets; a node wallet votes.
+					// "Must remain running" is about the auto-buyer process,
+					// not voting, and reads as if Skarb itself must stay up
+					// to vote — hide it in Solo. VSP still needs this app
+					// running to purchase.
+					if isSolo {
+						return D{}
+					}
 					return cryptomaterial.LinearLayout{
 						Width:      cryptomaterial.MatchParent,
 						Height:     cryptomaterial.WrapContent,
