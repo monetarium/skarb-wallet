@@ -150,9 +150,8 @@ hdiutil create -volname "${EXEC_NAME}" \
     "${DMG_FILE}" > /dev/null
 rm -rf "${TMP_DMG_DIR}"
 
-# Stable download name used by README ("Last version"). Overwrite on every
-# release so the same URL always serves the current build. Also keep a
-# versioned copy next to it.
+# Same bytes as last-version.dmg (stable alias) plus a versioned copy
+# for the README download link.
 RELEASE_DIR="releases/macos"
 mkdir -p "${RELEASE_DIR}"
 cp "${DMG_FILE}" "${RELEASE_DIR}/last-version.dmg"
