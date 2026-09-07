@@ -1,12 +1,12 @@
 # Skarb Wallet for macOS
 
-Download: [Last version](last-version.dmg) · [Skarb Wallet 0.1.1](Skarb-Wallet-0.1.1.dmg)
+Download: [Skarb Wallet 0.1.2](Skarb-Wallet-0.1.2.dmg)
 
-Universal binary (Apple Silicon + Intel). `last-version.dmg` is always the current build; the versioned file is the same build with the version in the name.
+Universal binary (Apple Silicon + Intel).
 
 ## Install
 
-1. Open `last-version.dmg`.
+1. Open `Skarb-Wallet-0.1.2.dmg`.
 2. Drag **Skarb Wallet** into `/Applications`.
 3. First launch: right-click → **Open**. Confirm Open in the dialog.
 
