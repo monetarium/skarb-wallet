@@ -150,10 +150,19 @@ hdiutil create -volname "${EXEC_NAME}" \
     "${DMG_FILE}" > /dev/null
 rm -rf "${TMP_DMG_DIR}"
 
+# Stable download name used by README ("Last version"). Overwrite on every
+# release so the same URL always serves the current build. Also keep a
+# versioned copy next to it.
+RELEASE_DIR="releases/macos"
+mkdir -p "${RELEASE_DIR}"
+cp "${DMG_FILE}" "${RELEASE_DIR}/last-version.dmg"
+cp "${DMG_FILE}" "${RELEASE_DIR}/Skarb-Wallet-${VERSION}.dmg"
+
 echo
 echo "✅ Done."
 echo "   .app bundle: $(pwd)/${APP_DIR}"
 echo "   .dmg image:  $(pwd)/${DMG_FILE}  ← send THIS to people"
+echo "   download:    $(pwd)/${RELEASE_DIR}/last-version.dmg"
 echo
 echo "Recipient: open the DMG, drag \"${DISPLAY_NAME}.app\" to /Applications,"
 echo "then right-click → Open the first time. If macOS says 'damaged',"
