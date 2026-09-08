@@ -23,6 +23,23 @@ xattr -cr "/Applications/Skarb Wallet.app"
 
 More detail: [releases/macos](releases/macos/README.md).
 
+**Install on Linux**
+
+1. Download [Skarb Wallet 0.1.2](releases/linux/Skarb-Wallet-0.1.2-linux-amd64.tar.gz) and unpack it.
+2. Copy the binary, launcher, and icon:
+
+```bash
+cd Skarb-Wallet-0.1.2-linux-amd64
+mkdir -p ~/.local/bin ~/.local/share/applications ~/.local/share/icons/hicolor/256x256/apps
+cp skarb ~/.local/bin/
+cp skarb.desktop ~/.local/share/applications/
+cp icons/256x256/skarb.png ~/.local/share/icons/hicolor/256x256/apps/
+```
+
+3. Put `~/.local/bin` on `PATH`, then run `skarb` or launch **Skarb Wallet** from the app menu.
+
+More detail: [releases/linux](releases/linux/README.md).
+
 **Features**
 
 - VAR and SKA on Monetarium (SPV)
@@ -47,7 +64,13 @@ macOS `.app` + `.dmg`:
 ./build-macos-app.sh
 ```
 
-Linux: [releases/linux](releases/linux/README.md). Windows: `build-windows.sh` (packaged download coming soon).
+Linux `.tar.gz`:
+
+```bash
+./build-linux.sh
+```
+
+Windows: `build-windows.sh` (packaged download coming soon).
 
 Android / iOS: see [how-to-build-mobile.md](how-to-build-mobile.md). Store listings are coming soon.
 
