@@ -8,7 +8,7 @@ Desktop wallet for the [Monetarium](https://github.com/monetarium) network. Buil
 * App Store: coming soon
 * Google Play: coming soon
 * APK: coming soon
-* Linux: coming soon
+* Linux: [Skarb Wallet 0.1.2](releases/linux/Skarb-Wallet-0.1.2-linux-amd64.tar.gz)
 * Windows: coming soon
 
 **Install on macOS**
@@ -47,7 +47,7 @@ macOS `.app` + `.dmg`:
 ./build-macos-app.sh
 ```
 
-Linux and Windows build scripts (`build-linux.sh`, `build-windows.sh`) are in the repo. Packaged downloads for those platforms are coming soon.
+Linux: [releases/linux](releases/linux/README.md). Windows: `build-windows.sh` (packaged download coming soon).
 
 Android / iOS: see [how-to-build-mobile.md](how-to-build-mobile.md). Store listings are coming soon.
 
