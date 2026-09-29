@@ -90,9 +90,9 @@ type Editor struct {
 	selected        bool
 	showHintOnFocus bool
 
-	// undoStack snapshots text before each change so a non-Latin
-	// Cmd/Ctrl+Z can undo. widget.Editor's own history is unexported
-	// and only runs for Latin shortcut names.
+	// undoStack snapshots text before each change so Cmd/Ctrl+Z works on
+	// any keyboard layout. widget.Editor's own history is unexported and
+	// only matches Latin key names.
 	undoStack       []editorSnapshot
 	redoStack       []editorSnapshot
 	applyingHistory bool

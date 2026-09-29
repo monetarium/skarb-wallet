@@ -46,8 +46,9 @@ type SeedRestore struct {
 	// the ParentNavigator is the MainPage.
 	*app.GenericPageModal
 	isRestoring bool
-	// pasteSuppress skips the editor change events caused by fillSeedFromPaste.
-	pasteSuppress   int
+	// pastedWords maps an editor index to the word fillSeedFromPaste wrote
+	// there, so the change event that SetText causes is skipped once.
+	pastedWords     map[int]string
 	restoreComplete func(newWallet sharedW.Asset)
 
 	seedList        *layout.List
@@ -291,13 +292,13 @@ func (pg *SeedRestore) onSuggestionSeedsClicked(gtx C) {
 	}
 }
 
-// pastedSeedWords splits a clipboard seed on whitespace. A single word
-// is not a phrase paste.
+// pastedSeedWords splits a clipboard seed on whitespace. Numbering such
+// as "1." or "2)abandon" is dropped: seed words never contain digits.
 func pastedSeedWords(text string) []string {
 	fields := strings.Fields(strings.TrimSpace(text))
 	words := make([]string, 0, len(fields))
 	for _, field := range fields {
-		word := libutils.TrimNonAphaNumeric(strings.TrimSpace(field))
+		word := strings.TrimLeft(libutils.TrimNonAphaNumeric(field), "0123456789")
 		if word == "" {
 			continue
 		}
@@ -314,10 +315,13 @@ func (pg *SeedRestore) fillSeedFromPaste(words []string) {
 	if n < 1 {
 		return
 	}
+	if len(words) != n {
+		log.Debugf("seed restore: pasted %d words, seed type expects %d", len(words), n)
+	}
 	if len(words) > n {
-		log.Debugf("seed restore: pasted %d words, keeping %d", len(words), n)
 		words = words[:n]
 	}
+	pg.pastedWords = make(map[int]string, n)
 	for i := 0; i < n; i++ {
 		word := ""
 		if i < len(words) {
@@ -328,7 +332,7 @@ func (pg *SeedRestore) fillSeedFromPaste(words []string) {
 			continue
 		}
 		editor.SetText(word)
-		pg.pasteSuppress++
+		pg.pastedWords[i] = word
 	}
 	pg.openPopupIndex = -1
 	pg.seedEditors.focusIndex = -1
@@ -337,9 +341,11 @@ func (pg *SeedRestore) fillSeedFromPaste(words []string) {
 
 func (pg *SeedRestore) editorSeedsEventsHandler(gtx C) {
 	seedEvent := func(i int, text string) {
-		if pg.pasteSuppress > 0 {
-			pg.pasteSuppress--
-			return
+		if want, ok := pg.pastedWords[i]; ok {
+			delete(pg.pastedWords, i)
+			if text == want {
+				return
+			}
 		}
 		if pg.seedClicked {
 			pg.seedEditors.focusIndex = -1
@@ -534,6 +540,7 @@ func (pg *SeedRestore) verifySeeds() bool {
 
 func (pg *SeedRestore) resetSeeds() {
 	pg.seedEditors.focusIndex = -1
+	pg.pastedWords = nil
 	for i := 0; i < len(pg.seedEditors.editors); i++ {
 		pg.seedEditors.editors[i].Edit.Editor.SetText("")
 	}

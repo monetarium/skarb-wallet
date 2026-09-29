@@ -239,7 +239,6 @@ func (pg *SettingsPage) generalSection() layout.Widget {
 					}),
 				}
 				for _, ct := range pg.coinFilterTypes {
-					ct := ct
 					children = append(children, layout.Rigid(func(gtx C) D {
 						return layout.Inset{Left: values.MarginPadding16}.Layout(gtx, pg.subSectionSwitch(dcr.CoinSymbol(ct), pg.coinSwitches[ct]))
 					}))

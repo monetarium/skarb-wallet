@@ -19,9 +19,9 @@ func latinShortcut(name string) (string, bool) {
 	return latin, ok
 }
 
-// historyShortcutFilter matches Latin Cmd/Ctrl+Z. widget.Editor handles
-// that itself and emits ChangeEvent; recording that event on our stack
-// makes the next non-Latin undo restore the pre-undo text.
+// historyShortcutFilter matches Latin Cmd/Ctrl+Z (Shift = redo). It is
+// read before widget.Editor.Update, so Latin and non-Latin undo share
+// Editor.undoStack and widget.Editor's own history is never used.
 func historyShortcutFilter(tag any) key.Filter {
 	return key.Filter{
 		Focus:    tag,
