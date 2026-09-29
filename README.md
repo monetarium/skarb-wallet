@@ -4,11 +4,11 @@ Desktop wallet for the [Monetarium](https://github.com/monetarium) network. Buil
 
 **Downloads**
 
-* macOS: [Skarb Wallet 0.1.2](releases/macos/Skarb-Wallet-0.1.2.dmg)
+* macOS: [Skarb Wallet 0.1.2](https://github.com/monetarium/skarb-wallet/releases/download/v0.1.2/Skarb-Wallet-0.1.2.dmg)
 * App Store: coming soon
 * Google Play: coming soon
 * APK: coming soon
-* Linux: [Skarb Wallet 0.1.2](releases/linux/Skarb-Wallet-0.1.2-linux-amd64.tar.gz)
+* Linux: [Skarb Wallet 0.1.2](https://github.com/monetarium/skarb-wallet/releases/download/v0.1.2/Skarb-Wallet-0.1.2-linux-amd64.tar.gz)
 * Windows: coming soon
 
 **Install on macOS**
@@ -21,11 +21,11 @@ Desktop wallet for the [Monetarium](https://github.com/monetarium) network. Buil
 xattr -cr "/Applications/Skarb Wallet.app"
 ```
 
-More detail: [releases/macos](releases/macos/README.md).
+More detail: [releases/macos](releases/macos/README.md). All builds: [GitHub Releases](https://github.com/monetarium/skarb-wallet/releases).
 
 **Install on Linux**
 
-1. Download [Skarb Wallet 0.1.2](releases/linux/Skarb-Wallet-0.1.2-linux-amd64.tar.gz) and unpack it.
+1. Download [Skarb Wallet 0.1.2](https://github.com/monetarium/skarb-wallet/releases/download/v0.1.2/Skarb-Wallet-0.1.2-linux-amd64.tar.gz) and unpack it.
 2. Copy the binary, launcher, and icon:
 
 ```bash

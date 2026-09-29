@@ -45,7 +45,10 @@ type SeedRestore struct {
 	// WindowNavigator if this page is displayed from the StartPage, otherwise
 	// the ParentNavigator is the MainPage.
 	*app.GenericPageModal
-	isRestoring     bool
+	isRestoring bool
+	// pastedWords maps an editor index to the word fillSeedFromPaste wrote
+	// there, so the change event that SetText causes is skipped once.
+	pastedWords     map[int]string
 	restoreComplete func(newWallet sharedW.Asset)
 
 	seedList        *layout.List
@@ -289,13 +292,78 @@ func (pg *SeedRestore) onSuggestionSeedsClicked(gtx C) {
 	}
 }
 
+// pastedSeedWords splits a clipboard seed on whitespace. Numbering such
+// as "1." or "2)abandon" is dropped: seed words never contain digits.
+func pastedSeedWords(text string) []string {
+	fields := strings.Fields(strings.TrimSpace(text))
+	words := make([]string, 0, len(fields))
+	for _, field := range fields {
+		word := strings.TrimLeft(libutils.TrimNonAphaNumeric(field), "0123456789")
+		if word == "" {
+			continue
+		}
+		words = append(words, word)
+	}
+	return words
+}
+
+func (pg *SeedRestore) fillSeedFromPaste(words []string) {
+	n := pg.getWordSeedType().ToInt()
+	if n > len(pg.seedEditors.editors) {
+		n = len(pg.seedEditors.editors)
+	}
+	if n < 1 {
+		return
+	}
+	if len(words) != n {
+		log.Debugf("seed restore: pasted %d words, seed type expects %d", len(words), n)
+	}
+	if len(words) > n {
+		words = words[:n]
+	}
+	pg.pastedWords = make(map[int]string, n)
+	for i := 0; i < n; i++ {
+		word := ""
+		if i < len(words) {
+			word = words[i]
+		}
+		editor := pg.seedEditors.editors[i].Edit.Editor
+		if editor.Text() == word {
+			continue
+		}
+		editor.SetText(word)
+		pg.pastedWords[i] = word
+	}
+	pg.openPopupIndex = -1
+	pg.seedEditors.focusIndex = -1
+	pg.isLastEditor = false
+}
+
 func (pg *SeedRestore) editorSeedsEventsHandler(gtx C) {
 	seedEvent := func(i int, text string) {
+		if want, ok := pg.pastedWords[i]; ok {
+			delete(pg.pastedWords, i)
+			if text == want {
+				return
+			}
+		}
 		if pg.seedClicked {
 			pg.seedEditors.focusIndex = -1
 			pg.seedClicked = false
 		} else {
 			pg.seedEditors.focusIndex = i
+		}
+
+		// A full phrase pasted into the first word field is split on
+		// whitespace and written across the fields. Other fields stay
+		// single-word: spaces are stripped below.
+		if i == 0 {
+			words := pastedSeedWords(text)
+			if len(words) > 1 {
+				log.Debugf("seed restore: pasted %d words into the first field", len(words))
+				pg.fillSeedFromPaste(words)
+				return
+			}
 		}
 
 		// Remove all unsupported characters.
@@ -472,6 +540,7 @@ func (pg *SeedRestore) verifySeeds() bool {
 
 func (pg *SeedRestore) resetSeeds() {
 	pg.seedEditors.focusIndex = -1
+	pg.pastedWords = nil
 	for i := 0; i < len(pg.seedEditors.editors); i++ {
 		pg.seedEditors.editors[i].Edit.Editor.SetText("")
 	}

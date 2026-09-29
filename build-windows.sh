@@ -28,6 +28,8 @@ echo "→ Cleaning ${OUT_DIR}"
 rm -rf "${OUT_DIR}"
 mkdir -p "${OUT_DIR}"
 
+# rsrc_windows_*.syso in this directory is linked into the exe and
+# supplies icon resource ID 1, which Gio shows in the title bar and taskbar.
 echo "→ Building Go binary"
 # CGO is required by Gio. On Linux cross-build set CC explicitly.
 if [ "$(uname -s)" = "Linux" ]; then

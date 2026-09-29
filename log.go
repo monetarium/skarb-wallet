@@ -18,6 +18,7 @@ import (
 	libutils "github.com/monetarium/skarb-wallet/libwallet/utils"
 	"github.com/monetarium/skarb-wallet/logger"
 	"github.com/monetarium/skarb-wallet/ui"
+	"github.com/monetarium/skarb-wallet/ui/cryptomaterial"
 	"github.com/monetarium/skarb-wallet/ui/load"
 	"github.com/monetarium/skarb-wallet/ui/modal"
 	"github.com/monetarium/skarb-wallet/ui/page"
@@ -60,12 +61,12 @@ var (
 
 	logRotators map[string]*rotator.Rotator
 
-	log          = backendLog.Logger("SKRB")
-	sharedWLog   = backendLog.Logger("SHWL")
-	winLog       = backendLog.Logger("UI")
-	dlwlLog      = backendLog.Logger("DLWL")
-	amgrLog      = backendLog.Logger("AMGR")
-	cmgrLog      = backendLog.Logger("CMGR")
+	log        = backendLog.Logger("SKRB")
+	sharedWLog = backendLog.Logger("SHWL")
+	winLog     = backendLog.Logger("UI")
+	dlwlLog    = backendLog.Logger("DLWL")
+	amgrLog    = backendLog.Logger("AMGR")
+	cmgrLog    = backendLog.Logger("CMGR")
 	// MON / MON-S replace the Decred-era DCR / DCR-S subsystem tags so
 	// Wallet log viewers read as Monetarium, not Decred.
 	monLog       = monBackendLog.Logger("MON")
@@ -79,6 +80,7 @@ func init() {
 	sharedW.UseLogger(sharedWLog)
 	page.UseLogger(winLog)
 	ui.UseLogger(winLog)
+	cryptomaterial.UseLogger(winLog)
 	send.UseLogger(winLog)
 	root.UseLogger(winLog)
 	libwallet.UseLogger(dlwlLog)

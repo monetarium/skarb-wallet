@@ -830,7 +830,7 @@ func (pg *TxDetailsPage) txnTypeAndID(gtx C) D {
 							// copy destination Address
 							if clickable.Clicked(gtx) {
 								gtx.Execute(clipboard.WriteCmd{Data: io.NopCloser(strings.NewReader(address))})
-								pg.Toast.Notify(values.String(values.StrTxHashCopied))
+								pg.Toast.Notify(values.String(values.StrAddressCopied))
 							}
 							lbl := pg.Theme.Label(values.TextSize14, pageutils.SplitSingleString(address, 0))
 							lbl.Color = pg.Theme.Color.Primary
@@ -1201,7 +1201,7 @@ func (pg *TxDetailsPage) txnIORow(gtx C, amount int64, amountAtoms string, acctN
 						// copy address
 						if pg.txnWidgets.copyTextButtons[i].Clicked(gtx) {
 							gtx.Execute(clipboard.WriteCmd{Data: io.NopCloser(strings.NewReader(address))})
-							pg.Toast.Notify(values.String(values.StrCopied))
+							pg.Toast.Notify(values.String(values.StrAddressCopied))
 						}
 
 						return layout.W.Layout(gtx, func(gtx C) D {
@@ -1569,7 +1569,7 @@ func layoutSenderAddressList(gtx C, pg *TxDetailsPage) D {
 	clickable := pg.senderAddressClickables[0]
 	if clickable.Clicked(gtx) {
 		gtx.Execute(clipboard.WriteCmd{Data: io.NopCloser(strings.NewReader(address))})
-		pg.Toast.Notify(values.String(values.StrTxHashCopied))
+		pg.Toast.Notify(values.String(values.StrAddressCopied))
 	}
 	lbl := pg.Theme.Label(values.TextSize14, ellipsizeMiddle(address, 24))
 	lbl.Color = pg.Theme.Color.Primary

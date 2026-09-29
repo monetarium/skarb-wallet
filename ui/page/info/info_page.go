@@ -736,28 +736,72 @@ func (pg *WalletInfo) loadStakes() {
 	pg.ParentWindow().Reload()
 }
 
-func (pg *WalletInfo) loadGovernanceAgendas() {
-	dcrW, ok := pg.wallet.(*dcr.Asset)
-	if !ok {
-		return
+// syncedAgendaSource is any synced DCR wallet. Agenda status is a network
+// fact (vote window + chain), so a newly created wallet and a restored one
+// show the same Info section as soon as one wallet in the app is synced.
+func (pg *WalletInfo) syncedAgendaSource() *dcr.Asset {
+	if pg.AssetsManager == nil {
+		return nil
 	}
-	all, err := dcrW.AllVoteAgendas(true)
-	if err != nil {
-		log.Errorf("InfoPage.loadGovernanceAgendas: %v", err)
-		return
-	}
-	open := make([]*dcr.Agenda, 0, len(all))
-	for _, a := range all {
-		if a == nil {
-			continue
+	for _, w := range pg.AssetsManager.AllWallets() {
+		a, ok := w.(*dcr.Asset)
+		if ok && a.IsSynced() {
+			return a
 		}
-		if a.Status == dcr.AgendaStatusDefined || a.Status == dcr.AgendaStatusStarted {
+	}
+	return nil
+}
+
+func agendasSame(a, b []*dcr.Agenda) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] == nil || b[i] == nil || a[i].AgendaID != b[i].AgendaID || a[i].Status != b[i].Status {
+			return false
+		}
+	}
+	return true
+}
+
+func (pg *WalletInfo) loadGovernanceAgendas() {
+	source := pg.syncedAgendaSource()
+	var open []*dcr.Agenda
+	var total int
+	if source != nil {
+		all, err := source.AllVoteAgendas(true)
+		if err != nil {
+			log.Errorf("InfoPage.loadGovernanceAgendas: %v", err)
+			return
+		}
+		total = len(all)
+		open = make([]*dcr.Agenda, 0, len(all))
+		for _, a := range all {
+			if a == nil || !dcr.AgendaShownOnInfo(a.Status) {
+				continue
+			}
 			open = append(open, a)
 		}
 	}
 	pg.agendaMu.Lock()
-	pg.infoAgendas = open
+	same := agendasSame(pg.infoAgendas, open)
+	if !same {
+		pg.infoAgendas = open
+	}
 	pg.agendaMu.Unlock()
+	if !same {
+		if source == nil {
+			log.Debugf("InfoPage governance hidden: no synced wallet")
+		} else {
+			log.Debugf("InfoPage governance: synced wallet %d, showing %d/%d agendas", source.GetWalletID(), len(open), total)
+		}
+	}
+	if same {
+		return
+	}
+	if win := pg.ParentWindow(); win != nil {
+		win.Reload()
+	}
 }
 
 func (pg *WalletInfo) loadRewards() {
@@ -824,6 +868,9 @@ func (pg *WalletInfo) startBlockAgeTicker() {
 				log.Infof("InfoPage: block-age ticker stopped")
 				return
 			case <-t.C:
+				// Agenda status follows sync, the vote window and blocks on
+				// any wallet, so it is re-read on every tick.
+				pg.loadGovernanceAgendas()
 				// Refresh the cached "X ago" string BEFORE Reload() —
 				// Layout will then read the freshly stored value. Without
 				// this the cache stays at the value computed on
