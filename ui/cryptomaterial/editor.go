@@ -10,6 +10,7 @@ import (
 
 	"gioui.org/gesture"
 	"gioui.org/io/clipboard"
+	"gioui.org/io/event"
 	"gioui.org/io/key"
 	"gioui.org/io/pointer"
 	"gioui.org/layout"
@@ -88,6 +89,21 @@ type Editor struct {
 	changed         bool
 	selected        bool
 	showHintOnFocus bool
+
+	// undoStack snapshots text before each change so a non-Latin
+	// Cmd/Ctrl+Z can undo. widget.Editor's own history is unexported
+	// and only runs for Latin shortcut names.
+	undoStack       []editorSnapshot
+	redoStack       []editorSnapshot
+	applyingHistory bool
+}
+
+const editorHistoryLimit = 64
+
+type editorSnapshot struct {
+	text     string
+	selStart int
+	selEnd   int
 }
 
 func (t *Theme) EditorPassword(editor *widget.Editor, hint string) Editor {
@@ -267,7 +283,11 @@ func (e *Editor) update(gtx C) {
 	}
 
 	e.focused = gtx.Source.Focused(e.Editor)
+	e.handleRightClick(gtx)
+	e.handleHistoryShortcut(gtx)
+	e.handleNonLatinShortcuts(gtx)
 
+	before := e.snapshot()
 	for {
 		ev, ok := e.Editor.Update(gtx)
 		if !ok {
@@ -277,12 +297,148 @@ func (e *Editor) update(gtx C) {
 		switch ev.(type) {
 		case widget.ChangeEvent:
 			e.changed = true
+			e.pushHistory(before)
+			before = e.snapshot()
 		case widget.SubmitEvent:
 			e.submitted = true
 		case widget.SelectEvent:
 			e.selected = true
 		}
 	}
+}
+
+func (e *Editor) handleRightClick(gtx C) {
+	for {
+		ev, ok := gtx.Source.Event(pointer.Filter{
+			Target: e,
+			Kinds:  pointer.Press,
+		})
+		if !ok {
+			break
+		}
+		pe, ok := ev.(pointer.Event)
+		if !ok || !pe.Buttons.Contain(pointer.ButtonSecondary) {
+			continue
+		}
+		if e.isDisableMenu || e.Editor.ReadOnly {
+			continue
+		}
+		e.isShowMenu = true
+		gtx.Execute(key.FocusCmd{Tag: e.Editor})
+		log.Debugf("editor: right-click paste menu")
+	}
+}
+
+func (e *Editor) handleHistoryShortcut(gtx C) {
+	for {
+		ev, ok := gtx.Source.Event(historyShortcutFilter(e.Editor))
+		if !ok {
+			break
+		}
+		ke, ok := ev.(key.Event)
+		if !ok || ke.State != key.Press {
+			continue
+		}
+		log.Debugf("editor: latin undo shortcut")
+		e.runLatinShortcut(gtx, "Z", ke.Modifiers.Contain(key.ModShift))
+	}
+}
+
+func (e *Editor) handleNonLatinShortcuts(gtx C) {
+	for _, filter := range nonLatinShortcutFilters(e.Editor) {
+		for {
+			ev, ok := gtx.Source.Event(filter)
+			if !ok {
+				break
+			}
+			ke, ok := ev.(key.Event)
+			if !ok || ke.State != key.Press {
+				continue
+			}
+			latin, ok := latinShortcut(string(ke.Name))
+			if !ok {
+				continue
+			}
+			log.Debugf("editor: non-latin shortcut %s -> %s", ke.Name, latin)
+			e.runLatinShortcut(gtx, latin, ke.Modifiers.Contain(key.ModShift))
+		}
+	}
+}
+
+func (e *Editor) runLatinShortcut(gtx C, latin string, shifted bool) {
+	switch latin {
+	case "V":
+		if !e.Editor.ReadOnly {
+			gtx.Execute(clipboard.ReadCmd{Tag: e.Editor})
+		}
+	case "C":
+		if text := e.Editor.SelectedText(); text != "" {
+			gtx.Execute(clipboard.WriteCmd{Data: io.NopCloser(strings.NewReader(text))})
+		}
+	case "X":
+		text := e.Editor.SelectedText()
+		if text == "" || e.Editor.ReadOnly {
+			return
+		}
+		before := e.snapshot()
+		gtx.Execute(clipboard.WriteCmd{Data: io.NopCloser(strings.NewReader(text))})
+		e.Editor.Delete(1)
+		e.pushHistory(before)
+	case "A":
+		e.Editor.SetCaret(0, e.Editor.Len())
+	case "Z":
+		if e.Editor.ReadOnly {
+			return
+		}
+		if shifted {
+			e.redo()
+		} else {
+			e.undo()
+		}
+	}
+}
+
+func (e *Editor) snapshot() editorSnapshot {
+	start, end := e.Editor.Selection()
+	return editorSnapshot{text: e.Editor.Text(), selStart: start, selEnd: end}
+}
+
+func (e *Editor) pushHistory(before editorSnapshot) {
+	if e.applyingHistory || before.text == e.Editor.Text() {
+		return
+	}
+	e.undoStack = append(e.undoStack, before)
+	if len(e.undoStack) > editorHistoryLimit {
+		e.undoStack = e.undoStack[len(e.undoStack)-editorHistoryLimit:]
+	}
+	e.redoStack = nil
+}
+
+func (e *Editor) undo() {
+	if len(e.undoStack) == 0 {
+		return
+	}
+	e.redoStack = append(e.redoStack, e.snapshot())
+	snap := e.undoStack[len(e.undoStack)-1]
+	e.undoStack = e.undoStack[:len(e.undoStack)-1]
+	e.restore(snap)
+}
+
+func (e *Editor) redo() {
+	if len(e.redoStack) == 0 {
+		return
+	}
+	e.undoStack = append(e.undoStack, e.snapshot())
+	snap := e.redoStack[len(e.redoStack)-1]
+	e.redoStack = e.redoStack[:len(e.redoStack)-1]
+	e.restore(snap)
+}
+
+func (e *Editor) restore(snap editorSnapshot) {
+	e.applyingHistory = true
+	e.Editor.SetText(snap.text)
+	e.Editor.SetCaret(snap.selStart, snap.selEnd)
+	e.applyingHistory = false
 }
 
 func (e *Editor) layout(gtx C) D {
@@ -366,6 +522,7 @@ func (e *Editor) layout(gtx C) D {
 								Max: gtx.Constraints.Min,
 							}).Push(gtx.Ops).Pop()
 							e.click.Add(gtx.Ops)
+							event.Op(gtx.Ops, e)
 							return D{}
 						}),
 						layout.Stacked(overLay),

@@ -67,6 +67,13 @@ const (
 	AgendaStatusFailed AgendaStatusType = "failed"
 )
 
+// AgendaShownOnInfo is the Info-page Governance preview filter: only agendas
+// whose vote is still ahead (defined) or open (started). Locked-in, active
+// and failed stay on the Consensus Changes page.
+func AgendaShownOnInfo(status AgendaStatusType) bool {
+	return status == AgendaStatusDefined || status == AgendaStatusStarted
+}
+
 // Agenda is one consensus deployment presented for the governance UI.
 type Agenda struct {
 	AgendaID    string

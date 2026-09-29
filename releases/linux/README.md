@@ -1,6 +1,6 @@
 # Skarb Wallet for Linux
 
-Download: [Skarb Wallet 0.1.2](Skarb-Wallet-0.1.2-linux-amd64.tar.gz)
+Download: [Skarb Wallet 0.1.2](https://github.com/monetarium/skarb-wallet/releases/download/v0.1.2/Skarb-Wallet-0.1.2-linux-amd64.tar.gz)
 
 amd64 binary for Ubuntu 22.04+ / Debian 12+ (X11 or Wayland).
 

@@ -20,6 +20,7 @@ import (
 
 	"github.com/monetarium/skarb-wallet/app"
 	"github.com/monetarium/skarb-wallet/libwallet/assets/dcr"
+	sharedW "github.com/monetarium/skarb-wallet/libwallet/assets/wallet"
 	"github.com/monetarium/skarb-wallet/ui/cryptomaterial"
 	"github.com/monetarium/skarb-wallet/ui/load"
 	"github.com/monetarium/skarb-wallet/ui/modal"
@@ -27,7 +28,11 @@ import (
 	"github.com/monetarium/skarb-wallet/ui/values"
 )
 
-const GovernancePageID = "Governance"
+const (
+	GovernancePageID         = "Governance"
+	governanceAgendaListener = GovernancePageID + "-agendas"
+	governanceSyncListener   = GovernancePageID + "-sync"
+)
 
 type (
 	C = layout.Context
@@ -61,6 +66,10 @@ type Page struct {
 	// SS3: never mutate Layout-read state off the UI thread).
 	resultMu      sync.Mutex
 	pendingResult *voteResult
+
+	// agendaDirty is set from block/sync callbacks. HandleUserInteractions
+	// applies it on the UI thread so dropdowns are not rebuilt off-thread.
+	agendaDirty atomic.Bool
 
 	// Header actions: refreshBtn re-reads the agenda list and saved
 	// preferences in place; dashboardBtn offers the block explorer's live
@@ -145,11 +154,72 @@ func (pg *Page) loadAgendas() {
 	}
 }
 
-func (pg *Page) OnNavigatedTo() {
-	pg.loadAgendas()
+// applyAgendaRefresh updates statuses in place. Rebuilding the choice
+// dropdowns on every block would drop a selection the user has not saved.
+func (pg *Page) applyAgendaRefresh() {
+	fresh, err := pg.dcrWallet.AllVoteAgendas(true)
+	if err != nil {
+		log.Errorf("governance: AllVoteAgendas: %v", err)
+		return
+	}
+	if len(fresh) != len(pg.agendas) {
+		pg.loadAgendas()
+		return
+	}
+	for i := range fresh {
+		if fresh[i] == nil || pg.agendas[i] == nil || fresh[i].AgendaID != pg.agendas[i].AgendaID {
+			pg.loadAgendas()
+			return
+		}
+		if pg.agendas[i].Status != fresh[i].Status {
+			log.Debugf("governance: %s status %s -> %s", fresh[i].AgendaID, pg.agendas[i].Status, fresh[i].Status)
+			pg.agendas[i].Status = fresh[i].Status
+		}
+	}
 }
 
-func (pg *Page) OnNavigatedFrom() {}
+func (pg *Page) OnNavigatedTo() {
+	pg.loadAgendas()
+	pg.listenForAgendaUpdates()
+}
+
+func (pg *Page) OnNavigatedFrom() {
+	pg.stopAgendaUpdates()
+}
+
+func (pg *Page) listenForAgendaUpdates() {
+	pg.stopAgendaUpdates()
+	err := pg.dcrWallet.AddTxAndBlockNotificationListener(&sharedW.TxAndBlockNotificationListener{
+		OnBlockAttached: func(walletID int, height int32) {
+			log.Debugf("governance: refresh on block %d wallet %d", height, walletID)
+			pg.markAgendasDirty()
+		},
+	}, governanceAgendaListener)
+	if err != nil {
+		log.Errorf("governance agenda listener: %v", err)
+	}
+	err = pg.dcrWallet.AddSyncProgressListener(&sharedW.SyncProgressListener{
+		OnSyncCompleted: func() {
+			log.Debugf("governance: refresh on sync completed")
+			pg.markAgendasDirty()
+		},
+	}, governanceSyncListener)
+	if err != nil {
+		log.Errorf("governance sync listener: %v", err)
+	}
+}
+
+func (pg *Page) stopAgendaUpdates() {
+	pg.dcrWallet.RemoveTxAndBlockNotificationListener(governanceAgendaListener)
+	pg.dcrWallet.RemoveSyncProgressListener(governanceSyncListener)
+}
+
+func (pg *Page) markAgendasDirty() {
+	pg.agendaDirty.Store(true)
+	if win := pg.ParentWindow(); win != nil {
+		win.Reload()
+	}
+}
 
 func (pg *Page) HandleUserInteractions(gtx C) {
 	// Drain a completed vote-choice write first — before reading
@@ -160,6 +230,9 @@ func (pg *Page) HandleUserInteractions(gtx C) {
 	result := pg.pendingResult
 	pg.pendingResult = nil
 	pg.resultMu.Unlock()
+	if pg.agendaDirty.CompareAndSwap(true, false) {
+		pg.applyAgendaRefresh()
+	}
 	if result != nil {
 		switch {
 		case errors.Is(result.err, dcr.ErrVSPUnlockRequired):

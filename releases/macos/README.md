@@ -1,6 +1,6 @@
 # Skarb Wallet for macOS
 
-Download: [Skarb Wallet 0.1.2](Skarb-Wallet-0.1.2.dmg)
+Download: [Skarb Wallet 0.1.2](https://github.com/monetarium/skarb-wallet/releases/download/v0.1.2/Skarb-Wallet-0.1.2.dmg)
 
 Universal binary (Apple Silicon + Intel).
 

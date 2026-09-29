@@ -2,6 +2,7 @@ package info
 
 import (
 	"context"
+	"fmt"
 	"image/color"
 	"strings"
 	"sync"
@@ -28,6 +29,7 @@ import (
 const (
 	InfoID                = "Info"
 	infoTxIndexListenerID = InfoID + "-txindex"
+	infoAgendaListenerID  = InfoID + "-agendas"
 )
 
 type (
@@ -174,6 +176,7 @@ func (pg *WalletInfo) OnNavigatedTo() {
 	pg.startBlockAgeTicker()
 
 	go pg.loadTxSections()
+	pg.listenForAgendaUpdates()
 
 	if pg.wallet.GetAssetType() == libutils.DCRWalletAsset {
 		if pg.wallet.(*dcr.Asset).IsAccountMixerActive() {
@@ -736,28 +739,112 @@ func (pg *WalletInfo) loadStakes() {
 	pg.ParentWindow().Reload()
 }
 
-func (pg *WalletInfo) loadGovernanceAgendas() {
-	dcrW, ok := pg.wallet.(*dcr.Asset)
-	if !ok {
+// syncedAgendaSource is any synced DCR wallet. Agenda status is a network
+// fact (vote window + chain), so a newly created wallet and a restored one
+// show the same Info section as soon as one wallet in the app is synced.
+func (pg *WalletInfo) syncedAgendaSource() *dcr.Asset {
+	if pg.AssetsManager == nil {
+		return nil
+	}
+	for _, w := range pg.AssetsManager.AllWallets() {
+		a, ok := w.(*dcr.Asset)
+		if ok && a.IsSynced() {
+			return a
+		}
+	}
+	return nil
+}
+
+func (pg *WalletInfo) agendaListenerID(walletID int) string {
+	return fmt.Sprintf("%s-%d", infoAgendaListenerID, walletID)
+}
+
+func (pg *WalletInfo) listenForAgendaUpdates() {
+	pg.stopAgendaListeners()
+	if pg.AssetsManager == nil {
 		return
 	}
-	all, err := dcrW.AllVoteAgendas(true)
-	if err != nil {
-		log.Errorf("InfoPage.loadGovernanceAgendas: %v", err)
-		return
-	}
-	open := make([]*dcr.Agenda, 0, len(all))
-	for _, a := range all {
-		if a == nil {
+	for _, w := range pg.AssetsManager.AllWallets() {
+		a, ok := w.(*dcr.Asset)
+		if !ok {
 			continue
 		}
-		if a.Status == dcr.AgendaStatusDefined || a.Status == dcr.AgendaStatusStarted {
+		id := pg.agendaListenerID(a.GetWalletID())
+		err := a.AddTxAndBlockNotificationListener(&sharedW.TxAndBlockNotificationListener{
+			OnBlockAttached: func(walletID int, height int32) {
+				log.Debugf("InfoPage governance refresh on block %d wallet %d", height, walletID)
+				pg.loadGovernanceAgendas()
+			},
+		}, id)
+		if err != nil {
+			log.Errorf("InfoPage agenda listener %s: %v", id, err)
+		}
+	}
+}
+
+func (pg *WalletInfo) stopAgendaListeners() {
+	if pg.AssetsManager == nil {
+		return
+	}
+	for _, w := range pg.AssetsManager.AllWallets() {
+		a, ok := w.(*dcr.Asset)
+		if !ok {
+			continue
+		}
+		a.RemoveTxAndBlockNotificationListener(pg.agendaListenerID(a.GetWalletID()))
+	}
+}
+
+func agendasSame(a, b []*dcr.Agenda) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] == nil || b[i] == nil || a[i].AgendaID != b[i].AgendaID || a[i].Status != b[i].Status {
+			return false
+		}
+	}
+	return true
+}
+
+func (pg *WalletInfo) loadGovernanceAgendas() {
+	source := pg.syncedAgendaSource()
+	var open []*dcr.Agenda
+	var total int
+	if source != nil {
+		all, err := source.AllVoteAgendas(true)
+		if err != nil {
+			log.Errorf("InfoPage.loadGovernanceAgendas: %v", err)
+			return
+		}
+		total = len(all)
+		open = make([]*dcr.Agenda, 0, len(all))
+		for _, a := range all {
+			if a == nil || !dcr.AgendaShownOnInfo(a.Status) {
+				continue
+			}
 			open = append(open, a)
 		}
 	}
 	pg.agendaMu.Lock()
-	pg.infoAgendas = open
+	same := agendasSame(pg.infoAgendas, open)
+	if !same {
+		pg.infoAgendas = open
+	}
 	pg.agendaMu.Unlock()
+	if !same {
+		if source == nil {
+			log.Debugf("InfoPage governance hidden: no synced wallet")
+		} else {
+			log.Debugf("InfoPage governance: synced wallet %d, showing %d/%d agendas", source.GetWalletID(), len(open), total)
+		}
+	}
+	if same {
+		return
+	}
+	if win := pg.ParentWindow(); win != nil {
+		win.Reload()
+	}
 }
 
 func (pg *WalletInfo) loadRewards() {
@@ -789,6 +876,7 @@ func (pg *WalletInfo) OnNavigatedFrom() {
 		pg.indexRetryCancel = nil
 	}
 	pg.wallet.RemoveSyncProgressListener(infoTxIndexListenerID)
+	pg.stopAgendaListeners()
 	if pg.wallet.GetAssetType() == libutils.DCRWalletAsset {
 		pg.wallet.(*dcr.Asset).RemoveAccountMixerNotificationListener(InfoID)
 	}
@@ -824,6 +912,10 @@ func (pg *WalletInfo) startBlockAgeTicker() {
 				log.Infof("InfoPage: block-age ticker stopped")
 				return
 			case <-t.C:
+				// Agenda status follows sync and the vote window, not only
+				// wallet txs. The block listener covers attached blocks;
+				// this tick covers the moment a wallet first becomes synced.
+				pg.loadGovernanceAgendas()
 				// Refresh the cached "X ago" string BEFORE Reload() —
 				// Layout will then read the freshly stored value. Without
 				// this the cache stays at the value computed on
