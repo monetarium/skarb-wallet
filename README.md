@@ -4,7 +4,7 @@ Desktop wallet for the [Monetarium](https://github.com/monetarium) network. Buil
 
 **Downloads**
 
-* macOS: [Skarb Wallet 0.1.2](https://github.com/monetarium/skarb-wallet/releases/download/v0.1.2/Skarb-Wallet-0.1.2.dmg)
+* macOS: [Skarb Wallet 0.1.3](https://github.com/monetarium/skarb-wallet/releases/download/v0.1.3/Skarb-Wallet-0.1.3.dmg)
 * App Store: coming soon
 * Google Play: coming soon
 * APK: coming soon

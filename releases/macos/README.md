@@ -1,12 +1,12 @@
 # Skarb Wallet for macOS
 
-Download: [Skarb Wallet 0.1.2](https://github.com/monetarium/skarb-wallet/releases/download/v0.1.2/Skarb-Wallet-0.1.2.dmg)
+Download: [Skarb Wallet 0.1.3](https://github.com/monetarium/skarb-wallet/releases/download/v0.1.3/Skarb-Wallet-0.1.3.dmg)
 
 Universal binary (Apple Silicon + Intel).
 
 ## Install
 
-1. Open `Skarb-Wallet-0.1.2.dmg`.
+1. Open `Skarb-Wallet-0.1.3.dmg`.
 2. Drag **Skarb Wallet** into `/Applications`.
 3. First launch: right-click → **Open**. Confirm Open in the dialog.
 
