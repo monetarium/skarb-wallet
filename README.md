@@ -4,12 +4,14 @@ Desktop wallet for the [Monetarium](https://github.com/monetarium) network. Buil
 
 **Downloads**
 
-* macOS: [Skarb Wallet 0.1.3](https://github.com/monetarium/skarb-wallet/releases/download/v0.1.3/Skarb-Wallet-0.1.3.dmg)
+* macOS (Apple Silicon + Intel): [Skarb Wallet 0.1.3 — DMG](https://raw.githubusercontent.com/monetarium/skarb-wallet/main/releases/macos/Skarb-Wallet-0.1.3.dmg)
+* Windows x64: [Skarb Wallet 0.1.3 — ZIP](https://raw.githubusercontent.com/monetarium/skarb-wallet/main/releases/windows/Skarb-Wallet-0.1.3-windows-amd64.zip)
+* Linux x64: [Skarb Wallet 0.1.3 — TAR.GZ](https://raw.githubusercontent.com/monetarium/skarb-wallet/main/releases/linux/Skarb-Wallet-0.1.3-linux-amd64.tar.gz)
 * App Store: coming soon
 * Google Play: coming soon
 * APK: coming soon
-* Linux: [Skarb Wallet 0.1.2](https://github.com/monetarium/skarb-wallet/releases/download/v0.1.2/Skarb-Wallet-0.1.2-linux-amd64.tar.gz)
-* Windows: coming soon
+
+Pasted seed phrases fill the word fields immediately. macOS Control-click opens Paste, suggestion menus close when you validate the seed, and desktop pages have a gap beside the sidebar ([#55](https://github.com/monetarium/skarb-wallet/pull/55)). [SHA-256 checksums](releases/SHA256SUMS-0.1.3.txt).
 
 **Install on macOS**
 
@@ -21,15 +23,15 @@ Desktop wallet for the [Monetarium](https://github.com/monetarium) network. Buil
 xattr -cr "/Applications/Skarb Wallet.app"
 ```
 
-More detail: [releases/macos](releases/macos/README.md). All builds: [GitHub Releases](https://github.com/monetarium/skarb-wallet/releases).
+More detail: [releases/macos](releases/macos/README.md). Release history: [GitHub Releases](https://github.com/monetarium/skarb-wallet/releases).
 
 **Install on Linux**
 
-1. Download [Skarb Wallet 0.1.2](https://github.com/monetarium/skarb-wallet/releases/download/v0.1.2/Skarb-Wallet-0.1.2-linux-amd64.tar.gz) and unpack it.
+1. Download [Skarb Wallet 0.1.3](https://raw.githubusercontent.com/monetarium/skarb-wallet/main/releases/linux/Skarb-Wallet-0.1.3-linux-amd64.tar.gz) and unpack it.
 2. Copy the binary, launcher, and icon:
 
 ```bash
-cd Skarb-Wallet-0.1.2-linux-amd64
+cd Skarb-Wallet-0.1.3-linux-amd64
 mkdir -p ~/.local/bin ~/.local/share/applications ~/.local/share/icons/hicolor/256x256/apps
 cp skarb ~/.local/bin/
 cp skarb.desktop ~/.local/share/applications/
@@ -39,6 +41,13 @@ cp icons/256x256/skarb.png ~/.local/share/icons/hicolor/256x256/apps/
 3. Put `~/.local/bin` on `PATH`, then run `skarb` or launch **Skarb Wallet** from the app menu.
 
 More detail: [releases/linux](releases/linux/README.md).
+
+**Install on Windows**
+
+1. Download [Skarb Wallet 0.1.3](https://raw.githubusercontent.com/monetarium/skarb-wallet/main/releases/windows/Skarb-Wallet-0.1.3-windows-amd64.zip) and extract the ZIP.
+2. Open the extracted `Skarb-Wallet-0.1.3-windows-amd64` folder and run `skarb.exe`.
+
+More detail: [releases/windows](releases/windows/README.md).
 
 **Features**
 
@@ -70,7 +79,11 @@ Linux `.tar.gz`:
 ./build-linux.sh
 ```
 
-Windows: `build-windows.sh` (packaged download coming soon).
+Windows `.exe`:
+
+```bash
+./build-windows.sh
+```
 
 Android / iOS: see [how-to-build-mobile.md](how-to-build-mobile.md). Store listings are coming soon.
 
