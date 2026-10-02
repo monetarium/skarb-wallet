@@ -436,6 +436,9 @@ func (pg *SeedRestore) suggestionSeedEffect() {
 }
 
 func (pg *SeedRestore) layoutSeedMenu(gtx C, optionsSeedMenuIndex int) {
+	if !gtx.Enabled() {
+		return
+	}
 	if pg.openPopupIndex != optionsSeedMenuIndex || pg.openPopupIndex != pg.seedEditors.focusIndex ||
 		pg.isLastEditor {
 		return
@@ -539,10 +542,22 @@ func (pg *SeedRestore) verifySeeds() bool {
 }
 
 func (pg *SeedRestore) resetSeeds() {
-	pg.seedEditors.focusIndex = -1
+	pg.hideSeedMenus()
 	pg.pastedWords = nil
 	for i := 0; i < len(pg.seedEditors.editors); i++ {
 		pg.seedEditors.editors[i].Edit.Editor.SetText("")
+	}
+}
+
+func (pg *SeedRestore) hideSeedMenus() {
+	pg.openPopupIndex = -1
+	pg.seedEditors.focusIndex = -1
+	pg.suggestions = nil
+	pg.selected = 0
+	pg.seedClicked = false
+	for _, editor := range pg.seedEditors.editors {
+		editor.Edit.HideMenu()
+		editor.Edit.UpdateFocus(false)
 	}
 }
 
@@ -574,6 +589,12 @@ func switchSeedEditors(gtx C, editors []*cryptomaterial.RestoreEditor, steps int
 // displayed.
 // Part of the load.Page interface.
 func (pg *SeedRestore) HandleUserInteractions(gtx C) {
+	for _, editor := range pg.seedEditors.editors {
+		editor.Edit.Update(gtx)
+	}
+	pg.editorSeedsEventsHandler(gtx)
+	pg.onSuggestionSeedsClicked(gtx)
+
 	focus := pg.seedEditors.focusIndex
 	if focus != -1 {
 		pg.suggestions = pg.suggestionSeeds(pg.seedEditors.editors[focus].Edit.Editor.Text())
@@ -586,6 +607,8 @@ func (pg *SeedRestore) HandleUserInteractions(gtx C) {
 	}
 
 	if pg.validateSeed.Clicked(gtx) {
+		pg.hideSeedMenus()
+		gtx.Execute(key.FocusCmd{})
 		if !pg.verifySeeds() {
 			return
 		}
@@ -619,14 +642,13 @@ func (pg *SeedRestore) HandleUserInteractions(gtx C) {
 				return true
 			})
 		pg.window.ShowModal(walletPasswordModal)
+		return
 	}
 
 	if pg.resetSeedFields.Clicked(gtx) {
 		pg.resetSeeds()
 	}
 
-	pg.editorSeedsEventsHandler(gtx)
-	pg.onSuggestionSeedsClicked(gtx)
 	pg.suggestionSeedEffect()
 
 	if pg.seedEditorChanged() {
@@ -782,4 +804,6 @@ func (pg *SeedRestore) seedEditorChanged() bool {
 // OnNavigatedTo() will be called again. This method should not destroy UI
 // components unless they'll be recreated in the OnNavigatedTo() method.
 // Part of the load.Page interface.
-func (pg *SeedRestore) OnNavigatedFrom() {}
+func (pg *SeedRestore) OnNavigatedFrom() {
+	pg.hideSeedMenus()
+}

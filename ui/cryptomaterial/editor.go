@@ -6,6 +6,7 @@ import (
 	"image"
 	"image/color"
 	"io"
+	"runtime"
 	"strings"
 
 	"gioui.org/gesture"
@@ -258,13 +259,27 @@ func (e *Editor) AlwaysShowHint() {
 }
 
 func (e *Editor) Layout(gtx C) D {
+	e.Update(gtx)
+	return e.layout(gtx)
+}
+
+// Update processes input before layout so pages can react to text changes
+// and clipboard transfers in the same frame.
+func (e *Editor) Update(gtx C) {
+	if !gtx.Enabled() {
+		e.HideMenu()
+		return
+	}
 	if e.isFirstFocus {
 		e.isFirstFocus = false
 		gtx.Execute(key.FocusCmd{Tag: e.Editor})
 	}
 	e.handleEvents(gtx)
 	e.update(gtx)
-	return e.layout(gtx)
+}
+
+func (e *Editor) HideMenu() {
+	e.isShowMenu = false
 }
 
 func (e *Editor) update(gtx C) {
@@ -297,12 +312,16 @@ func (e *Editor) update(gtx C) {
 		switch ev.(type) {
 		case widget.ChangeEvent:
 			e.changed = true
+			// Most pages consume Changed on the next interaction pass.
+			gtx.Execute(op.InvalidateCmd{})
 			e.pushHistory(before)
 			before = e.snapshot()
 		case widget.SubmitEvent:
 			e.submitted = true
+			gtx.Execute(op.InvalidateCmd{})
 		case widget.SelectEvent:
 			e.selected = true
+			gtx.Execute(op.InvalidateCmd{})
 		}
 	}
 }
@@ -317,7 +336,7 @@ func (e *Editor) handleRightClick(gtx C) {
 			break
 		}
 		pe, ok := ev.(pointer.Event)
-		if !ok || !pe.Buttons.Contain(pointer.ButtonSecondary) {
+		if !ok || !editorContextMenuClick(pe, runtime.GOOS) {
 			continue
 		}
 		if e.isDisableMenu || e.Editor.ReadOnly {
@@ -327,6 +346,12 @@ func (e *Editor) handleRightClick(gtx C) {
 		gtx.Execute(key.FocusCmd{Tag: e.Editor})
 		log.Debugf("editor: right-click paste menu")
 	}
+}
+
+func editorContextMenuClick(pe pointer.Event, goos string) bool {
+	return pe.Buttons.Contain(pointer.ButtonSecondary) ||
+		(goos == "darwin" && pe.Source == pointer.Mouse &&
+			pe.Buttons.Contain(pointer.ButtonPrimary) && pe.Modifiers.Contain(key.ModCtrl))
 }
 
 func (e *Editor) handleHistoryShortcut(gtx C) {
