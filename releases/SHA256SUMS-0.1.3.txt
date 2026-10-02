@@ -1,0 +1,3 @@
+14861aae859592f7caed073030c8d2c63d718e8c1ec936c18a4938cfac441e70  macos/Skarb-Wallet-0.1.3.dmg
+79d437595eee2445cdc4fae42c44790bdc6a8f1ed73688999dc721ddb671a3c0  windows/Skarb-Wallet-0.1.3-windows-amd64.zip
+de630b341f27a6509e0777febfe2728570ad19c7323ea9aac933714156a28d09  linux/Skarb-Wallet-0.1.3-linux-amd64.tar.gz

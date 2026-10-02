@@ -421,7 +421,9 @@ func (hp *HomePage) Layout(gtx layout.Context) layout.Dimensions {
 	}
 	return layout.Flex{Axis: layout.Horizontal}.Layout(gtx,
 		layout.Rigid(hp.layoutSidebar),
-		layout.Flexed(1, hp.layoutBody),
+		layout.Flexed(1, func(gtx C) D {
+			return layout.Inset{Left: values.MarginPadding24}.Layout(gtx, hp.layoutBody)
+		}),
 	)
 }
 
