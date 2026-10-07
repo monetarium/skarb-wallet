@@ -79,6 +79,9 @@ type Page struct {
 
 	toCoinSelection *cryptomaterial.Clickable
 	advanceOptions  *cryptomaterial.Collapsible
+	// scrollToAdvanced is set when Advanced options expands; the next
+	// frame scrolls the page so the opened section is in view.
+	scrollToAdvanced bool
 
 	selectedUTXOs      selectedUTXOsInfo
 	navigateToSyncBtn  cryptomaterial.Button

@@ -5,6 +5,7 @@ import (
 
 	"gioui.org/font"
 	"gioui.org/layout"
+	"gioui.org/op"
 	"gioui.org/text"
 	"gioui.org/widget"
 
@@ -66,14 +67,24 @@ func (pg *Page) contentLayout(gtx C) D {
 	// Always include the sendLayout
 	pageContent = append(pageContent, pg.sendLayout)
 
+	advancedIndex := -1
 	if pg.selectedWallet != nil && pg.selectedWallet.IsSynced() {
 		// Include these layouts only if the wallet is synced
 		pageContent = append(pageContent, pg.recipientsLayout)
+		advancedIndex = len(pageContent)
 		pageContent = append(pageContent, pg.advanceOptionsLayout)
 	} else {
 		// Include the notSyncedLayout if the wallet is not synced
 		if pg.modalLayout != nil {
 			pageContent = append(pageContent, pg.notSyncedLayout)
+		}
+	}
+
+	if pg.scrollToAdvanced {
+		pg.scrollToAdvanced = false
+		if advancedIndex >= 0 {
+			log.Debugf("send: scroll to expanded advanced options (item %d)", advancedIndex)
+			pg.pageContainer.List.ScrollTo(advancedIndex)
 		}
 	}
 
@@ -290,7 +301,13 @@ func (pg *Page) advanceOptionsLayout(gtx C) D {
 					}),
 				)
 			}
-			return pg.advanceOptions.Layout(gtx, collapsibleHeader, collapsibleBody)
+			wasExpanded := pg.advanceOptions.IsExpanded()
+			dims := pg.advanceOptions.Layout(gtx, collapsibleHeader, collapsibleBody)
+			if !wasExpanded && pg.advanceOptions.IsExpanded() {
+				pg.scrollToAdvanced = true
+				gtx.Execute(op.InvalidateCmd{})
+			}
+			return dims
 		})
 	})
 }
