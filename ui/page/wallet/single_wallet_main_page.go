@@ -689,7 +689,9 @@ func (swmp *SingleWalletMasterPage) layoutWalletBody(gtx C) D {
 	}
 	inset := layout.Inset{Top: values.MarginPadding8}
 	if !swmp.IsMobileView() {
-		inset.Left, inset.Right = values.MarginPadding24, values.MarginPadding24
+		// No right inset: page lists reserve a 10dp scrollbar there,
+		// which roughly matches the 8dp gutter on the left.
+		inset.Left = values.MarginPadding8
 	}
 	return inset.Layout(gtx, func(gtx C) D {
 		switch swmp.CurrentPage().ID() {

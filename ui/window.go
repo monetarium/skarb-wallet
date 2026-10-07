@@ -11,7 +11,6 @@ import (
 	"time"
 
 	giouiApp "gioui.org/app"
-	"gioui.org/gesture"
 	"gioui.org/io/event"
 	"gioui.org/io/key"
 	"gioui.org/io/pointer"
@@ -50,8 +49,11 @@ type Window struct {
 	// completed shutting down, therefore the UI processes can finally stop.
 	IsShutdown chan struct{}
 
-	// dragger is used to handle drag gestures.
-	drag       gesture.Drag
+	// pointerTag receives every pointer event without grabbing it, so a
+	// tap can hide the soft keyboard while lists and scrollbars keep
+	// their drags. gesture.Drag grabbed the pointer after touch slop and
+	// cancelled scrollbar drags.
+	pointerTag bool
 	isClick    bool
 	isDragging bool
 
@@ -428,7 +430,7 @@ func (win *Window) prepareToDisplayUI(gtx layout.Context) {
 		return modal.Layout(gtx)
 	})
 
-	win.drag.Add(gtx.Ops)
+	event.Op(gtx.Ops, &win.pointerTag)
 
 	// Use a StackLayout to write the above UI components into an operations
 	// list via a graphical context that is linked to the ops.
@@ -488,11 +490,18 @@ func (win *Window) handleEvents(gtx C) {
 // handleUserClick listen touch action of user for mobile.
 func (win *Window) handleUserClick(gtx C) {
 	for {
-		event, ok := win.drag.Update(gtx.Metric, gtx.Source, gesture.Both)
+		ev, ok := gtx.Event(pointer.Filter{
+			Target: &win.pointerTag,
+			Kinds:  pointer.Press | pointer.Drag | pointer.Release | pointer.Cancel,
+		})
 		if !ok {
 			break
 		}
-		switch event.Kind {
+		e, ok := ev.(pointer.Event)
+		if !ok {
+			continue
+		}
+		switch e.Kind {
 		case pointer.Press:
 			win.isClick = true
 		case pointer.Drag:
@@ -501,6 +510,9 @@ func (win *Window) handleUserClick(gtx C) {
 			if win.isClick && !win.isDragging {
 				gtx.Execute(key.SoftKeyboardCmd{Show: false})
 			}
+			win.isClick = false
+			win.isDragging = false
+		case pointer.Cancel:
 			win.isClick = false
 			win.isDragging = false
 		}

@@ -65,3 +65,52 @@ func TestWindowBackdropDoesNotStealEditorFocus(t *testing.T) {
 		})
 	}
 }
+
+type scrollListPage struct {
+	*app.GenericPageModal
+	th   *cryptomaterial.Theme
+	list *widget.List
+}
+
+func (*scrollListPage) OnNavigatedTo()             {}
+func (*scrollListPage) OnNavigatedFrom()           {}
+func (*scrollListPage) HandleUserInteractions(_ C) {}
+func (pg *scrollListPage) Layout(gtx C) D {
+	heights := []int{180, 260, 160}
+	return pg.th.List(pg.list).Layout(gtx, len(heights), func(gtx C, i int) D {
+		return D{Size: image.Pt(gtx.Constraints.Max.X, heights[i])}
+	})
+}
+
+// A window-wide pointer handler must not grab the pointer: Gio cancels
+// every other handler on grab, which stopped scrollbar drags.
+func TestWindowDoesNotCancelScrollbarDrag(t *testing.T) {
+	th := cryptomaterial.NewTheme(assets.FontCollection(), assets.DecredIcons, false)
+	pg := &scrollListPage{GenericPageModal: app.NewGenericPageModal("scroll-test"), th: th, list: &widget.List{List: layout.List{Axis: layout.Vertical}}}
+	nav := app.NewSimpleWindowNavigator(func() {})
+	nav.Display(pg)
+	win := &Window{navigator: nav, load: &load.Load{Theme: th, Toast: notification.NewToast(th)}}
+	router := new(input.Router)
+	gtx := layout.Context{Ops: new(op.Ops), Source: router.Source(), Now: time.Now(), Metric: unit.Metric{PxPerDp: 1, PxPerSp: 1}, Constraints: layout.Exact(image.Pt(300, 500))}
+	frame := func() {
+		win.prepareToDisplayUI(gtx)
+		router.Frame(gtx.Ops)
+		gtx.Ops.Reset()
+	}
+	frame()
+	frame()
+	y := float32(100)
+	router.Queue(pointer.Event{Kind: pointer.Press, Source: pointer.Mouse, Buttons: pointer.ButtonPrimary, Position: f32.Pt(295, y)})
+	frame()
+	for i := 0; i < 10; i++ {
+		y += 5
+		router.Queue(pointer.Event{Kind: pointer.Move, Source: pointer.Mouse, Buttons: pointer.ButtonPrimary, Position: f32.Pt(295, y)})
+		frame()
+	}
+	router.Queue(pointer.Event{Kind: pointer.Release, Source: pointer.Mouse, Position: f32.Pt(295, y)})
+	frame()
+	frame()
+	if pg.list.Position.First == 0 && pg.list.Position.Offset == 0 {
+		t.Fatal("scrollbar drag did not scroll the list")
+	}
+}

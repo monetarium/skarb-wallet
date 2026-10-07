@@ -5,6 +5,7 @@ import (
 
 	"gioui.org/font"
 	"gioui.org/layout"
+	"gioui.org/op"
 	"gioui.org/text"
 	"gioui.org/widget"
 
@@ -66,9 +67,11 @@ func (pg *Page) contentLayout(gtx C) D {
 	// Always include the sendLayout
 	pageContent = append(pageContent, pg.sendLayout)
 
+	advancedIndex := -1
 	if pg.selectedWallet != nil && pg.selectedWallet.IsSynced() {
 		// Include these layouts only if the wallet is synced
 		pageContent = append(pageContent, pg.recipientsLayout)
+		advancedIndex = len(pageContent)
 		pageContent = append(pageContent, pg.advanceOptionsLayout)
 	} else {
 		// Include the notSyncedLayout if the wallet is not synced
@@ -77,9 +80,18 @@ func (pg *Page) contentLayout(gtx C) D {
 		}
 	}
 
+	if pg.scrollToAdvanced {
+		pg.scrollToAdvanced = false
+		if advancedIndex >= 0 {
+			log.Debugf("send: scroll to expanded advanced options (item %d)", advancedIndex)
+			pg.pageContainer.List.ScrollTo(advancedIndex)
+		}
+	}
+
+	cardGap := values.MarginPaddingTransform(pg.IsMobileView(), values.MarginPadding8)
 	list := func(gtx C) D {
 		return pg.Theme.List(pg.pageContainer).Layout(gtx, len(pageContent), func(gtx C, i int) D {
-			mp := values.MarginPaddingTransform(pg.IsMobileView(), values.MarginPadding8)
+			mp := cardGap
 			if i == len(pageContent)-1 {
 				mp = values.MarginPadding0
 			}
@@ -99,7 +111,12 @@ func (pg *Page) contentLayout(gtx C) D {
 	}
 	return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
 		layout.Flexed(1, list),
-		layout.Rigid(pg.balanceSection),
+		layout.Rigid(func(gtx C) D {
+			// Same gap as between the cards above. Right skips the
+			// scrollbar width the list reserves so the edges line up.
+			inset := layout.Inset{Top: cardGap, Right: pg.Theme.List(pg.pageContainer).Width()}
+			return inset.Layout(gtx, pg.balanceSection)
+		}),
 	)
 }
 
@@ -284,7 +301,13 @@ func (pg *Page) advanceOptionsLayout(gtx C) D {
 					}),
 				)
 			}
-			return pg.advanceOptions.Layout(gtx, collapsibleHeader, collapsibleBody)
+			wasExpanded := pg.advanceOptions.IsExpanded()
+			dims := pg.advanceOptions.Layout(gtx, collapsibleHeader, collapsibleBody)
+			if !wasExpanded && pg.advanceOptions.IsExpanded() {
+				pg.scrollToAdvanced = true
+				gtx.Execute(op.InvalidateCmd{})
+			}
+			return dims
 		})
 	})
 }
