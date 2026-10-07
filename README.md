@@ -4,14 +4,14 @@ Desktop wallet for the [Monetarium](https://github.com/monetarium) network. Buil
 
 **Downloads**
 
-* macOS (Apple Silicon + Intel): [Skarb Wallet 0.1.4 — DMG](https://github.com/monetarium/skarb-wallet/releases/download/v0.1.4/Skarb-Wallet-0.1.4.dmg)
-* Windows x64: [Skarb Wallet 0.1.4 — ZIP](https://github.com/monetarium/skarb-wallet/releases/download/v0.1.4/Skarb-Wallet-0.1.4-windows-amd64.zip)
-* Linux x64: [Skarb Wallet 0.1.3 — TAR.GZ](https://github.com/monetarium/skarb-wallet/releases/download/v0.1.3/Skarb-Wallet-0.1.3-linux-amd64.tar.gz)
+* macOS (Apple Silicon + Intel): [Skarb Wallet 0.1.5 — DMG](https://github.com/monetarium/skarb-wallet/releases/download/v0.1.5/Skarb-Wallet-0.1.5.dmg)
+* Windows x64: [Skarb Wallet 0.1.5 — ZIP](https://github.com/monetarium/skarb-wallet/releases/download/v0.1.5/Skarb-Wallet-0.1.5-windows-amd64.zip)
+* Linux x64: [Skarb Wallet 0.1.5 — TAR.GZ](https://github.com/monetarium/skarb-wallet/releases/download/v0.1.5/Skarb-Wallet-0.1.5-linux-amd64.tar.gz)
 * App Store: coming soon
 * Google Play: coming soon
 * APK: coming soon
 
-Seed restoration now keeps field focus after mouse or trackpad clicks, Clear all resets every field, and the desktop scrollbar redraws while being dragged. [SHA-256 checksums](https://github.com/monetarium/skarb-wallet/releases/download/v0.1.4/SHA256SUMS-0.1.4.txt).
+Desktop scrollbars can be dragged again, Send keeps even spacing above the fee summary, and expanding Advanced options scrolls to it. [SHA-256 checksums](https://github.com/monetarium/skarb-wallet/releases/download/v0.1.5/SHA256SUMS-0.1.5.txt).
 
 **Install on macOS**
 
@@ -27,11 +27,11 @@ More detail: [releases/macos](releases/macos/README.md). Release history: [GitHu
 
 **Install on Linux**
 
-1. Download [Skarb Wallet 0.1.3](https://github.com/monetarium/skarb-wallet/releases/download/v0.1.3/Skarb-Wallet-0.1.3-linux-amd64.tar.gz) and unpack it.
+1. Download [Skarb Wallet 0.1.5](https://github.com/monetarium/skarb-wallet/releases/download/v0.1.5/Skarb-Wallet-0.1.5-linux-amd64.tar.gz) and unpack it.
 2. Copy the binary, launcher, and icon:
 
 ```bash
-cd Skarb-Wallet-0.1.3-linux-amd64
+cd Skarb-Wallet-0.1.5-linux-amd64
 mkdir -p ~/.local/bin ~/.local/share/applications ~/.local/share/icons/hicolor/256x256/apps
 cp skarb ~/.local/bin/
 cp skarb.desktop ~/.local/share/applications/
@@ -44,8 +44,8 @@ More detail: [releases/linux](releases/linux/README.md).
 
 **Install on Windows**
 
-1. Download [Skarb Wallet 0.1.4](https://github.com/monetarium/skarb-wallet/releases/download/v0.1.4/Skarb-Wallet-0.1.4-windows-amd64.zip) and extract the ZIP.
-2. Open the extracted `Skarb-Wallet-0.1.4-windows-amd64` folder and run `skarb.exe`.
+1. Download [Skarb Wallet 0.1.5](https://github.com/monetarium/skarb-wallet/releases/download/v0.1.5/Skarb-Wallet-0.1.5-windows-amd64.zip) and extract the ZIP.
+2. Open the extracted `Skarb-Wallet-0.1.5-windows-amd64` folder and run `skarb.exe`.
 
 More detail: [releases/windows](releases/windows/README.md).
 
