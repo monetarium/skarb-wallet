@@ -1,0 +1,2 @@
+3a649fe091b093356e2ac6c920f97039a87762e95331cb13320236de572c6655  releases/macos/Skarb-Wallet-0.1.4.dmg
+308e6faa6a949f26557e38c6e9a7ac19b4afd8c341c2c75ddc0fab20d57c251c  releases/windows/Skarb-Wallet-0.1.4-windows-amd64.zip

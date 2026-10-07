@@ -724,7 +724,7 @@ func (re RestoreEditor) Layout(gtx C) D {
 			layout.Rigid(func(gtx C) D {
 				return layout.Inset{Left: unit.Dp(-3), Right: unit.Dp(5)}.Layout(gtx, l.Layout)
 			}),
-			layout.Rigid(func(gtx C) D {
+			layout.Flexed(1, func(gtx C) D {
 				edit := re.Edit.Layout(gtx)
 				re.height = edit.Size.Y
 				return edit
