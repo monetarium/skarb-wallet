@@ -687,7 +687,11 @@ func (swmp *SingleWalletMasterPage) layoutWalletBody(gtx C) D {
 	if swmp.CurrentPage() == nil {
 		return D{}
 	}
-	return layout.Inset{Top: values.MarginPadding8}.Layout(gtx, func(gtx C) D {
+	inset := layout.Inset{Top: values.MarginPadding8}
+	if !swmp.IsMobileView() {
+		inset.Left, inset.Right = values.MarginPadding24, values.MarginPadding24
+	}
+	return inset.Layout(gtx, func(gtx C) D {
 		switch swmp.CurrentPage().ID() {
 		case receive.ReceivePageID, send.SendPageID,
 			transaction.TransactionsPageID, accounts.AccountsPageID:

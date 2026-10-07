@@ -171,12 +171,11 @@ func (pg *SeedRestore) seedEditorsMobileHandle(gtx C) {
 // to be eventually drawn on screen.
 // Part of the load.Page interface.
 func (pg *SeedRestore) Layout(gtx C) D {
-	body := pg.restore(gtx)
-	pg.seedEditorsMobileHandle(gtx)
 	pg.resetSeedFields.SetEnabled(pg.updateSeedResetBtn())
 	seedValid, _ := pg.validateSeeds()
 	pg.validateSeed.SetEnabled(seedValid)
-
+	body := pg.restore(gtx)
+	pg.seedEditorsMobileHandle(gtx)
 	return body
 }
 
@@ -388,7 +387,10 @@ func (pg *SeedRestore) editorSeedsEventsHandler(gtx C) {
 	for i := 0; i < len(pg.seedEditors.editors); i++ {
 		editor := pg.seedEditors.editors[i]
 		text := editor.Edit.Editor.Text()
-		if editor.Edit.Changed() || editor.Edit.Selected() {
+		// Consume both flags: short-circuiting leaves a selection event for
+		// the next frame and reopens suggestions after paste or Clear all.
+		changed, selected := editor.Edit.Changed(), editor.Edit.Selected()
+		if changed || selected {
 			seedEvent(i, text)
 		}
 
@@ -488,7 +490,9 @@ func (pg SeedRestore) suggestionSeeds(text string) []string {
 
 func (pg *SeedRestore) updateSeedResetBtn() bool {
 	for _, editor := range pg.seedEditors.editors {
-		return editor.Edit.Editor.Text() != ""
+		if editor.Edit.Editor.Text() != "" {
+			return true
+		}
 	}
 	return false
 }

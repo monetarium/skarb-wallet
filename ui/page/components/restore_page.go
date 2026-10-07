@@ -85,6 +85,8 @@ func NewRestorePage(l *load.Load, walletName string, walletType libutils.AssetTy
 	pg.confirmSeedButton.TextSize = textSize16
 	pg.tabs.DisableUniform(true)
 	pg.tabs.SetDisableAnimation(true)
+	// Text selection and scrollbar drags belong to the restore form.
+	pg.tabs.SetEnableSwipe(false)
 
 	defaultWordSeedType := &cryptomaterial.DropDownItem{
 		Text: values.String(values.Str33WordSeed),
@@ -268,6 +270,8 @@ func (pg *Restore) indexLayout(gtx C) D {
 // Part of the load.Page interface.
 func (pg *Restore) OnNavigatedFrom() {
 	pg.seedRestorePage.OnNavigatedFrom()
+	pg.seedInputEditor.HideMenu()
+	pg.seedInputEditor.UpdateFocus(false)
 }
 
 // HandleUserInteractions is called just before Layout() to determine
@@ -276,7 +280,8 @@ func (pg *Restore) OnNavigatedFrom() {
 // displayed.
 // Part of the load.Page interface.
 func (pg *Restore) HandleUserInteractions(gtx C) {
-	if pg.tabs.Changed() {
+	modeChanged := pg.tabs.Changed()
+	if modeChanged {
 		pg.tabIndex = pg.tabs.SelectedIndex()
 	}
 
@@ -284,22 +289,31 @@ func (pg *Restore) HandleUserInteractions(gtx C) {
 		pg.ParentNavigator().CloseCurrentPage()
 	}
 
-	if pg.toggleSeedInput.Changed(gtx) && !pg.toggleSeedInput.IsChecked() {
-		pg.seedRestorePage.setEditorFocus()
-		pg.ParentWindow().Reload()
+	if pg.toggleSeedInput.Changed(gtx) {
+		modeChanged = true
 	}
-
-	if pg.tabIndex == 0 {
+	if modeChanged {
+		pg.seedRestorePage.hideSeedMenus()
+		pg.seedInputEditor.HideMenu()
+		pg.seedInputEditor.UpdateFocus(false)
+		if pg.usesWordFields() {
+			pg.seedRestorePage.setEditorFocus()
+		} else {
+			pg.seedInputEditor.SetFocus()
+		}
+	}
+	if pg.usesWordFields() {
 		pg.seedRestorePage.HandleUserInteractions(gtx)
+	} else {
+		pg.seedInputEditor.Update(gtx)
 	}
-
-	if len(strings.TrimSpace(pg.seedInputEditor.Editor.Text())) != 0 {
-		pg.confirmSeedButton.SetEnabled(true)
-	}
+	pg.confirmSeedButton.SetEnabled(strings.TrimSpace(pg.seedInputEditor.Editor.Text()) != "")
 
 	if pg.confirmSeedButton.Clicked(gtx) {
 		if !pg.restoreInProgress {
-			go pg.restoreFromSeedEditor()
+			pg.seedInputEditor.HideMenu()
+			gtx.Execute(key.FocusCmd{})
+			pg.restoreFromSeedEditor()
 		}
 	}
 
@@ -308,12 +322,16 @@ func (pg *Restore) HandleUserInteractions(gtx C) {
 	}
 }
 
+func (pg *Restore) usesWordFields() bool {
+	return pg.tabIndex == 0 && !pg.toggleSeedInput.IsChecked()
+}
+
 // KeysToHandle returns a Filter's slice that describes a set of key combinations
 // that this page wishes to capture. The HandleKeyPress() method will only be
 // called when any of these key combinations is pressed.
 // Satisfies the load.KeyEventHandler interface for receiving key events.
 func (pg *Restore) KeysToHandle() []event.Filter {
-	if pg.tabIndex == 0 {
+	if pg.usesWordFields() {
 		return pg.seedRestorePage.KeysToHandle()
 	}
 	return nil
@@ -323,7 +341,7 @@ func (pg *Restore) KeysToHandle() []event.Filter {
 // window that match any of the key combinations returned by KeysToHandle().
 // Satisfies the load.KeyEventHandler interface for receiving key events.
 func (pg *Restore) HandleKeyPress(gtx C, evt *key.Event) {
-	if pg.tabIndex == 0 {
+	if pg.usesWordFields() {
 		pg.seedRestorePage.HandleKeyPress(gtx, evt)
 	}
 }
@@ -335,7 +353,7 @@ func (pg *Restore) restoreFromSeedEditor() {
 		pg.seedInputEditor.Editor.SetText("")
 	}
 
-	seedOrHex := strings.TrimSpace(pg.seedInputEditor.Editor.Text())
+	seedOrHex := strings.Join(strings.Fields(pg.seedInputEditor.Editor.Text()), " ")
 	// Check if the user did input a hex or seed. If its a hex set the correct tabindex.
 	if len(seedOrHex) > MaxSeedBytes {
 		pg.tabIndex = 0

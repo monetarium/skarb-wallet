@@ -415,7 +415,9 @@ func (win *Window) prepareToDisplayUI(gtx layout.Context) {
 		if win.navigator.CurrentPage() == nil {
 			win.navigator.Display(page.NewStartPage(win.ctx, win.load))
 		}
-		return win.load.Theme.DropdownBackdrop.Layout(gtx, win.navigator.CurrentPage().Layout)
+		// The backdrop is a sibling behind the page. Wrapping the page in
+		// it lets its mouse press focus command override editor focus.
+		return win.navigator.CurrentPage().Layout(gtx)
 	})
 
 	topModalLayout := layout.Stacked(func(gtx C) D {
@@ -423,7 +425,7 @@ func (win *Window) prepareToDisplayUI(gtx layout.Context) {
 		if modal == nil {
 			return D{}
 		}
-		return win.load.Theme.DropdownBackdrop.Layout(gtx, modal.Layout)
+		return modal.Layout(gtx)
 	})
 
 	win.drag.Add(gtx.Ops)

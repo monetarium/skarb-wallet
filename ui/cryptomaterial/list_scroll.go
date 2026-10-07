@@ -2,6 +2,7 @@ package cryptomaterial
 
 import (
 	"gioui.org/layout"
+	"gioui.org/op"
 	"gioui.org/widget"
 	"gioui.org/widget/material"
 )
@@ -30,5 +31,11 @@ func (t *Theme) List(state *widget.List) ListStyle {
 // Layout the list and its scrollbar.
 func (l ListStyle) Layout(gtx layout.Context, length int, w layout.ListElement) layout.Dimensions {
 	gtx.Constraints.Min.X = gtx.Constraints.Max.X
-	return l.ListStyle.Layout(gtx, length, w)
+	dims := l.ListStyle.Layout(gtx, length, w)
+	// Material applies scrollbar movement after drawing the list. Request
+	// another frame so the last drag or track click is visible immediately.
+	if l.Scrollbar.ScrollDistance() != 0 {
+		gtx.Execute(op.InvalidateCmd{})
+	}
+	return dims
 }

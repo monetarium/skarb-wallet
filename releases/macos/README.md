@@ -1,10 +1,10 @@
 # Skarb Wallet for macOS
 
-Download: [Skarb Wallet 0.1.3](https://github.com/monetarium/skarb-wallet/releases/download/v0.1.3/Skarb-Wallet-0.1.3.dmg)
+Download: [Skarb Wallet 0.1.4](https://github.com/monetarium/skarb-wallet/releases/download/v0.1.4/Skarb-Wallet-0.1.4.dmg)
 
 Universal binary (Apple Silicon + Intel).
 
-[SHA-256 checksums](https://github.com/monetarium/skarb-wallet/releases/download/v0.1.3/SHA256SUMS-0.1.3.txt).
+[SHA-256 checksums](https://github.com/monetarium/skarb-wallet/releases/download/v0.1.4/SHA256SUMS-0.1.4.txt).
 
 ## Install
 
