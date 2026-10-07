@@ -1,10 +1,10 @@
 # Skarb Wallet for Windows
 
-Download: [Skarb Wallet 0.1.3](https://raw.githubusercontent.com/monetarium/skarb-wallet/main/releases/windows/Skarb-Wallet-0.1.3-windows-amd64.zip)
+Download: [Skarb Wallet 0.1.4](https://github.com/monetarium/skarb-wallet/releases/download/v0.1.4/Skarb-Wallet-0.1.4-windows-amd64.zip)
 
 64-bit Windows executable.
 
-[SHA-256 checksums](../SHA256SUMS-0.1.3.txt).
+[SHA-256 checksums](https://github.com/monetarium/skarb-wallet/releases/download/v0.1.4/SHA256SUMS-0.1.4.txt).
 
 ## Install
 
