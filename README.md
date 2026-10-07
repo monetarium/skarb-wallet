@@ -6,7 +6,7 @@ Desktop wallet for the [Monetarium](https://github.com/monetarium) network. Buil
 
 * macOS (Apple Silicon + Intel): [Skarb Wallet 0.1.4 — DMG](https://github.com/monetarium/skarb-wallet/releases/download/v0.1.4/Skarb-Wallet-0.1.4.dmg)
 * Windows x64: [Skarb Wallet 0.1.4 — ZIP](https://github.com/monetarium/skarb-wallet/releases/download/v0.1.4/Skarb-Wallet-0.1.4-windows-amd64.zip)
-* Linux x64: [Skarb Wallet 0.1.3 — TAR.GZ](https://github.com/monetarium/skarb-wallet/releases/download/v0.1.3/Skarb-Wallet-0.1.3-linux-amd64.tar.gz)
+* Linux x64: [Skarb Wallet 0.1.4 — TAR.GZ](https://github.com/monetarium/skarb-wallet/releases/download/v0.1.4/Skarb-Wallet-0.1.4-linux-amd64.tar.gz)
 * App Store: coming soon
 * Google Play: coming soon
 * APK: coming soon
@@ -27,11 +27,11 @@ More detail: [releases/macos](releases/macos/README.md). Release history: [GitHu
 
 **Install on Linux**
 
-1. Download [Skarb Wallet 0.1.3](https://github.com/monetarium/skarb-wallet/releases/download/v0.1.3/Skarb-Wallet-0.1.3-linux-amd64.tar.gz) and unpack it.
+1. Download [Skarb Wallet 0.1.4](https://github.com/monetarium/skarb-wallet/releases/download/v0.1.4/Skarb-Wallet-0.1.4-linux-amd64.tar.gz) and unpack it.
 2. Copy the binary, launcher, and icon:
 
 ```bash
-cd Skarb-Wallet-0.1.3-linux-amd64
+cd Skarb-Wallet-0.1.4-linux-amd64
 mkdir -p ~/.local/bin ~/.local/share/applications ~/.local/share/icons/hicolor/256x256/apps
 cp skarb ~/.local/bin/
 cp skarb.desktop ~/.local/share/applications/
