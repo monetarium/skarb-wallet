@@ -77,9 +77,10 @@ func (pg *Page) contentLayout(gtx C) D {
 		}
 	}
 
+	cardGap := values.MarginPaddingTransform(pg.IsMobileView(), values.MarginPadding8)
 	list := func(gtx C) D {
 		return pg.Theme.List(pg.pageContainer).Layout(gtx, len(pageContent), func(gtx C, i int) D {
-			mp := values.MarginPaddingTransform(pg.IsMobileView(), values.MarginPadding8)
+			mp := cardGap
 			if i == len(pageContent)-1 {
 				mp = values.MarginPadding0
 			}
@@ -99,7 +100,12 @@ func (pg *Page) contentLayout(gtx C) D {
 	}
 	return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
 		layout.Flexed(1, list),
-		layout.Rigid(pg.balanceSection),
+		layout.Rigid(func(gtx C) D {
+			// Same gap as between the cards above. Right skips the
+			// scrollbar width the list reserves so the edges line up.
+			inset := layout.Inset{Top: cardGap, Right: pg.Theme.List(pg.pageContainer).Width()}
+			return inset.Layout(gtx, pg.balanceSection)
+		}),
 	)
 }
 
