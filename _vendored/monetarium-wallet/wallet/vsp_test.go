@@ -258,39 +258,79 @@ func TestVSPReconcileRetryRequestsNewQuote(t *testing.T) {
 	}
 }
 
-// TestVSPReconcileRetryKeepsNewerFeeTx checks that a failed attempt does not
-// discard a fee transaction that a concurrent Process call made for the same
-// ticket while the attempt waited on the VSP.
-func TestVSPReconcileRetryKeepsNewerFeeTx(t *testing.T) {
-	ctx := context.Background()
-	newer := wire.NewMsgTx()
-	newer.AddTxOut(wire.NewTxOut(1e7, []byte{0x51}))
-	var fp *vspFeePayment
-	c := testVSPClient(ctx, t, func(path string, _ []byte) (int, any) {
-		if path == "/api/v3/feeaddress" {
-			fp.mu.Lock()
-			fp.feeTx = newer
-			fp.mu.Unlock()
-		}
-		return apiError(types.ErrInternalError)
-	})
-	fp = &vspFeePayment{
-		client: c,
-		ctx:    ctx,
-		ticket: testVSPTicket(ctx, t, c, 1),
-		policy: c.policy,
-		params: c.wallet.chainParams,
-	}
-	c.jobs[*fp.ticket.Hash()] = fp
+// TestVSPReconcileRetryKeepsFinishedFeeTx checks that a failed attempt keeps a
+// fee transaction, and its fee, that a concurrent Process call finished for the
+// same ticket while the attempt waited on the VSP. If Process left its fee tx
+// unfinished, or failed and cleared it, the retry must ask for the fee again.
+func TestVSPReconcileRetryKeepsFinishedFeeTx(t *testing.T) {
+	tests := []struct {
+		name      string
+		startHash chainhash.Hash // fee hash of the job when the attempt starts
+		process   func(fp *vspFeePayment, other *wire.MsgTx)
+		wantKept  bool
+	}{{
+		// Process records the hash once its fee tx is made.
+		name: "finished",
+		process: func(fp *vspFeePayment, other *wire.MsgTx) {
+			fp.feeTx = other
+			fp.feeHash = other.TxHash()
+		},
+		wantKept: true,
+	}, {
+		// Process stores its fee tx in the job before making it.
+		name: "unfinished",
+		process: func(fp *vspFeePayment, other *wire.MsgTx) {
+			fp.feeTx = other
+		},
+	}, {
+		// A Process call that fails to make its fee tx clears the tx and
+		// the hash. The job still holds an earlier, expired fee's hash.
+		name:      "failed",
+		startHash: chainhash.Hash{0xee},
+		process: func(fp *vspFeePayment, _ *wire.MsgTx) {
+			fp.feeTx = nil
+			fp.feeHash = chainhash.Hash{}
+		},
+	}}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			other := wire.NewMsgTx()
+			other.AddTxOut(wire.NewTxOut(1e7, []byte{0x51}))
+			var fp *vspFeePayment
+			c := testVSPClient(ctx, t, func(path string, _ []byte) (int, any) {
+				if path == "/api/v3/feeaddress" {
+					// Process got a quote and went on.
+					fp.mu.Lock()
+					fp.fee = 1e7
+					tc.process(fp, other)
+					fp.mu.Unlock()
+				}
+				return apiError(types.ErrInternalError)
+			})
+			fp = &vspFeePayment{
+				client:  c,
+				ctx:     ctx,
+				ticket:  testVSPTicket(ctx, t, c, 1),
+				policy:  c.policy,
+				params:  c.wallet.chainParams,
+				feeHash: tc.startHash,
+			}
+			c.jobs[*fp.ticket.Hash()] = fp
 
-	if err := fp.reconcilePayment(); err == nil {
-		t.Fatal("reconcilePayment: want an error from the fake VSP")
-	}
-	fp.mu.Lock()
-	kept := fp.feeTx == newer
-	fp.mu.Unlock()
-	if !kept {
-		t.Fatal("the failed attempt discarded the fee tx made by Process")
+			if err := fp.reconcilePayment(); err == nil {
+				t.Fatal("reconcilePayment: want an error from the fake VSP")
+			}
+			fp.mu.Lock()
+			kept := fp.feeTx == other
+			requote := fp.fee == 0
+			fp.mu.Unlock()
+			if kept != tc.wantKept || requote == tc.wantKept {
+				t.Fatalf("fee tx made by Process kept = %v, fee asked "+
+					"again = %v; want %v, %v",
+					kept, requote, tc.wantKept, !tc.wantKept)
+			}
+		})
 	}
 }
 
