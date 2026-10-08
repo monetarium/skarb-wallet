@@ -87,6 +87,12 @@ func SetVSPTicket(dbtx walletdb.ReadWriteTx, ticketHash *chainhash.Hash, record 
 	return bucket.Put(ticketHash[:], serializedRecord)
 }
 
+// DeleteVSPTicket removes the specified ticket from the DB. Does not return an
+// error if the ticket does not exist.
+func DeleteVSPTicket(dbtx walletdb.ReadWriteTx, ticketHash chainhash.Hash) error {
+	return dbtx.ReadWriteBucket(vspBucketKey).Delete(ticketHash[:])
+}
+
 // GetVSPTicket gets a specific ticket by its hash.
 func GetVSPTicket(dbtx walletdb.ReadTx, tickethash chainhash.Hash) (*VSPTicket, error) {
 	bucket := dbtx.ReadBucket(vspBucketKey)

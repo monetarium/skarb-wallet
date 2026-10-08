@@ -240,6 +240,20 @@ func (v *VSPTicket) Spent(ctx context.Context) bool {
 	return err == nil
 }
 
+// Pruned reports whether the wallet no longer has the ticket, e.g. an unmined
+// ticket pruned at its expiry height.
+func (v *VSPTicket) Pruned(ctx context.Context) bool {
+	_, err := v.TxBlock(ctx)
+	return errors.Is(err, errors.NotExist)
+}
+
+// DeleteVSPRecord removes the ticket's VSP fee record from the database.
+func (v *VSPTicket) DeleteVSPRecord(ctx context.Context) error {
+	return walletdb.Update(ctx, v.wallet.db, func(dbtx walletdb.ReadWriteTx) error {
+		return udb.DeleteVSPTicket(dbtx, *v.hash)
+	})
+}
+
 func (v *VSPTicket) TxBlock(ctx context.Context) (int32, error) {
 	_, height, err := v.wallet.TxBlock(ctx, v.hash)
 	return height, err

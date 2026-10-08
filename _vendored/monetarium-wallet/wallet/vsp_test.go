@@ -143,8 +143,7 @@ func TestVSPExpiredFeeRequestsNewQuote(t *testing.T) {
 	})
 	ticket := testVSPTicket(ctx, t, c, 1)
 
-	feeTx := wire.NewMsgTx()
-	feeTx.AddTxOut(wire.NewTxOut(1e7, []byte{0x51}))
+	feeTx := signedFeeTx(0xce)
 	fp := &vspFeePayment{
 		client:  c,
 		ctx:     ctx,

@@ -23,7 +23,8 @@ import (
 )
 
 var (
-	errStopped = errors.New("fee processing stopped")
+	errStopped    = errors.New("fee processing stopped")
+	errFeeTooHigh = errors.New("server fee amount too high")
 )
 
 // A random amount of delay (between zero and these jitter constants) is added
@@ -42,6 +43,10 @@ type vspFeePayment struct {
 	// Set at feePayment creation and never changes
 	ticket *VSPTicket
 	policy *VSPPolicy
+
+	// procMu serializes fee processing: a scheduled attempt and a Process
+	// call for the same ticket must not build or submit fee txs at once.
+	procMu sync.Mutex
 
 	// Requires locking for all access outside of Client.feePayment
 	mu      sync.Mutex
@@ -75,6 +80,12 @@ func (fp *vspFeePayment) removedExpiredOrSpent() bool {
 		reason = "expired"
 	case fp.ticket.Spent(fp.ctx):
 		reason = "spent"
+	case fp.ticket.Pruned(fp.ctx):
+		// An unmined ticket the wallet dropped can never vote.
+		reason = "pruned"
+		if err := fp.ticket.DeleteVSPRecord(fp.ctx); err != nil {
+			fp.client.log.Errorf("Ticket %v: delete VSP record: %v", fp.ticket, err)
+		}
 	}
 	if reason != "" {
 		fp.remove(reason)
@@ -82,6 +93,35 @@ func (fp *vspFeePayment) removedExpiredOrSpent() bool {
 		return true
 	}
 	return false
+}
+
+// feeTxSigned reports whether tx is a finished fee transaction: it has outputs
+// and every input is signed.  A tx with outputs but missing signatures is left
+// over from a failed attempt and must be rebuilt, not submitted.
+func feeTxSigned(tx *wire.MsgTx) bool {
+	if tx == nil || len(tx.TxOut) == 0 || len(tx.TxIn) == 0 {
+		return false
+	}
+	for _, in := range tx.TxIn {
+		if len(in.SignatureScript) == 0 {
+			return false
+		}
+	}
+	return true
+}
+
+// abandonFeeTx removes an unpublished fee tx from the wallet so its inputs can
+// be spent again.
+func (fp *vspFeePayment) abandonFeeTx(feeHash chainhash.Hash) {
+	if feeHash == (chainhash.Hash{}) {
+		return
+	}
+	err := fp.client.wallet.AbandonTransaction(fp.ctx, &feeHash)
+	if err != nil {
+		fp.client.log.Errorf("Ticket %v: abandon fee tx %v: %v", fp.ticket, feeHash, err)
+		return
+	}
+	fp.client.log.Infof("Ticket %v: abandoned fee tx %v", fp.ticket, feeHash)
 }
 
 func (fp *vspFeePayment) remove(reason string) {
@@ -219,7 +259,9 @@ func (fp *vspFeePayment) next() time.Duration {
 // in an errored state and may require manual processing.
 func (fp *vspFeePayment) task(name string, method func() error) func() {
 	return func() {
+		fp.procMu.Lock()
 		err := method()
+		fp.procMu.Unlock()
 		fp.mu.Lock()
 		fp.err = err
 		fp.mu.Unlock()
@@ -273,7 +315,7 @@ func (fp *vspFeePayment) receiveFeeAddress() error {
 
 	fp.client.log.Infof("VSP requires fee %v", feeAmount)
 	if feeAmount > fp.policy.MaxFee {
-		return fmt.Errorf("server fee amount too high: %v > %v",
+		return fmt.Errorf("%w: %v > %v", errFeeTooHigh,
 			feeAmount, fp.policy.MaxFee)
 	}
 
@@ -302,6 +344,7 @@ func (fp *vspFeePayment) makeFeeTx(tx *wire.MsgTx) error {
 	fpFeeTx := fp.feeTx
 	feeAddr := fp.feeAddr
 	fp.mu.Unlock()
+	callerTx := tx
 
 	// The rest of this function will operate on the tx pointer, with fp.feeTx
 	// assigned to the result on success.
@@ -315,9 +358,20 @@ func (fp *vspFeePayment) makeFeeTx(tx *wire.MsgTx) error {
 			tx = fpFeeTx
 		}
 	}
-	// Fee transaction with outputs is already finished.
-	if fpFeeTx != nil && len(fpFeeTx.TxOut) != 0 {
+	// A signed fee transaction is already finished.  One with outputs but
+	// no signatures is left from a failed attempt; start over.
+	if feeTxSigned(fpFeeTx) {
 		return nil
+	}
+	if fpFeeTx != nil && len(fpFeeTx.TxOut) != 0 {
+		fp.client.log.Warnf("Ticket %v: rebuilding unsigned fee tx", fp.ticket)
+		if callerTx != nil {
+			// The caller reads the result from its own tx.
+			*callerTx = *wire.NewMsgTx()
+			tx = callerTx
+		} else {
+			tx = wire.NewMsgTx()
+		}
 	}
 	// When both transactions are nil, create a new empty transaction.
 	if tx == nil {
@@ -343,6 +397,9 @@ func (fp *vspFeePayment) makeFeeTx(tx *wire.MsgTx) error {
 	feeHash := tx.TxHash()
 	err = fp.ticket.UpdateFeePaid(ctx, feeHash, fp.client.URL, fp.client.PubKey)
 	if err != nil {
+		// CreateVspPayment already added the tx to the wallet.  Abandon
+		// it, or each retry would leave another one holding inputs.
+		fp.abandonFeeTx(feeHash)
 		return err
 	}
 
@@ -411,7 +468,7 @@ func (fp *vspFeePayment) reconcilePayment() error {
 	fp.mu.Lock()
 	feeTx := fp.feeTx
 	fp.mu.Unlock()
-	if feeTx == nil || len(feeTx.TxOut) == 0 {
+	if !feeTxSigned(feeTx) {
 		err := fp.makeFeeTx(nil)
 		if err != nil {
 			var apiErr types.ErrorResponse
@@ -422,6 +479,14 @@ func (fp *vspFeePayment) reconcilePayment() error {
 			case isAPIErr && apiErr.Code == types.ErrFeeAlreadyReceived,
 				errors.Is(err, errStopped):
 				// Nothing to retry.
+			case errors.Is(err, errFeeTooHigh):
+				// Retrying cannot help until the max fee changes.  Mark
+				// the fee errored: the next unlock retries it with the
+				// current max fee.
+				if markErr := fp.ticket.UpdateFeeErrored(ctx, fp.client.URL, fp.client.PubKey); markErr != nil {
+					fp.client.log.Errorf("Ticket %v: mark fee errored: %v", fp.ticket, markErr)
+				}
+				fp.remove("VSP fee above the configured maximum")
 			default:
 				// Try again, as with failures to submit the payment.
 				// Ask the VSP for the fee again: it may have received
@@ -464,19 +529,18 @@ func (fp *vspFeePayment) reconcilePayment() error {
 			// in the mempool yet. Leave it unpublished so the UI stays
 			// on Pending by VSP until FeeTxStatus is "broadcast".
 			err = fp.ticket.UpdateFeePaid(ctx, feeHash, fp.client.URL, fp.client.PubKey)
-			if err != nil {
-				return err
-			}
-			err = nil
+			// A failed write is retried below.
 		case types.ErrInvalidFeeTx, types.ErrCannotBroadcastFee:
-			err := fp.ticket.UpdateFeeErrored(ctx, fp.client.URL, fp.client.PubKey)
-			if err != nil {
-				return err
+			if markErr := fp.ticket.UpdateFeeErrored(ctx, fp.client.URL, fp.client.PubKey); markErr != nil {
+				fp.client.log.Errorf("Ticket %v: mark fee errored: %v", fp.ticket, markErr)
 			}
-			// Attempt to create a new fee transaction
+			// The VSP will not take this tx.  Abandon it so its inputs
+			// are spendable again, then make a new fee transaction.
+			fp.abandonFeeTx(feeHash)
 			fp.mu.Lock()
 			fp.feeHash = chainhash.Hash{}
 			fp.feeTx = nil
+			fp.fee = 0
 			fp.mu.Unlock()
 			// err not nilled, so reconcile payment is rescheduled.
 		}
@@ -489,6 +553,7 @@ func (fp *vspFeePayment) reconcilePayment() error {
 
 	err = fp.ticket.UpdateFeePaid(ctx, feeHash, fp.client.URL, fp.client.PubKey)
 	if err != nil {
+		fp.schedule("reconcile payment", fp.reconcilePayment)
 		return err
 	}
 
@@ -516,10 +581,8 @@ func (fp *vspFeePayment) submitPayment() (err error) {
 	fp.mu.Lock()
 	feeTx := fp.feeTx
 	fp.mu.Unlock()
-	if feeTx == nil {
+	if !feeTxSigned(feeTx) {
 		feeTx = new(wire.MsgTx)
-	}
-	if len(feeTx.TxOut) == 0 {
 		err := fp.makeFeeTx(feeTx)
 		if err != nil {
 			return err
@@ -561,8 +624,14 @@ func (fp *vspFeePayment) submitPayment() (err error) {
 			}
 			fp.mu.Lock()
 			fp.feeTx = nil
+			fp.feeHash = chainhash.Hash{}
 			fp.fee = 0
 			fp.mu.Unlock()
+			// The abandoned tx must not stay recorded as paid: after a
+			// restart nothing would resume the payment.
+			if markErr := fp.ticket.UpdateFeeErrored(ctx, fp.client.URL, fp.client.PubKey); markErr != nil {
+				fp.client.log.Errorf("Ticket %v: mark fee errored: %v", fp.ticket, markErr)
+			}
 		}
 		return fmt.Errorf("payfee: %w", err)
 	}
