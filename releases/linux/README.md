@@ -1,16 +1,16 @@
 # Skarb Wallet for Linux
 
-Download: [Skarb Wallet 0.1.5](https://github.com/monetarium/skarb-wallet/releases/download/v0.1.5/Skarb-Wallet-0.1.5-linux-amd64.tar.gz)
+Download: [Skarb Wallet 0.1.6](https://github.com/monetarium/skarb-wallet/releases/download/v0.1.6/Skarb-Wallet-0.1.6-linux-amd64.tar.gz)
 
 amd64 binary for Ubuntu 22.04+ / Debian 12+ (X11 or Wayland).
 
-[SHA-256 checksums](https://github.com/monetarium/skarb-wallet/releases/download/v0.1.5/SHA256SUMS-0.1.5.txt).
+[SHA-256 checksums](https://github.com/monetarium/skarb-wallet/releases/download/v0.1.6/SHA256SUMS-0.1.6.txt).
 
 ## Install
 
 ```bash
-tar -xzf Skarb-Wallet-0.1.5-linux-amd64.tar.gz
-cd Skarb-Wallet-0.1.5-linux-amd64
+tar -xzf Skarb-Wallet-0.1.6-linux-amd64.tar.gz
+cd Skarb-Wallet-0.1.6-linux-amd64
 mkdir -p ~/.local/bin ~/.local/share/applications ~/.local/share/icons/hicolor/256x256/apps
 cp skarb ~/.local/bin/
 cp skarb.desktop ~/.local/share/applications/
