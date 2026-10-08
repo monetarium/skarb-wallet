@@ -219,25 +219,29 @@ func (c *VSPClient) ProcessManagedTickets(ctx context.Context, tickets []*VSPTic
 			continue
 		}
 
+		// Errors below are per ticket: log them and keep going, or every
+		// later ticket would be skipped.
 		if status.FeeTxStatus == "confirmed" {
 			feeHash, err := chainhash.NewHashFromStr(status.FeeTxHash)
 			if err != nil {
-				return err
+				c.log.Errorf("ProcessManagedTickets: %v: bad fee hash %q: %v", hash, status.FeeTxHash, err)
+				continue
 			}
 			err = ticket.UpdateFeeConfirmed(ctx, *feeHash, c.Client.URL, c.Client.PubKey)
 			if err != nil {
-				return err
+				c.log.Errorf("ProcessManagedTickets: %v: record confirmed fee: %v", hash, err)
 			}
-			// Must continue: returning here skipped every remaining ticket.
 			continue
 		} else if status.FeeTxHash != "" {
 			feeHash, err := chainhash.NewHashFromStr(status.FeeTxHash)
 			if err != nil {
-				return err
+				c.log.Errorf("ProcessManagedTickets: %v: bad fee hash %q: %v", hash, status.FeeTxHash, err)
+				continue
 			}
 			err = ticket.UpdateFeePaid(ctx, *feeHash, c.Client.URL, c.Client.PubKey)
 			if err != nil {
-				return err
+				c.log.Errorf("ProcessManagedTickets: %v: record paid fee: %v", hash, err)
+				continue
 			}
 			if err := c.Process(ctx, ticket, nil); err != nil {
 				c.log.Errorf("ProcessManagedTickets: confirm fee for %v: %v", hash, err)
@@ -283,11 +287,15 @@ func (c *VSPClient) Process(ctx context.Context, ticket *VSPTicket, feeTx *wire.
 			}
 			return fmt.Errorf("fee payment cannot be processed")
 		}
+		// Wait for a scheduled attempt on this ticket to finish.
+		fp.procMu.Lock()
+		defer fp.procMu.Unlock()
 		fp.mu.Lock()
 		// A previous failed attempt can leave reserved inputs that are too
-		// small for the real VSP quote. Drop that skeleton so CreateVspPayment
-		// can pick new UTXOs (caller-supplied inputs are still honoured).
-		if feeTx == nil && fp.feeTx != nil && len(fp.feeTx.TxOut) == 0 {
+		// small for the real VSP quote, or outputs without signatures. Drop
+		// that skeleton so CreateVspPayment can pick new UTXOs
+		// (caller-supplied inputs are still honoured).
+		if feeTx == nil && fp.feeTx != nil && !feeTxSigned(fp.feeTx) {
 			fp.feeTx = nil
 		}
 		if fp.feeTx == nil {
@@ -295,6 +303,14 @@ func (c *VSPClient) Process(ctx context.Context, ticket *VSPTicket, feeTx *wire.
 		}
 		fp.mu.Unlock()
 		if feeErr := fp.receiveFeeAddress(); feeErr != nil {
+			// The caller unlocks its inputs when Process fails, and a
+			// later purchase may spend them.  Do not leave them for the
+			// scheduled attempt to build on.
+			fp.mu.Lock()
+			if feeTx != nil && fp.feeTx == feeTx {
+				fp.feeTx = nil
+			}
+			fp.mu.Unlock()
 			if markErr := ticket.UpdateFeeErrored(ctx, c.Client.URL, c.Client.PubKey); markErr != nil {
 				return markErr
 			}
@@ -327,6 +343,8 @@ func (c *VSPClient) Process(ctx context.Context, ticket *VSPTicket, feeTx *wire.
 			return fmt.Errorf("fee payment cannot be processed")
 		}
 
+		fp.procMu.Lock()
+		defer fp.procMu.Unlock()
 		return fp.confirmPayment()
 	case udb.VSPFeeProcessConfirmed:
 		// VSPTicket has already been confirmed, there is nothing to process.
