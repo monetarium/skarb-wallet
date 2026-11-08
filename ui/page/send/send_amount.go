@@ -301,6 +301,16 @@ func (sa *sendAmount) validateUSDAmount() bool {
 		}
 
 		if sa.exchangeRate != -1 {
+			if sa.coinType.IsSKA() {
+				// SKA coins have no USD pairing — sa.exchangeRate is
+				// the VAR/USD rate (see the live-preview guard in
+				// amountIsValid). Writing its conversion into the SKA
+				// amount editor would broadcast a VAR-scaled number
+				// as SKA.
+				sa.amountEditor.Editor.SetText("")
+				sa.amountErrorText = values.String(values.StrInvalidAmount)
+				return false
+			}
 			dcrAmount := utils.USDToDCR(sa.exchangeRate, usdAmount)
 			sa.amountEditor.Editor.SetText(fmt.Sprintf("%.8f", dcrAmount)) // 8 decimal places
 		}
