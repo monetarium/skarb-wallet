@@ -183,8 +183,23 @@ func (s *Scroll[T]) fetchScrollData(isScrollUp bool, window app.WindowNavigator)
 				s.mu.Unlock()
 				return
 			}
-			itemsUp := s.cacheData[s.data.idxStart-int(s.pageSize) : s.data.idxStart-1]
-			itemdata := s.data.items[:int(s.pageSize)-1]
+			// A partial scroll-down page can leave idxStart below
+			// pageSize (the window trim advances it by the fetched
+			// item count, which a short last page leaves between 1
+			// and pageSize-1), and the window itself can hold fewer
+			// than pageSize items after such a page. Clamp both
+			// slices so the bounds stay valid instead of panicking
+			// on a negative or overflowing index.
+			windowStart := s.data.idxStart - int(s.pageSize)
+			if windowStart < 0 {
+				windowStart = 0
+			}
+			itemsUp := s.cacheData[windowStart : s.data.idxStart-1]
+			itemCount := int(s.pageSize) - 1
+			if itemCount > len(s.data.items) {
+				itemCount = len(s.data.items)
+			}
+			itemdata := s.data.items[:itemCount]
 			s.data.items = append(itemsUp, itemdata...)
 			if s.data.idxStart < int(s.pageSize) {
 				s.data.idxStart = 0
