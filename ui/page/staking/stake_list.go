@@ -64,7 +64,13 @@ func (pg *Page) fetchTickets(offset, pageSize int32) ([]*transactionItem, int, b
 	// shorter than pageSize, which the scroll would misread as
 	// end-of-list, and its offset arithmetic indexes the UNrefined
 	// tickets — per-page refinement both truncated and duplicated rows.
-	if requested == dcr.TxFilterVoted || requested == dcr.TxFilterRevoked {
+	// The Live tile takes the same path for the same reason: its
+	// refinement drops tickets the DB still reports live but that
+	// already have a spender (the stale-spender state the refinement
+	// exists for), so a paged window can come back short while more
+	// rows remain, and the scroll would declare the list fully loaded.
+	if requested == dcr.TxFilterVoted || requested == dcr.TxFilterRevoked ||
+		requested == dcr.TxFilterLive {
 		if offset > 0 {
 			return nil, 0, false, nil // everything was served at offset 0
 		}
