@@ -433,7 +433,11 @@ func (pg *Page) subtractFeeSection(gtx C) D {
 func (pg *Page) coinSelectionSection(gtx C) D {
 	selectedOption := automaticCoinSelection
 	sourceAcc := pg.accountDropdown.SelectedAccount()
-	if len(pg.selectedUTXOs.selectedUTXOs) > 0 && pg.selectedUTXOs.sourceAccount == sourceAcc {
+	// Match the manual selection the way constructTx does (by account
+	// identity, not *Account pointer equality): the dropdown can hand
+	// back a freshly-allocated Account value, and a pointer comparison
+	// would then label a live manual selection as Automatic.
+	if pg.manualSelectionFor(sourceAcc) != nil {
 		selectedOption = manualCoinSelection
 	}
 
